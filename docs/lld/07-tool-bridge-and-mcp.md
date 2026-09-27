@@ -104,7 +104,7 @@ ScopedValue.where(INVOCATION, ctx.withMode(AI_READ)).call(() ->
 - `readOnly=false` actions never reach this path — they are proposal-only (§3 step 5, LLD-11).
 - Not an AOP aspect: enforcement lives only on the AI path, so ordinary host traffic is untouched (ADR-0014 context).
 
-## 5. MCP server (F-55, v1.x) — ADR-0016
+## 5. MCP server (F-55, v1.0 behind `dynamic.ai.agent.mcp.server.enabled`, default off) — ADR-0016
 ### 5.1 Transport
 | Transport | Support | Why |
 |-----------|---------|-----|
@@ -160,7 +160,7 @@ a session ID presented with a different user's token is rejected; per-session an
 request-size cap; session idle timeout; the framework never opens URLs or runs shell commands on the model's behalf,
 and URLs in tool output are data only.
 
-## 6. MCP client (F-56, v1.x)
+## 6. MCP client (F-56, v1.x — schema ships in v1.0, feature later)
 - `McpServerRegistration{id, url, authMode(NONE|OAUTH_CLIENT_CREDENTIALS|API_KEY via secret ref), allowedTools[], timeout}` — admin-only, approval required.
 - URL allow-list + SSRF guard (deny private ranges unless explicitly allowed; Boot 4.1
   HTTP-client SSRF mitigation where applicable). Secrets stored as references to host

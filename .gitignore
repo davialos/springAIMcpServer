@@ -24,3 +24,6 @@ Thumbs.db
 
 # Graphify output
 graphify-out/
+
+# Agent worktrees (parallel work streams)
+.claude/worktrees/

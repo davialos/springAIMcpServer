@@ -38,7 +38,7 @@ recommended: **App Roles** assigned to groups in Entra, emitted as `roles` claim
 ```java
 // design sketch
 public record DaiPrincipal(String subjectId,              // stable IdP subject (sub / objectId / DN), never email
-        SubjectType type,                                  // USER | SERVICE_ACCOUNT | MCP_CLIENT
+        SubjectType type,                                  // USER | GROUP | SERVICE_ACCOUNT | MCP_CLIENT (GROUP only as a membership/grant subject, never as a caller)
         String displayName, String issuer,
         Set<String> externalGroups,                        // raw, normalized (issuer-qualified)
         Set<FrameworkRole> globalRoles,                    // after mapping

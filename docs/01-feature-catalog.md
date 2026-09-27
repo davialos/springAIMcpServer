@@ -88,7 +88,7 @@ Owner: control-plane-designer · Status: Draft v1
 ### F. MCP (P6)
 | ID | Feature | Tier | Acceptance criteria |
 |----|---------|------|---------------------|
-| F-55 | **Expose published tools/agents as an MCP server** (Streamable HTTP; stateless option) | v1.x | OAuth 2.1 protected resource (RFC 9728 metadata, audience-bound tokens); approved-client registry; per-call scope checks; snake_case tool names; structured result envelope |
+| F-55 | **Expose published tools/agents as an MCP server** (Streamable HTTP; stateless option) | MVP (flag, default off) | OAuth 2.1 protected resource (RFC 9728 metadata, audience-bound tokens); approved-client registry; per-call scope checks; snake_case tool names; structured result envelope |
 | F-56 | **Consume external MCP servers** as agent tools | v1.x | Allow-listed servers only; SSRF protection |
 
 ### G. Access management & governance (P2, P3, P5, P7)

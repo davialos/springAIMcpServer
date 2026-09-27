@@ -25,28 +25,19 @@ Rules: revisions immutable after submit; approver ≠ author (enforced); publish
 against current catalog & collisions; only one PUBLISHED revision per resource per environment.
 
 ## 3. Schema (`dai_*`, in schema `dynamic_ai`)
-| Table | Key columns | Notes |
-|-------|-------------|-------|
-| `dai_workspace` | id, slug (unique), name, classification_clearance, created_* | |
-| `dai_workspace_member` | workspace_id, subject_type(USER/GROUP/SA), subject_id, role | subject = external IdP id/group, not our user |
-| `dai_resource` | id, workspace_id, kind, slug, current_published_rev, status | kind ∈ ENDPOINT, QUERY, AGENT, TOOL, ROW_POLICY |
-| `dai_resource_revision` | resource_id, rev, state, spec_json (jsonb/clob), spec_hash, catalog_hash, author, submitted_at, approved_by, approved_at | immutable after submit (trigger or app-enforced) |
-| `dai_review` | revision id, reviewer, decision, comment, risk_score, at | |
-| `dai_snapshot` | generation (PK, monotonic), published_by, published_at, manifest_json (resource→rev list), manifest_hash | append-only |
-| `dai_node_state` | node_id, applied_generation, heartbeat_at, version | cluster status |
-| `dai_grant` | id, workspace_id, resource_id/pattern, subject_type, subject_id, permission, conditions_json, expires_at | |
-| `dai_role_mapping` | id, source (OIDC_CLAIM/AUTHORITY/LDAP_GROUP), match_expr, framework_role, workspace_id? | |
-| `dai_service_account` / `dai_api_key` | key_id, prefix, hash (argon2id/bcrypt), scopes, expires_at, last_used_at | |
-| `dai_budget`, `dai_usage_ledger` | scope, period, limit_tokens/cost; ledger rows per invocation (aggregated hourly) | |
-| `dai_kill_switch` | scope, target, enabled, reason, set_by, at | |
-| `dai_conversation`, `dai_conversation_message`, `dai_change_proposal*` (LLD-11), `dai_agent_trace` | | retention jobs |
-| `dai_audit_event` | id (ULID), at, actor, action, resource, decision, reason, trace_id, details_json, prev_hash, hash | hash-chained, append-only |
-| `dai_schema_history` | Flyway | own history table |
-
-Portability: PostgreSQL (primary), MySQL 8, Oracle 19+, SQL Server 2022, H2 (tests). JSON
-stored as `jsonb` on PG, `CLOB`/`JSON` elsewhere via per-vendor Flyway locations.
-Access via **JDBC (`JdbcClient`)**, not JPA — keeps our tables out of the host's
-persistence unit (OQ-03 leaning).
+Superseded by **LLD-15** (`docs/lld/15-database-schema.md`), which is the single owner of the schema description, and
+by the Flyway migrations in `spring-ai-mcp-server-common-persistence/src/main/resources/db/dynamic-ai/migration/`.
+Decisions that changed since this draft:
+- **PostgreSQL 15+ only** (OQ-10 resolved). No multi-vendor migrations.
+- Access through **JPA entities in an isolated persistence unit** (own EMF, transaction manager and Flyway, none
+  registered as beans) — ADR-0019 supersedes the earlier JDBC-only leaning (OQ-03 resolved).
+- Resource kinds are `ENDPOINT, QUERY, AGENT, TOOL_BINDING, ROW_POLICY, POLICY_OVERLAY, MCP_SERVER`; the published
+  revision is not a column on `dai_resource` but the revision in state `PUBLISHED` (partial unique index).
+- The snapshot manifest is normalised into `dai_snapshot_entry` rows instead of a JSON column.
+- The usage ledger is `dai_usage_hourly` (derived, rebuildable hourly aggregate) instead of per-invocation ledger rows;
+  per-invocation facts live in `dai_model_call`.
+- Agent traces are split into `dai_agent_turn`, `dai_model_call`, `dai_tool_invocation` (monthly partitions).
+- API key secrets use `hmac-sha256` with a server pepper by default.
 
 ## 4. Propagation (ADR-0006)
 - Publish = one transaction: insert `dai_snapshot(g+1)` with full manifest, update resource pointers, audit.

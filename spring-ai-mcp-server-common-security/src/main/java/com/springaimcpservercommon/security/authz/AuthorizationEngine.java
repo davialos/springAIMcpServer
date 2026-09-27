@@ -129,6 +129,22 @@ public final class AuthorizationEngine {
         return deny;
     }
 
+    /**
+     * Records and returns a denial decided outside the engine's steps (e.g. a missing MCP token scope), so that it is
+     * audited like any other decision.
+     *
+     * @param request the request that was denied
+     * @param reason  reason
+     * @return the denial
+     */
+    public Deny recordDenial(AuthorizationRequest request, DenyReason reason) {
+        Deny deny = Deny.of(request.permission(), reason);
+        publish(new AuthorizationDecisionEvent(clock.instant(), request.principal().principalId(),
+                request.principal().type(), request.permission().value(), request.workspaceId(),
+                request.resource() == null ? null : request.resource().resourceId(), request.toolName(), deny));
+        return deny;
+    }
+
     private AuthorizationOutcome evaluate(AuthorizationRequest request, Instant now) {
         DaiPrincipal principal = request.principal();
         Permission permission = request.permission();

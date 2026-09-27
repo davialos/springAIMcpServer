@@ -1,6 +1,5 @@
 package com.springaimcpservercommon.persistence.unit;
 
-import com.springaimcpservercommon.persistence.support.PassThroughJsonFormatMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.SharedCacheMode;

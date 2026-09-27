@@ -1,4 +1,4 @@
-package com.springaimcpservercommon.persistence.support;
+package com.springaimcpservercommon.persistence.unit;
 
 import org.hibernate.type.descriptor.WrapperOptions;
 import org.hibernate.type.descriptor.java.JavaType;
@@ -8,7 +8,7 @@ import org.hibernate.type.format.FormatMapper;
  * Hibernate JSON {@link FormatMapper} for the {@code dynamic_ai} unit that passes JSON text through unchanged.
  *
  * <p>Every {@code jsonb} column of the unit is mapped as {@code @JdbcTypeCode(SqlTypes.JSON) String}: the stores
- * produce and consume JSON text themselves (canonicalised where it is hashed, see {@link CanonicalJson}). Hibernate
+ * produce and consume JSON text themselves (canonicalised where it is hashed, see {@link com.springaimcpservercommon.persistence.support.CanonicalJson}). Hibernate
  * still needs a JSON format mapper to bind such attributes; its automatic detection only knows Jackson 2 (Jackson 3,
  * which Spring Boot 4 uses, is supported from Hibernate 7.3 on) and would otherwise make the unit depend on whatever
  * JSON library the host happens to have. Configuring this mapper explicitly

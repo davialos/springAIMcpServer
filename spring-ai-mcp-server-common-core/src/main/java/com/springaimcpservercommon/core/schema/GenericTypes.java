@@ -66,7 +66,7 @@ public final class GenericTypes {
      * @param bindings bindings
      * @return the resolved type (the input if unbound)
      */
-    static Type resolve(Type type, Map<TypeVariable<?>, Type> bindings) {
+    public static Type resolve(Type type, Map<TypeVariable<?>, Type> bindings) {
         Type current = type;
         int guard = 0;
         while (current instanceof TypeVariable<?> tv && bindings.containsKey(tv) && guard++ < 16) {
@@ -82,7 +82,7 @@ public final class GenericTypes {
      * @param bindings bindings for type variables
      * @return the raw class
      */
-    static Class<?> raw(Type type, Map<TypeVariable<?>, Type> bindings) {
+    public static Class<?> raw(Type type, Map<TypeVariable<?>, Type> bindings) {
         Type t = resolve(type, bindings);
         return switch (t) {
             case Class<?> c -> c;

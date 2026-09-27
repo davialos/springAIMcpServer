@@ -14,6 +14,16 @@ import org.springframework.transaction.support.TransactionOperations;
 public interface DaiStore {
 
     /**
+     * The validated PostgreSQL schema of the unit (matches {@code ^[a-z_][a-z0-9_]{0,62}$}, default
+     * {@code dynamic_ai}). Hibernate-mapped entities are qualified with it automatically
+     * ({@code hibernate.default_schema}); native SQL must qualify every table and function with it, because the
+     * runtime connection's {@code search_path} belongs to the host.
+     *
+     * @return the schema name, safe to concatenate into SQL
+     */
+    String schema();
+
+    /**
      * A shared, transaction-bound {@link EntityManager} proxy for the {@code dynamic_ai} unit. It must only be
      * used inside {@link #transactions()} or {@link #readOnlyTransactions()} callbacks.
      *

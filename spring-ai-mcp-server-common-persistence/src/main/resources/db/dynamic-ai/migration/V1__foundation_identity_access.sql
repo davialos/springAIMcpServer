@@ -37,6 +37,8 @@ BEGIN
 END
 $$;
 
+-- Partition functions run as their owner (the migration role) with the search_path captured at creation, so the
+-- DML-only runtime role can maintain partitions with EXECUTE permission alone (scripts/db/postgresql).
 -- Creates monthly range partitions (UTC month boundaries) named <table>_pYYYYMM for a partitioned parent.
 -- Idempotent. Called by migrations and by the library's partition-maintenance job (LLD-15 §6).
 -- If the DEFAULT partition already holds rows for a month, creating that month fails with check_violation;
@@ -44,7 +46,9 @@ $$;
 CREATE OR REPLACE FUNCTION dai_ensure_monthly_partitions(p_parent regclass,
                                                          p_months_back integer DEFAULT 1,
                                                          p_months_ahead integer DEFAULT 3) RETURNS integer
-    LANGUAGE plpgsql AS
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path FROM CURRENT AS
 $$
 DECLARE
     v_schema  text;
@@ -85,7 +89,9 @@ $$;
 -- Drops monthly partitions whose whole range ends at or before p_before (retention).
 -- Evidence partitions containing rows under an active legal hold are kept.
 CREATE OR REPLACE FUNCTION dai_drop_monthly_partitions_before(p_parent regclass, p_before timestamptz) RETURNS integer
-    LANGUAGE plpgsql AS
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path FROM CURRENT AS
 $$
 DECLARE
     v_child   record;

@@ -75,11 +75,15 @@ CREATE UNIQUE INDEX uq_resource_revision_one_published ON dai_resource_revision 
 CREATE INDEX ix_resource_revision_pending ON dai_resource_revision (state, submitted_at) WHERE state IN ('IN_REVIEW', 'APPROVED');
 CREATE INDEX ix_resource_revision_author ON dai_resource_revision (author_id, created_at DESC);
 
--- Revisions are immutable once they leave DRAFT (versioning guarantee, LLD-09 §2).
+-- Revisions are immutable once they leave DRAFT (versioning guarantee, LLD-09 §2). A revision can never go back
+-- to DRAFT either, otherwise two updates (state back to DRAFT, then a spec change) would bypass the guarantee.
 CREATE OR REPLACE FUNCTION dai_revision_immutable() RETURNS trigger
     LANGUAGE plpgsql AS
 $$
 BEGIN
+    IF OLD.state <> 'DRAFT' AND NEW.state = 'DRAFT' THEN
+        RAISE EXCEPTION 'revision % cannot return to DRAFT from %', OLD.id, OLD.state USING ERRCODE = 'check_violation';
+    END IF;
     IF OLD.state <> 'DRAFT' AND (NEW.spec IS DISTINCT FROM OLD.spec
         OR NEW.spec_hash IS DISTINCT FROM OLD.spec_hash
         OR NEW.spec_schema_version IS DISTINCT FROM OLD.spec_schema_version
@@ -136,8 +140,11 @@ CREATE TABLE dai_review
     CONSTRAINT fk_review_reviewer FOREIGN KEY (reviewer_id) REFERENCES dai_principal (id)
 );
 
+-- The function reads another table, so it pins the search_path captured at migration time (like the partition
+-- functions in V1): the runtime connection's search_path is not guaranteed to contain the dynamic_ai schema.
 CREATE OR REPLACE FUNCTION dai_review_segregation_of_duties() RETURNS trigger
-    LANGUAGE plpgsql AS
+    LANGUAGE plpgsql
+    SET search_path FROM CURRENT AS
 $$
 BEGIN
     IF EXISTS (SELECT 1 FROM dai_resource_revision r WHERE r.id = NEW.revision_id AND r.author_id = NEW.reviewer_id) THEN

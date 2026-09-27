@@ -244,7 +244,8 @@ public class ChangeProposal {
             p.records.add(ChangeProposalRecord.of(p, i, records.get(i)));
         }
         p.appendEvent(null, ProposalState.PROPOSED, p.ownerId, p.createdAt,
-                details("records", records.size(), "approvalRequirement", p.approvalRequirement));
+                details("records", records.size(), "approvalRequirement", p.approvalRequirement,
+                        "contentHash", p.contentHash));
         return p;
     }
 
@@ -727,6 +728,24 @@ public class ChangeProposal {
     /** @return second-person decisions (unmodifiable) */
     public List<ChangeProposalApproval> getApprovals() {
         return Collections.unmodifiableList(approvals);
+    }
+
+    /**
+     * The content hash the proposal was created with (recorded in the creating event), used to recognise retried
+     * creation requests after the owner edited the proposal.
+     *
+     * @return the initial content hash, or {@code null} if the creating event is not available
+     */
+    public @Nullable String getInitialContentHash() {
+        for (ChangeProposalEvent event : events) {
+            String json = event.getDetailsJson();
+            if (event.getSeq() == 0 && json != null
+                    && CanonicalJson.parse(json) instanceof Map<?, ?> map
+                    && map.get("contentHash") instanceof String hash) {
+                return hash;
+            }
+        }
+        return null;
     }
 
     /**

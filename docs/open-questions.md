@@ -2,34 +2,54 @@
 
 Status legend: **OPEN** · **DEFERRED** (parked by product owner, discuss later) · **RESOLVED** (link to decision)
 
-| ID | Question | Options / leaning | Owner | Blocks | Status |
-|----|----------|-------------------|-------|--------|--------|
-| OQ-01 | Support WebFlux hosts? | v1 servlet-only; WebFlux adapter later via `RouterFunction` registry | lld-chief-architect | LLD-04 | OPEN |
-| OQ-02 | Product name, artifactIds, base package | Name **springAIMcpServerCommon**, artifacts `spring-ai-mcp-server-common-*` | user | ADR-0001 | RESOLVED → ADR-0010 |
-| OQ-02b | Maven groupId / org reverse-domain for base package | `<org-domain>.springaimcpservercommon` | user | release | OPEN |
-| OQ-03 | Config store: JDBC (own schema) vs JPA entities in host persistence unit | leaning JDBC (`JdbcClient`) | control-plane-designer | LLD-09 | OPEN |
-| OQ-04 | Kotlin hosts (KSP processor)? | Runtime annotations work for Kotlin unchanged; no KSP needed | metadata-extraction-designer | LLD-02 | RESOLVED → ADR-0013 |
-| OQ-05 | Use spring-ai community `mcp-security` or own OAuth2 resource-server config for MCP? | own Spring Security resource-server config (LLD-07 §5.3); evaluate mcp-security for PRM/CIMD helpers | agent-runtime-designer | LLD-07 | OPEN |
-| OQ-06 | Expose Spring Data repository query methods directly as operations? | allow `@AiExposedAction` on repository interface methods; read-only only | metadata-extraction-designer | LLD-02 | OPEN |
-| OQ-07 | Shared rate-limit/budget backend: Bucket4j (JCache/Redis/JDBC) vs own | leaning Bucket4j + JDBC default for clusters | dynamic-runtime-designer | LLD-04/10 | OPEN |
-| OQ-08 | Admin UI framework (React/Vite vs Vaadin vs htmx+Thymeleaf) | leaning React+Vite prebuilt into JAR; review components as Web Components (OQ-15) | control-plane-designer | LLD-08 | OPEN |
-| OQ-09 | Which IdPs/auth styles do the target teams actually use? | design supports OIDC/JWT/LDAP/SAML/custom (SEC-01 §2) | user | SEC-01 | DEFERRED |
-| OQ-10 | Which DBs must v1 support? | design is vendor-portable (LLD-09 §3) | user | LLD-09 | DEFERRED |
-| OQ-11 | Approved LLM providers; on-prem requirement? | ModelRouter port supports any Spring AI provider | user | LLD-06 | DEFERRED |
-| OQ-12 | Write capability in v1? | **Yes — only via user-reviewed change proposals rendered in UI components, explicit confirmation, applied through host write paths so existing versioning/audit/identity flows record it** | user | scope | RESOLVED → ADR-0009, LLD-11 |
-| OQ-13 | Distribution: internal Nexus/Artifactory or Maven Central (OSS)? | — | user | release | OPEN |
-| OQ-14 | Which versioning mechanisms do host apps use (Envers, custom history tables, triggers, temporal tables)? | LLD-11 §5 supports all via `VersioningAdapter`; need inventory to prioritize | user | LLD-11 | DEFERRED (with OQ-09/10) |
-| OQ-15 | Review/display UI components: framework-agnostic Web Components vs React component library | leaning Web Components (embeddable in any host UI) | control-plane-designer | LLD-11 §7 | OPEN |
-| OQ-16 | Allow ENTITY_WRITE (JPA write without a host service method) in v1, or HOST_OPERATION only? | leaning HOST_OPERATION only in v1; ENTITY_WRITE behind flag + approval | user | LLD-11 §4 | OPEN |
-| OQ-17 | Align runtime namespaces (`dynamic.ai.agent.*`, `dai_*`, `/dynamic-ai`) with product name before first release? | decide before 1.0 (breaking later) | user | ADR-0010 | OPEN |
-| OQ-18 | Require step-up / recent authentication for confirming writes on sensitive data? | configurable per classification; default off | access-management-architect | LLD-11 §6 | OPEN |
-| OQ-19 | Unknown environment tier: treat as PROD (current design) or refuse to start until `environment.tier` is set? | treat as PROD + clear log | user | LLD-12 §2.1 | OPEN |
-| OQ-20 | Should unannotated attributes of an `@AiContext` entity stay hidden (current) or be exposed with a generated meaning? | hidden (explicit meaning required) | user | LLD-02 §4 | OPEN |
-| OQ-21 | Hibernate write-veto `Integrator` on by default (current) or opt-in? It is registered in the host's SessionFactory but is a no-op outside AI scope | on by default | lld-chief-architect | ADR-0014 | OPEN |
-| OQ-22 | MCP default mode: stateful Streamable HTTP (notifications, needs sticky sessions) or STATELESS (any replica, clients re-list tools)? | stateful default, stateless for multi-replica hosts | user | LLD-07 §5.1 | OPEN |
-| OQ-23 | Stream resumption (`Last-Event-ID`) in v1 or v1.x? | v1.x; v1 cancels on disconnect | user | LLD-13 §7 | OPEN |
-| OQ-24 | Build the stdio→HTTP bridge CLI for STDIO-only MCP clients? | v1.x, only if target clients need it | user | ADR-0016 | OPEN |
-| OQ-25 | Default `tools.max-parallel-per-turn` (4)? | 4; per-agent override | lld-chief-architect | LLD-14 §5 | OPEN |
-| OQ-26 | `UNBOUNDED_LIST_ACTION`: exclude by default or only warn (exclude with `strict`)? | warn by default, exclude in strict/CI | user | LLD-14 §3.3 | OPEN |
-| OQ-27 | Which workspaces/regulations need audit evidence mode (GDPR, HIPAA, PCI, SOX)? | opt-in per workspace | user | ADR-0018 | DEFERRED (with OQ-09/10/11) |
-| OQ-28 | Propagate `traceparent` to external LLM providers? | off (internal endpoints on) | access-management-architect | LLD-10 §3 | OPEN |
+Deployment criticality:
+- **D-BLOCKER** — must be answered before the first production deployment of any host.
+- **D-CONFIG** — has a safe default, but each deploying team must confirm or override it in configuration.
+- **LATER** — does not affect a first deployment.
+
+## A. Deployment-critical (answer before first production deployment)
+
+| ID | Question | Current default / leaning | Owner | Blocks | Criticality | Status |
+|----|----------|---------------------------|-------|--------|-------------|--------|
+| OQ-02b | Maven groupId / org reverse-domain for the base package | Provisional `com.springaimcpservercommon` (ADR-0019); one mechanical rename before first release | user | release, all modules | D-BLOCKER | OPEN |
+| OQ-09 | Which IdPs/auth styles do the target teams use (Entra ID, Okta, Keycloak, LDAP, SAML)? | All supported (SEC-01 §2); claim mapping must be configured per host | user | SEC-01, role mappings | D-BLOCKER | DEFERRED |
+| OQ-11 | Approved LLM providers; on-prem requirement for RESTRICTED data? | Any Spring AI provider via `ModelRouter`; RESTRICTED ⇒ on-prem only | user | LLD-06, F-77 | D-BLOCKER | DEFERRED |
+| OQ-13 | Distribution: internal Nexus/Artifactory or Maven Central? | — | user | release | D-BLOCKER | OPEN |
+| OQ-17 | Align runtime namespaces (`dynamic.ai.agent.*`, `dai_*`, `/dynamic-ai`) with product name before first release? | Keep current; renaming after 1.0 is breaking | user | ADR-0010 | D-BLOCKER | OPEN |
+| OQ-19 | Unknown environment tier: treat as PROD or refuse to start until `environment.tier` is set? | Treat as PROD + clear log | user | LLD-12 §2.1 | D-CONFIG | OPEN |
+| OQ-22 | MCP default mode: stateful Streamable HTTP (sticky sessions) or STATELESS? | Stateful; stateless for multi-replica hosts without sticky sessions | user | LLD-07 §5.1 | D-CONFIG | OPEN |
+| OQ-27 | Which workspaces/regulations need audit evidence mode (GDPR, HIPAA, PCI, SOX)? | Off; opt-in per workspace | user | ADR-0018 | D-CONFIG | DEFERRED |
+| OQ-28 | Propagate `traceparent` to external LLM providers? | Off (internal endpoints on) | access-management-architect | LLD-10 §3 | D-CONFIG | OPEN |
+| OQ-29 | Minimum PostgreSQL version? | **15** (needs `UNIQUE NULLS NOT DISTINCT`); 16/17 recommended | user | LLD-15 | D-BLOCKER | OPEN |
+| OQ-30 | Dedicated PostgreSQL database/server for the `dynamic_ai` schema, or the host's database? | Both supported; dedicated recommended for PROD (isolation of audit volume) | user | ADR-0019, LLD-15 | D-CONFIG | OPEN |
+| OQ-31 | Audit/telemetry retention per environment (default 13 months telemetry, 400 days audit) and who runs partition maintenance | Built-in scheduled job with advisory lock (any node) | user | LLD-15 §6 | D-CONFIG | OPEN |
+
+## B. Product / design questions (not blocking a first deployment)
+
+| ID | Question | Current default / leaning | Owner | Blocks | Criticality | Status |
+|----|----------|---------------------------|-------|--------|-------------|--------|
+| OQ-01 | Support WebFlux hosts? | v1 servlet-only | lld-chief-architect | LLD-04 | LATER | OPEN |
+| OQ-05 | `mcp-security` community project vs own resource-server config | Own Spring Security config | agent-runtime-designer | LLD-07 | LATER | OPEN |
+| OQ-06 | Spring Data repository methods as actions? | Allowed with `@AiExposedAction`, read-only | metadata-extraction-designer | LLD-02 | LATER | OPEN |
+| OQ-07 | Shared rate-limit/budget backend | PostgreSQL-backed (we already require it) | dynamic-runtime-designer | LLD-04/10 | LATER | OPEN |
+| OQ-08 | Admin UI framework | React+Vite prebuilt into JAR | control-plane-designer | LLD-08 | LATER | OPEN |
+| OQ-14 | Host versioning mechanisms inventory (Envers, history tables, triggers, temporal) | All supported via `VersioningAdapter` | user | LLD-11 | LATER | DEFERRED |
+| OQ-15 | Web Components vs React library for review/display components | Web Components | control-plane-designer | LLD-11 §7 | LATER | OPEN |
+| OQ-16 | ENTITY_WRITE in v1 or HOST_OPERATION only? | HOST_OPERATION only | user | LLD-11 §4 | LATER | OPEN |
+| OQ-18 | Step-up authentication for confirming sensitive writes? | Configurable, default off | access-management-architect | LLD-11 §6 | LATER | OPEN |
+| OQ-20 | Unannotated attributes of `@AiContext` entities hidden? | Hidden | user | LLD-02 §4 | LATER | OPEN |
+| OQ-21 | Hibernate write-veto `Integrator` default on? | On | lld-chief-architect | ADR-0014 | LATER | OPEN |
+| OQ-23 | Stream resumption in v1? | v1.x | user | LLD-13 §7 | LATER | OPEN |
+| OQ-24 | stdio→HTTP bridge CLI | v1.x if needed | user | ADR-0016 | LATER | OPEN |
+| OQ-25 | Default `tools.max-parallel-per-turn` | 4 | lld-chief-architect | LLD-14 §5 | LATER | OPEN |
+| OQ-26 | `UNBOUNDED_LIST_ACTION` exclude or warn | Warn; exclude in strict | user | LLD-14 §3.3 | LATER | OPEN |
+
+## C. Resolved
+
+| ID | Question | Decision |
+|----|----------|----------|
+| OQ-02 | Product name, artifactIds | springAIMcpServerCommon, `spring-ai-mcp-server-common-*` → ADR-0010 |
+| OQ-03 | Config store technology | JPA entities in an **isolated persistence unit** (own EMF/TM/Flyway, not beans) → ADR-0019 |
+| OQ-04 | Kotlin hosts | Runtime annotations work unchanged → ADR-0013 |
+| OQ-10 | Which DB for configuration, audit and versioning? | **PostgreSQL** (product owner, 2026-09-28) → ADR-0019, LLD-15 |
+| OQ-12 | Write capability in v1 | Reviewed change proposals only → ADR-0009, LLD-11 |

@@ -1,0 +1,88 @@
+# LLD-10: Observability, Cost & Quota
+
+| Field | Value |
+|-------|-------|
+| Status | Draft v1 |
+| Owner agent | production-readiness-reviewer (with agent-runtime-designer) |
+| Module(s) | `core` (ports), autoconfigure (Micrometer wiring) |
+| Related features | F-24, F-66, F-70, F-71, F-72, F-76 |
+
+## 1. Purpose
+Make every invocation measurable, attributable (to workspace/agent/principal), and
+bounded in cost; integrate with the host's existing Micrometer/OpenTelemetry stack — never ship our own backend.
+
+## 2. Metrics (Micrometer, prefix `dynamic.ai.agent`)
+| Meter | Type | Tags |
+|-------|------|------|
+| `.endpoint.requests` | Timer | workspace, endpoint, status_class, outcome |
+| `.query.executions` | Timer | workspace, query, outcome |
+| `.agent.turns` | Timer | workspace, agent, model, outcome |
+| `.agent.tool.calls` | Timer | agent, tool, outcome (ok/denied/error/timeout/confirmation) |
+| `.llm.tokens` | Counter | workspace, agent, model, type (input/output/cached) |
+| `.llm.cost` | Counter (currency micro-units) | workspace, agent, model |
+| `.budget.utilization` | Gauge | scope, period |
+| `.ratelimit.rejections` | Counter | scope |
+| `.snapshot.generation` / `.snapshot.lag` | Gauge | node |
+| `.authz.decisions` | Counter | plane, decision |
+Cardinality guard: never tag by principal, conversation, or raw path; tag values limited to IDs of published resources.
+Spring AI's own `gen_ai.client.*` observations are kept and correlated.
+Multi-tenant hosts: a `tenant` tag is **off by default** and only allowed with a bounded tenant count
+(`metrics.tenant-tag.max-values`, default 100; overflow collapses to `other`) — a per-tenant tag on
+token counters is a classic time-series cardinality explosion. Per-tenant cost detail lives in the usage ledger, not in meters.
+The library never starts its own metrics server or exporter; it only registers meters in the host's `MeterRegistry`.
+
+## 3. Tracing
+Observation API → OTel. Spans: `dai.endpoint`, `dai.query`, `dai.agent.turn`, `dai.tool`,
+`dai.snapshot.apply`, plus Spring AI chat/tool spans. Content recording off by default;
+when on, passes through the redaction pipeline.
+
+Every span joins the host's current trace (Micrometer Tracing with the host's OTel or Brave bridge), so one trace
+shows the split between LLM call, each tool call, and each dynamic query. The LLM segment is measured by the
+**client-side** span around the provider call; that needs no cooperation from the provider.
+Propagating `traceparent` **headers to external LLM providers** is a separate choice: off by default
+(`observability.propagate-to-providers=false`) because it sends internal trace identifiers to a third party and
+adds nothing to our own timing; on by default for self-hosted/on-prem model endpoints and outbound MCP servers inside the company network.
+
+## 4. Audit (distinct from logs)
+`AuditSink` port; default JDBC hash-chained table + optional forwarders (JSON-lines log
+appender with `DAI_AUDIT` marker, OTLP logs). Event catalog:
+`ADMIN_CHANGE, REVISION_SUBMITTED/APPROVED/REJECTED/PUBLISHED/ROLLED_BACK, GRANT_CHANGED,
+ROLE_MAPPING_CHANGED, APIKEY_CREATED/REVOKED, ENDPOINT_INVOKED, AGENT_TURN, TOOL_INVOKED,
+TOOL_DENIED, AUTHZ_DENIED, BUDGET_EXCEEDED, KILL_SWITCH_CHANGED, DATA_EXPORTED`.
+Invocation events can be sampled (config), security events never.
+
+### 4.1 Audit tiers (data minimisation vs evidence)
+Recording "the exact prompt, the rows returned and the final prompt" for every call in a log file would copy
+personal/health/financial data into log pipelines that usually lack the access controls, retention and erasure
+support the source systems have (GDPR data minimisation and storage limitation; HIPAA minimum-necessary).
+So audit is tiered:
+| Tier | Default | Captures | Where |
+|------|---------|----------|-------|
+| **Standard** | always on | who (subject, roles), when, agent/tool/endpoint + revision, decision & reason, applied filters (non-sensitive), **row count + entity IDs + SHA-256 of the result**, token usage, model, trace id, proposal ↔ host revision | hash-chained `dai_audit_event`; JSON-lines forwarder (`DAI_AUDIT` marker) |
+| **Evidence mode** | opt-in per workspace/agent (ADR-0018) | the above **plus** full prompt sent to the model (post-redaction), model output, tool arguments and returned rows | separate `dai_audit_evidence` store, **envelope-encrypted** with a key from the host's KMS/vault (`EvidenceKeyProvider` SPI); readable only by `AUDITOR` with a reason (the read itself is audited); own retention (default 400 days) and legal hold |
+The hashes in the standard tier let an auditor prove *which* data was returned (by recomputing against the
+source or the evidence store) without the standard log containing that data.
+Erasure: evidence is encrypted per data subject where a subject is known (crypto-shredding: deleting that key
+erases the subject's evidence while the hash chain stays valid). Optional export of the chain head to WORM storage
+(e.g. S3 Object Lock) for tamper-evidence beyond the database.
+
+## 5. Cost model
+`PriceTable` (per provider/model, input/output/cached per 1M tokens, currency) —
+admin-configured, versioned. Cost = usage metadata from `ChatResponse` × price.
+Ledger writes are asynchronous & batched (bounded queue; on overflow → aggregate in memory,
+never block the request; drop counter metric).
+
+## 6. Budgets & quotas (F-70)
+Scopes: global, workspace, agent, principal. Periods: day, month. Soft limit → alert event;
+hard limit → reject pre-turn. Cluster accuracy: reservation model — pre-turn reserve
+estimated tokens in shared counter (Redis/JDBC), settle after turn. With in-memory
+backend limits are per node (documented tradeoff). Rate limits (requests/min) share the same backend SPI.
+
+## 7. Health & readiness
+`HealthContributor` `dynamicAi` with details: catalog state, snapshot generation & lag,
+config store reachability, model providers' breaker states. Configurable whether it
+joins the host's readiness group (default: no — we must not take the host down).
+
+## 8. Alerts (shipped as example Prometheus rules / Grafana dashboard JSON)
+Snapshot lag > 60 s; agent error rate > 5 % 5m; model breaker open; budget ≥ 80 %; authz
+denial spike; audit write failures > 0; query p99 > timeout × 0.8.

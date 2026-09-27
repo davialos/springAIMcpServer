@@ -171,8 +171,8 @@ public class ChangeProposal {
     @Column(name = "row_version", nullable = false)
     private long rowVersion;
 
+    /** Ordered by seq in {@link #getRecords()} (the seq lives in the embedded id). */
     @OneToMany(mappedBy = "proposal", cascade = CascadeType.ALL, orphanRemoval = true)
-    @OrderBy("id.seq")
     private List<ChangeProposalRecord> records = new ArrayList<>();
 
     @OneToMany(mappedBy = "proposal", cascade = CascadeType.ALL)
@@ -717,7 +717,7 @@ public class ChangeProposal {
 
     /** @return records in order (unmodifiable) */
     public List<ChangeProposalRecord> getRecords() {
-        return Collections.unmodifiableList(records);
+        return records.stream().sorted(java.util.Comparator.comparingInt(ChangeProposalRecord::getSeq)).toList();
     }
 
     /** @return history in order (unmodifiable) */

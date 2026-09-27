@@ -163,6 +163,9 @@ public final class DaiPersistenceUnit implements DaiStore, AutoCloseable {
         properties.put("hibernate.session_factory_name_is_jndi", "false");
         properties.put("hibernate.query.fail_on_pagination_over_collection_fetch", "true");
         properties.put("hibernate.generate_statistics", "false");
+        // telemetry and audit parents are partitioned tables (JDBC table type "PARTITIONED TABLE"); PostgreSQLDialect
+        // already adds this type for schema validation — declared explicitly so validation never misses them
+        properties.put("hibernate.hbm2ddl.extra_physical_table_types", "PARTITIONED TABLE");
 
         LocalContainerEntityManagerFactoryBean factoryBean = new LocalContainerEntityManagerFactoryBean();
         factoryBean.setBeanClassLoader(DaiPersistenceUnit.class.getClassLoader());

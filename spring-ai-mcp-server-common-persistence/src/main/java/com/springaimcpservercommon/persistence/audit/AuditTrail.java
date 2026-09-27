@@ -188,6 +188,7 @@ public final class AuditTrail {
                     expectedSeq++;
                     checked++;
                 }
+                em.clear(); // keep the persistence context bounded while walking long chains
             }
             if (expectedSeq <= Math.min(toSeq, headSeq)) {
                 return broken(chainId, fromSeq, toSeq, checked, expectedSeq, "missing event", anchored);

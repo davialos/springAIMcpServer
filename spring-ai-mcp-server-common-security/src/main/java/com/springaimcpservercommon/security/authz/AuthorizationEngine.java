@@ -8,6 +8,7 @@ import com.springaimcpservercommon.security.authz.AuthorizationOutcome.Permit;
 import com.springaimcpservercommon.security.authz.AuthorizationOutcome.Via;
 import com.springaimcpservercommon.security.authz.condition.ConditionContext;
 import com.springaimcpservercommon.security.authz.condition.GrantConditionEvaluator;
+import com.springaimcpservercommon.security.authz.condition.ParsingGrantConditionEvaluator;
 import com.springaimcpservercommon.security.internal.GlobPattern;
 import com.springaimcpservercommon.security.permission.Permission;
 import com.springaimcpservercommon.security.permission.RolePermissionBundles;
@@ -70,7 +71,7 @@ public final class AuthorizationEngine {
         this.resourceStatus = b.resourceStatus;
         this.groupPrincipalIds = b.groupPrincipalIds;
         this.bundles = b.bundles;
-        this.conditions = b.conditions;
+        this.conditions = b.conditions != null ? b.conditions : new ParsingGrantConditionEvaluator(b.clock);
         this.environment = Collections.unmodifiableMap(new LinkedHashMap<>(b.environment));
         this.classificationPolicy = b.classificationPolicy;
         this.listeners = List.copyOf(b.listeners);
@@ -300,7 +301,7 @@ public final class AuthorizationEngine {
         private final ResourceStatusView resourceStatus;
         private final GroupPrincipalIds groupPrincipalIds;
         private RolePermissionBundles bundles = RolePermissionBundles.defaults();
-        private GrantConditionEvaluator conditions = GrantConditionEvaluator.rejectAll();
+        private @Nullable GrantConditionEvaluator conditions;
         private Map<String, Object> environment = Map.of();
         private ClassificationPolicy classificationPolicy = ClassificationPolicy.DENY;
         private List<AuthorizationAuditListener> listeners = List.of();
@@ -326,7 +327,7 @@ public final class AuthorizationEngine {
         }
 
         /**
-         * Sets the ABAC condition evaluator (default rejects every condition: fail closed).
+         * Sets the ABAC condition evaluator (default: {@link ParsingGrantConditionEvaluator}).
          *
          * @param evaluator evaluator
          * @return this builder

@@ -19,14 +19,16 @@
         <automatic.module.name>com.springaimcpservercommon.security</automatic.module.name>
     </properties>
 
+    <!--
+      The store is reached only through the ports in ...security.port (autoconfigure adapts the persistence stores),
+      so this module does not depend on spring-ai-mcp-server-common-persistence.
+      OAuth2 / resource-server / jose are optional: they are touched only from helper classes that are used after a
+      ClassUtils.isPresent check, so the module works for LDAP/form/basic hosts without them.
+    -->
     <dependencies>
         <dependency>
             <groupId>com.springaimcpservercommon</groupId>
             <artifactId>spring-ai-mcp-server-common-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.springaimcpservercommon</groupId>
-            <artifactId>spring-ai-mcp-server-common-persistence</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.security</groupId>
@@ -37,8 +39,17 @@
             <artifactId>spring-security-web</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-config</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-core</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>
@@ -60,6 +71,7 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
+
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
@@ -68,6 +80,26 @@
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-client</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

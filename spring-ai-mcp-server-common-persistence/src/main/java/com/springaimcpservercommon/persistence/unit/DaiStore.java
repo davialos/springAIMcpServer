@@ -52,4 +52,14 @@ public interface DaiStore {
      * @return transaction operations with REQUIRES_NEW propagation
      */
     TransactionOperations newTransactions();
+
+    /**
+     * The PostgreSQL schema holding the unit's tables and functions (validated against
+     * {@code ^[a-z_][a-z0-9_]{0,62}$}, so it is safe to concatenate into native SQL). Hibernate qualifies mapped
+     * entities itself; native SQL must qualify table and function names with this schema because the runtime
+     * connection's {@code search_path} belongs to the host.
+     *
+     * @return schema name, e.g. {@code dynamic_ai}
+     */
+    String schema();
 }

@@ -215,7 +215,9 @@ CREATE TABLE dai_usage_hourly
     cost_micros         bigint      NOT NULL DEFAULT 0,
     CONSTRAINT pk_usage_hourly PRIMARY KEY (id),
     CONSTRAINT uq_usage_hourly UNIQUE NULLS NOT DISTINCT (bucket_start, workspace_id, agent_resource_id, principal_id, provider, model, currency),
-    CONSTRAINT ck_usage_hourly_bucket CHECK (bucket_start = date_trunc('hour', bucket_start)),
+    -- truncate in UTC explicitly: two-argument date_trunc on timestamptz uses the session TimeZone, which would
+    -- reject valid UTC hour buckets on sessions with a non-whole-hour offset (e.g. Asia/Kolkata +05:30)
+    CONSTRAINT ck_usage_hourly_bucket CHECK (bucket_start = date_trunc('hour', bucket_start, 'UTC')),
     CONSTRAINT ck_usage_hourly_values CHECK (calls >= 0 AND input_tokens >= 0 AND output_tokens >= 0
         AND cached_input_tokens >= 0 AND cost_micros >= 0),
     CONSTRAINT fk_usage_hourly_workspace FOREIGN KEY (workspace_id) REFERENCES dai_workspace (id),

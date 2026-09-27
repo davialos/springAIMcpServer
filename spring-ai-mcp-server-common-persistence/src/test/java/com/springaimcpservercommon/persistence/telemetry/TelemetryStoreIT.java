@@ -1,0 +1,181 @@
+package com.springaimcpservercommon.persistence.telemetry;
+
+import com.springaimcpservercommon.core.catalog.CatalogElementRef;
+import com.springaimcpservercommon.core.hash.Sha256;
+import com.springaimcpservercommon.core.id.Ids;
+import com.springaimcpservercommon.core.invocation.Channel;
+import com.springaimcpservercommon.persistence.support.PageRequest;
+import com.springaimcpservercommon.persistence.support.TimeRange;
+import com.springaimcpservercommon.persistence.unit.DaiPersistenceUnit;
+import com.springaimcpservercommon.persistence.unit.PostgresTestSupport;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/** Telemetry store against PostgreSQL: partition routing, reads, MCP sessions and chat memory. */
+class TelemetryStoreIT {
+
+    private static DaiPersistenceUnit unit;
+    private static TelemetryStore telemetry;
+    private static UUID workspace;
+    private static UUID principal;
+
+    @BeforeAll
+    static void start() {
+        unit = PostgresTestSupport.startFreshUnit();
+        telemetry = new TelemetryStore(unit, Clock.systemUTC());
+        workspace = PostgresTestSupport.workspace(unit.schema());
+        principal = PostgresTestSupport.principal(unit.schema());
+    }
+
+    @AfterAll
+    static void stop() {
+        unit.close();
+    }
+
+    private static String partitionOf(String table, UUID id) {
+        return PostgresTestSupport.jdbc().queryForObject(
+                "SELECT tableoid::regclass::text FROM " + unit.schema() + "." + table + " WHERE id = ?", String.class, id);
+    }
+
+    private static String currentMonthSuffix(Instant at) {
+        return DateTimeFormatter.ofPattern("yyyyMM").withZone(ZoneOffset.UTC).format(at);
+    }
+
+    @Test
+    void turnModelCallAndToolInvocationLandInTheMonthlyPartition() {
+        Instant start = Instant.now();
+        UUID turnId = Ids.newId();
+        telemetry.recordTurn(new NewAgentTurn(turnId, start, start.plusMillis(1500), null, workspace, null, null,
+                principal, Channel.CHAT, "trace-1", null, TurnFinishReason.STOP, TurnOutcome.SUCCESS, null, 320));
+        UUID callId = Ids.newId();
+        telemetry.recordModelCall(new NewModelCall(callId, start.plusMillis(10), start.plusMillis(900), turnId,
+                (short) 0, workspace, ModelCallPurpose.AGENT_TURN, "openai", "gpt-x", true, 300, 1200, 80, 0, 2_500L,
+                "EUR", "stop", ModelCallOutcome.SUCCESS, null, "req-1", null));
+        UUID invocationId = Ids.newId();
+        telemetry.recordToolInvocation(new NewToolInvocation(invocationId, start.plusMillis(200),
+                start.plusMillis(400), Channel.CHAT, turnId, callId, "call_1", null, workspace, principal,
+                "find_orders", CatalogElementRef.parse("op:com.acme.OrderService#find(java.lang.Long)"), null,
+                ToolAccessMode.READ, Sha256.of("{\"id\":1}"), "{\"id\": 1}", ToolInvocationStatus.OK, 3,
+                Sha256.of("rows"), false, null, false, null));
+
+        String month = currentMonthSuffix(start);
+        assertThat(partitionOf("dai_agent_turn", turnId)).endsWith("dai_agent_turn_p" + month);
+        assertThat(partitionOf("dai_model_call", callId)).endsWith("dai_model_call_p" + month);
+        assertThat(partitionOf("dai_tool_invocation", invocationId)).endsWith("dai_tool_invocation_p" + month);
+
+        TimeRange range = TimeRange.lastUntil(start.plusSeconds(60), Duration.ofHours(1));
+        assertThat(telemetry.turnsOfPrincipal(principal, range, PageRequest.first(10)).items())
+                .extracting(AgentTurn::getId).contains(turnId);
+        assertThat(telemetry.findTurn(turnId, range)).isPresent();
+        assertThat(telemetry.modelCallsOfTurn(turnId)).singleElement().satisfies(c -> {
+            assertThat(c.getCostMicros()).isEqualTo(2_500L);
+            assertThat(c.getCurrency()).isEqualTo("EUR");
+        });
+        assertThat(telemetry.toolInvocationsOfTurn(turnId)).singleElement()
+                .satisfies(i -> assertThat(i.getArgsRedactedJson()).isEqualTo("{\"id\": 1}"));
+    }
+
+    @Test
+    void mcpSessionLifecycleAndRequests() {
+        String hash = Sha256.of("mcp-session-" + UUID.randomUUID());
+        McpSession session = telemetry.openMcpSession(new NewMcpSession(hash, null, workspace, principal,
+                McpTransport.STREAMABLE_HTTP, "2025-11-25", "inspector", "1.0"));
+        assertThat(telemetry.openMcpSession(new NewMcpSession(hash, null, workspace, principal,
+                McpTransport.STREAMABLE_HTTP, null, null, null)).getId()).isEqualTo(session.getId());
+
+        UUID requestId = Ids.newId();
+        Instant now = Instant.now();
+        telemetry.recordMcpRequest(new NewMcpRequest(requestId, now, now.plusMillis(20), session.getId(), null,
+                principal, workspace, "tools/call", "7", "find_orders", McpRequestStatus.OK, null, null));
+        assertThat(partitionOf("dai_mcp_request", requestId)).endsWith("dai_mcp_request_p" + currentMonthSuffix(now));
+
+        assertThat(telemetry.touchMcpSession(session.getId())).isTrue();
+        assertThat(telemetry.endMcpSession(session.getId(), McpSessionEndReason.CLIENT_CLOSED)).isTrue();
+        assertThat(telemetry.endMcpSession(session.getId(), McpSessionEndReason.ERROR)).isFalse();
+        assertThat(telemetry.touchMcpSession(session.getId())).isFalse();
+        assertThat(telemetry.findMcpSession(hash).orElseThrow().getEndReason()).isEqualTo(McpSessionEndReason.CLIENT_CLOSED);
+        assertThat(telemetry.mcpRequestsOfSession(session.getId(), TimeRange.lastUntil(now.plusSeconds(60),
+                Duration.ofHours(1)), PageRequest.first(10)).items()).hasSize(1);
+    }
+
+    @Test
+    void conversationMemoryAppendReplaceAndErase() {
+        String key = Sha256.of("conversation-" + UUID.randomUUID());
+        NewConversation data = new NewConversation(key, workspace, null, principal, Channel.CHAT, "Orders",
+                Duration.ofDays(30));
+        Conversation conversation = telemetry.openConversation(data);
+        assertThat(telemetry.openConversation(data).getId()).isEqualTo(conversation.getId());
+
+        telemetry.appendMessage(conversation.getId(), new NewMessage(MessageRole.USER, "hi", false, null, null, 1));
+        telemetry.appendMessage(conversation.getId(), new NewMessage(MessageRole.ASSISTANT, "hello", false, null, null, 1));
+        assertThatThrownBy(() -> telemetry.appendMessage(conversation.getId(),
+                new NewMessage(MessageRole.TOOL, "{}", true, null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(telemetry.messages(conversation.getId(), 10)).extracting(ConversationMessage::getSeq)
+                .containsExactly(0, 1);
+        assertThat(telemetry.messages(conversation.getId(), 1)).extracting(ConversationMessage::getContent)
+                .containsExactly("hello");
+
+        telemetry.replaceMessages(conversation.getId(), List.of(
+                new NewMessage(MessageRole.SYSTEM, "summary", false, null, null, null)));
+        assertThat(telemetry.messages(conversation.getId(), 10)).extracting(ConversationMessage::getContent)
+                .containsExactly("summary");
+
+        assertThat(telemetry.eraseConversation(conversation.getId())).isTrue();
+        assertThat(telemetry.messages(conversation.getId(), 10)).isEmpty();
+        Conversation erased = telemetry.findConversation(key).orElseThrow();
+        assertThat(erased.getStatus()).isEqualTo(ConversationStatus.ERASED);
+        assertThat(erased.getTitle()).isNull();
+        assertThatThrownBy(() -> telemetry.appendMessage(conversation.getId(),
+                new NewMessage(MessageRole.USER, "again", false, null, null, null)))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void concurrentAppendsKeepSequenceContiguous() throws Exception {
+        Conversation conversation = telemetry.openConversation(new NewConversation(
+                Sha256.of("conc-" + UUID.randomUUID()), workspace, null, principal, Channel.CHAT, null, Duration.ofDays(1)));
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(6);
+        try {
+            List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < 30; i++) {
+                futures.add(pool.submit(() -> telemetry.appendMessage(conversation.getId(),
+                        new NewMessage(MessageRole.USER, "m", false, null, null, null))));
+            }
+            for (var f : futures) {
+                f.get();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(telemetry.messages(conversation.getId(), 100)).extracting(ConversationMessage::getSeq)
+                .containsExactlyElementsOf(java.util.stream.IntStream.range(0, 30).boxed().toList());
+    }
+
+    @Test
+    void purgeRemovesConversationsPastRetention() {
+        String key = Sha256.of("old-" + UUID.randomUUID());
+        Conversation old = telemetry.openConversation(new NewConversation(key, workspace, null, principal,
+                Channel.CHAT, null, Duration.ofSeconds(1)));
+        telemetry.appendMessage(old.getId(), new NewMessage(MessageRole.USER, "bye", false, null, null, null));
+        PostgresTestSupport.jdbc().update("UPDATE " + unit.schema()
+                + ".dai_conversation SET retention_until = now() - interval '1 day' WHERE id = ?", old.getId());
+
+        assertThat(telemetry.purgeExpiredConversations(100)).isGreaterThanOrEqualTo(1);
+        assertThat(telemetry.findConversation(key)).isEmpty();
+        assertThat(PostgresTestSupport.jdbc().queryForObject("SELECT count(*) FROM " + unit.schema()
+                + ".dai_conversation_message WHERE conversation_id = ?", Integer.class, old.getId())).isZero();
+    }
+}

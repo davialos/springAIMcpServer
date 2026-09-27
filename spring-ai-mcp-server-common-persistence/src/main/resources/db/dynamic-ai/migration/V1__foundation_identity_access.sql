@@ -278,7 +278,7 @@ CREATE TABLE dai_api_key
     service_account_id uuid        NOT NULL,
     key_prefix         text        NOT NULL,
     key_hash           text        NOT NULL,
-    hash_algorithm     text        NOT NULL DEFAULT 'argon2id',
+    hash_algorithm     text        NOT NULL DEFAULT 'hmac-sha256',
     expires_at         timestamptz NOT NULL,
     last_used_at       timestamptz,
     revoked_at         timestamptz,
@@ -288,7 +288,7 @@ CREATE TABLE dai_api_key
     CONSTRAINT pk_api_key PRIMARY KEY (id),
     CONSTRAINT uq_api_key_prefix UNIQUE (key_prefix),
     CONSTRAINT ck_api_key_prefix CHECK (key_prefix ~ '^dai_[a-z]+_[A-Za-z0-9]{8,32}$'),
-    CONSTRAINT ck_api_key_hash_algorithm CHECK (hash_algorithm IN ('argon2id', 'bcrypt', 'pbkdf2-sha256')),
+    CONSTRAINT ck_api_key_hash_algorithm CHECK (hash_algorithm IN ('hmac-sha256', 'argon2id', 'bcrypt', 'pbkdf2-sha256')),
     CONSTRAINT ck_api_key_expiry CHECK (expires_at > created_at),
     CONSTRAINT ck_api_key_revocation CHECK ((revoked_at IS NULL) = (revoked_by IS NULL)),
     CONSTRAINT fk_api_key_service_account FOREIGN KEY (service_account_id) REFERENCES dai_service_account (id) ON DELETE CASCADE,
@@ -298,6 +298,7 @@ CREATE TABLE dai_api_key
 CREATE INDEX ix_api_key_service_account ON dai_api_key (service_account_id);
 CREATE INDEX ix_api_key_active_expiry ON dai_api_key (expires_at) WHERE revoked_at IS NULL;
 COMMENT ON COLUMN dai_api_key.key_prefix IS 'Public, unique lookup part of the key (dai_<env>_<keyId>); the secret part is only stored as key_hash.';
+COMMENT ON COLUMN dai_api_key.hash_algorithm IS 'hmac-sha256 (server pepper from the host secret store) is the default: keys are 256-bit random secrets, so a slow password hash adds latency without security benefit.';
 
 CREATE TABLE dai_api_key_scope
 (

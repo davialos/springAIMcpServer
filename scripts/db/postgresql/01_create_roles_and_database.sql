@@ -51,9 +51,11 @@
 --                independent of which human or CI identity happens to run a migration.
 --   dai_migrator LOGIN, member of dai_owner — the identity Flyway connects as, whether Flyway runs
 --                automatically inside the application (dynamic.ai.agent.store.migrate=true) or is invoked
---                separately by a DBA with the Flyway CLI (README.md "DBA-run migrations"). It inherits
---                dai_owner's rights through role membership, so DDL it issues is owned by dai_owner, not by
---                dai_migrator itself — dai_migrator is a login identity, not a permanent owner.
+--                separately by a DBA with the Flyway CLI (README.md "DBA-run migrations"). Membership alone
+--                does NOT change ownership in PostgreSQL: objects are owned by the session's current role.
+--                Therefore every dai_migrator session starts with SET ROLE dai_owner (ALTER ROLE … SET role
+--                below), so DDL it issues is owned by dai_owner and ALTER DEFAULT PRIVILEGES FOR ROLE
+--                dai_owner (02_) applies to it. dai_migrator is a login identity, not a permanent owner.
 --   dai_app      LOGIN, runtime — the identity the running application uses for all data-plane traffic.
 --                DML only (granted in 02_create_schema_and_privileges.sql); never a member of dai_owner,
 --                never granted DDL.
@@ -81,6 +83,11 @@ WHERE NOT EXISTS (
 -- statement in this file that is not conditional — ALTER ROLE ... PASSWORD is already idempotent by nature
 -- (setting the same or a new password is always valid, never an error).
 ALTER ROLE :"dai_migrator_role" WITH PASSWORD :'dai_migrator_password';
+
+-- Every dai_migrator session runs as dai_owner, so migration-created objects are owned by dai_owner and pick up
+-- the default privileges from 02_ (PostgreSQL 16+: requires the membership's SET option, which GRANT gives by
+-- default). Equivalent for tools that ignore role settings: Flyway initSql = "SET ROLE dai_owner".
+ALTER ROLE :"dai_migrator_role" SET role = :'dai_owner_role';
 ALTER ROLE :"dai_app_role"      WITH PASSWORD :'dai_app_password';
 
 -- ---------------------------------------------------------------------------------------------------

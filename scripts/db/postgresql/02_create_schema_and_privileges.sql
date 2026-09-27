@@ -36,8 +36,9 @@ SELECT format('CREATE SCHEMA %I AUTHORIZATION %I', :'dai_schema', :'dai_owner_ro
 WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = :'dai_schema') \gexec
 
 -- dai_migrator needs USAGE to reference the schema at all, and CREATE because Flyway issues
--- CREATE TABLE/INDEX/FUNCTION/TRIGGER statements while connected as dai_migrator (which then run with
--- dai_owner's rights via the role membership granted in 01_, so the objects end up owned by dai_owner).
+-- CREATE TABLE/INDEX/FUNCTION/TRIGGER statements while connected as dai_migrator. 01_ makes every dai_migrator
+-- session start with SET ROLE dai_owner, so the objects end up owned by dai_owner (membership alone would leave
+-- them owned by dai_migrator and the default privileges below would never apply).
 GRANT USAGE, CREATE ON SCHEMA :"dai_schema" TO :"dai_migrator_role";
 
 -- dai_app only ever runs DML: USAGE to see the schema and its objects, nothing else at the schema level.
@@ -46,7 +47,7 @@ REVOKE CREATE ON SCHEMA :"dai_schema" FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------------------------------
 -- Default privileges: every object dai_owner subsequently creates in this schema (i.e. everything Flyway
--- creates while running as dai_migrator, which inherits dai_owner's rights) automatically grants dai_app
+-- creates while dai_migrator runs as dai_owner via SET ROLE — see 01_) automatically grants dai_app
 -- exactly DML on tables/sequences and EXECUTE on functions — no per-migration grant statement needed, and no
 -- window where a freshly migrated table is invisible to the running application. This is what makes
 -- 03_post_migration_grants.sql a "catch up for pre-existing objects" script, not something every future

@@ -58,6 +58,7 @@ public final class ToolBridge {
     private final OperationCallbackFactory operationFactory;
     private final QueryCallbackFactory queryFactory;
     private final SecuredToolCallback.ToolPermissionChecker permissionChecker;
+    private final ProposalService proposalService;
 
     /**
      * Constructs the bridge with all required ports.
@@ -66,15 +67,18 @@ public final class ToolBridge {
      * @param operationFactory  builds delegate callbacks for operation-backed tools
      * @param queryFactory      builds delegate callbacks for query-backed tools
      * @param permissionChecker runtime permission check per call
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
      */
     public ToolBridge(ToolBindingLoader bindingLoader,
                        OperationCallbackFactory operationFactory,
                        QueryCallbackFactory queryFactory,
-                       SecuredToolCallback.ToolPermissionChecker permissionChecker) {
+                       SecuredToolCallback.ToolPermissionChecker permissionChecker,
+                       ProposalService proposalService) {
         this.bindingLoader = Objects.requireNonNull(bindingLoader, "bindingLoader");
         this.operationFactory = Objects.requireNonNull(operationFactory, "operationFactory");
         this.queryFactory = Objects.requireNonNull(queryFactory, "queryFactory");
         this.permissionChecker = Objects.requireNonNull(permissionChecker, "permissionChecker");
+        this.proposalService = Objects.requireNonNull(proposalService, "proposalService");
     }
 
     /**
@@ -112,7 +116,7 @@ public final class ToolBridge {
             }
             result.add(new SecuredToolCallback(
                     delegate, binding, principal, authentication,
-                    new AtomicInteger(0), permissionChecker));
+                    new AtomicInteger(0), permissionChecker, proposalService));
         }
         return List.copyOf(result);
     }
@@ -140,7 +144,7 @@ public final class ToolBridge {
         ToolCallback delegate = resolveDelegate(binding, principal, catalog);
         if (delegate == null) return null;
         return new SecuredToolCallback(delegate, binding, principal, authentication,
-                new AtomicInteger(0), permissionChecker);
+                new AtomicInteger(0), permissionChecker, proposalService);
     }
 
     private @org.jspecify.annotations.Nullable ToolCallback resolveDelegate(

@@ -5,6 +5,7 @@ import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
+import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
@@ -83,6 +84,18 @@ public class DaiAiAutoConfiguration {
     }
 
     /**
+     * Default no-op proposal service. Replaced by the persistence module when write-proposal
+     * persistence is enabled. Returns a synthetic UUID without persisting.
+     *
+     * @return the service
+     */
+    @Bean
+    @ConditionalOnMissingBean(ProposalService.class)
+    public ProposalService proposalService() {
+        return (toolName, toolInput, bindingId, principal) -> com.springaimcpservercommon.core.id.Ids.newId();
+    }
+
+    /**
      * The tool bridge singleton. Assembled when all required port beans are available:
      * {@link ToolBridge.ToolBindingLoader}, {@link ToolBridge.OperationCallbackFactory},
      * {@link ToolBridge.QueryCallbackFactory}.
@@ -94,6 +107,7 @@ public class DaiAiAutoConfiguration {
      * @param operationFactory  builds operation-backed callbacks
      * @param queryFactory      builds query-backed callbacks
      * @param permissionChecker runtime per-call permission check
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
      * @return the bridge
      */
     @Bean
@@ -104,8 +118,10 @@ public class DaiAiAutoConfiguration {
     public ToolBridge toolBridge(ToolBridge.ToolBindingLoader bindingLoader,
                                   ToolBridge.OperationCallbackFactory operationFactory,
                                   ToolBridge.QueryCallbackFactory queryFactory,
-                                  SecuredToolCallback.ToolPermissionChecker permissionChecker) {
-        return new ToolBridge(bindingLoader, operationFactory, queryFactory, permissionChecker);
+                                  SecuredToolCallback.ToolPermissionChecker permissionChecker,
+                                  ProposalService proposalService) {
+        return new ToolBridge(bindingLoader, operationFactory, queryFactory,
+                permissionChecker, proposalService);
     }
 
     /**

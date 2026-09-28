@@ -51,12 +51,16 @@ services:
       POSTGRES_DB:       ${POSTGRES_DB:-dai_store}
       POSTGRES_USER:     ${POSTGRES_SUPERUSER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres_secret}
+      # Passed to the init.sh script so role passwords come from .env, not SQL literals
+      DAI_MIGRATOR_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD:-dai_migrator_secret}
+      DAI_APP_PASSWORD:      ${POSTGRES_APP_PASSWORD:-dai_app_secret}
     ports:
       - "${POSTGRES_EXTERNAL_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Init script creates roles/schema before Flyway runs
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+      # Init script creates roles/schema before Flyway runs.
+      # Shell script (not SQL) so role passwords are injected from env vars.
+      - ./docker/postgres/init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-postgres} -d ${POSTGRES_DB:-dai_store}"]
       interval: 10s
@@ -118,8 +122,7 @@ services:
     networks:
       - springaimcp-net
 
-  # One-shot helper: pulls the default model into the Ollama volume.
-  # Run manually once: docker compose run --rm ollama-pull
+  # One-shot: pulls the chat model.  docker compose run --rm ollama-pull
   ollama-pull:
     image: ollama/ollama:latest
     container_name: springaimcp-ollama-pull
@@ -134,6 +137,22 @@ services:
     networks:
       - springaimcp-net
 
+  # One-shot: pulls the embedding model (needed for graph profile vector store).
+  # docker compose --profile graph run --rm ollama-pull-embed
+  ollama-pull-embed:
+    image: ollama/ollama:latest
+    container_name: springaimcp-ollama-pull-embed
+    entrypoint: ["ollama", "pull", "${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    profiles:
+      - graph
+    networks:
+      - springaimcp-net
+
   # ── H2 web console (test profile only) ───────────────────────────────────
   # Not a data store — just the H2 browser UI for inspecting the in-process
   # H2 database that the test profile wires up via spring.datasource.url=
@@ -143,7 +162,7 @@ services:
     container_name: springaimcp-h2-console
     restart: "no"
     ports:
-      - "${H2_CONSOLE_PORT:-8082}:81"
+      - "${H2_CONSOLE_PORT:-8084}:81"
     profiles:
       - test
     networks:
@@ -192,6 +211,10 @@ services:
         # ── Demo credentials (dev only) ──
         DEMO_USER:     ${DEMO_USER:-admin}
         DEMO_PASSWORD: ${DEMO_PASSWORD:-admin}
+        # ── Observability ──
+        OTEL_TRACING_ENABLED:          ${OTEL_TRACING_ENABLED:-false}
+        OTEL_EXPORTER_OTLP_ENDPOINT:   ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
+        OTEL_SAMPLING_PROBABILITY:     ${OTEL_SAMPLING_PROBABILITY:-0.1}
         # ── JVM ──
         JAVA_OPTS: >-
           -XX:+UseContainerSupport
@@ -370,8 +393,10 @@ services:
       SPRING_PROFILES_ACTIVE: local,graph
       <<: *common-app-env
       # ── Ollama ──
-      SPRING_AI_OLLAMA_BASE_URL:   http://ollama:11434
-      SPRING_AI_OLLAMA_CHAT_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      SPRING_AI_OLLAMA_BASE_URL:            http://ollama:11434
+      SPRING_AI_OLLAMA_CHAT_MODEL:          ${OLLAMA_MODEL:-qwen2.5:3b}
+      # Embedding model for graph vector indexes (768-dim, matches 01_schema.cypher)
+      SPRING_AI_OLLAMA_EMBEDDING_MODEL:     ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       # ── Neo4j ──
       NEO4J_URI:      bolt://neo4j:7687
       NEO4J_USER:     ${NEO4J_USER:-neo4j}

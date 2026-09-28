@@ -12,7 +12,10 @@ spring:
 
   h2:
     console:
-      enabled: true
+      # H2 web console disabled by default in tests — enable only when running
+      # the h2-console Docker service and you need to inspect the in-memory DB.
+      # Never enable in any environment reachable over a network.
+      enabled: ${H2_CONSOLE_ENABLED:false}
       path:    /h2-console
 
   jpa:

@@ -16,6 +16,16 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 spring:
+  ai:
+    # Ollama embedding model — required for populating Message.embedding and
+    # Context.embedding in the graph store. nomic-embed-text produces 768-dim
+    # vectors; change SPRING_AI_OLLAMA_EMBEDDING_MODEL and NEO4J_EMBEDDING_DIMENSION
+    # together if you switch models.
+    ollama:
+      embedding:
+        options:
+          model: ${SPRING_AI_OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
+
   neo4j:
     uri:          ${NEO4J_URI:bolt://localhost:7687}
     authentication:

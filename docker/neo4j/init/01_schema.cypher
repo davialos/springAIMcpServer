@@ -106,10 +106,28 @@ CREATE FULLTEXT INDEX message_content_fulltext IF NOT EXISTS
 CREATE FULLTEXT INDEX rule_group_fulltext IF NOT EXISTS
   FOR (rg:RuleGroup) ON EACH [rg.name, rg.description];
 
+// ── Retention / cleanup indexes ───────────────────────────────────────────────
+// Required so turn- and context-retention sweep queries don't full-scan.
+
+CREATE INDEX turn_created_at IF NOT EXISTS
+  FOR (t:Turn) ON (t.createdAt);
+
+CREATE INDEX context_created_at IF NOT EXISTS
+  FOR (ctx:Context) ON (ctx.createdAt);
+
 // ── Vector indexes (Neo4j 5.11+ native vector search) ────────────────────────
 //
-// Dimension 1536 = OpenAI text-embedding-3-small / text-embedding-ada-002.
-// Change to 3072 for text-embedding-3-large, or 1024 for Anthropic voyage-3.
+// Default dimension: 768 = Ollama nomic-embed-text (local dev default).
+// If you switch to a cloud embedding model update vector.dimensions to match
+// and re-create the indexes (DROP INDEX ... / CREATE VECTOR INDEX ...) or
+// wipe + re-seed the database:
+//   1536 = OpenAI text-embedding-3-small / ada-002
+//   3072 = OpenAI text-embedding-3-large
+//   1024 = Anthropic voyage-3
+//
+// NEO4J_EMBEDDING_DIMENSION in .env must match this value AND
+// spring.ai.vectorstore.neo4j.embedding-dimension in application-graph.yml.
+//
 // cosine similarity is standard for text embeddings.
 
 // Message-level semantic search — "find messages similar to this query"
@@ -117,7 +135,7 @@ CREATE VECTOR INDEX message_embedding IF NOT EXISTS
   FOR (m:Message) ON (m.embedding)
   OPTIONS {
     indexConfig: {
-      `vector.dimensions`: 1536,
+      `vector.dimensions`: 768,
       `vector.similarity_function`: 'cosine'
     }
   };
@@ -127,7 +145,7 @@ CREATE VECTOR INDEX context_embedding IF NOT EXISTS
   FOR (ctx:Context) ON (ctx.embedding)
   OPTIONS {
     indexConfig: {
-      `vector.dimensions`: 1536,
+      `vector.dimensions`: 768,
       `vector.similarity_function`: 'cosine'
     }
   };

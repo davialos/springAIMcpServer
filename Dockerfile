@@ -29,10 +29,13 @@ COPY spring-ai-mcp-server-common-webmvc/pom.xml             spring-ai-mcp-server
 COPY spring-ai-mcp-server-common-autoconfigure/pom.xml      spring-ai-mcp-server-common-autoconfigure/
 COPY spring-ai-mcp-server-common-spring-boot-starter/pom.xml spring-ai-mcp-server-common-spring-boot-starter/
 COPY docker/demo-app/pom.xml                                docker/demo-app/
+# Maven settings — adds Spring milestone/snapshot repos needed for Boot 4.x / AI 2.x
+COPY docker/maven/settings.xml                              docker/maven/settings.xml
 
 # Download all library dependencies (cached unless a POM changes)
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn -f pom.xml dependency:go-offline -q --no-transfer-progress
+    mvn -s docker/maven/settings.xml \
+        -f pom.xml dependency:go-offline -q --no-transfer-progress
 
 # --- full source ---
 COPY spring-ai-mcp-server-common-bom/                       spring-ai-mcp-server-common-bom/
@@ -52,8 +55,10 @@ COPY docker/demo-app/                                       docker/demo-app/
 #    Testcontainers / Docker-in-Docker and are run separately in CI).
 # 2. Build the demo host app as a fat/executable JAR.
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn -f pom.xml install -DskipTests -q --no-transfer-progress && \
-    mvn -f docker/demo-app/pom.xml package -DskipTests -q --no-transfer-progress
+    mvn -s docker/maven/settings.xml \
+        -f pom.xml install -DskipTests -q --no-transfer-progress && \
+    mvn -s docker/maven/settings.xml \
+        -f docker/demo-app/pom.xml package -DskipTests -q --no-transfer-progress
 
 # Unpack the fat JAR into the layered format Spring Boot produces so the
 # runtime stage can copy the layers separately (better cache hit on re-deploy).

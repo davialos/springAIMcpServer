@@ -36,6 +36,34 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+      # Show Neo4j and Redis health contributors when their profiles are active
+      group:
+        readiness:
+          include: db,redis,neo4j
+  # Prometheus / Micrometer
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${DAI_ENV_TIER:dev}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  # OpenTelemetry tracing (active when micrometer-tracing-bridge-otel is on classpath)
+  tracing:
+    enabled: ${OTEL_TRACING_ENABLED:false}
+    sampling:
+      probability: ${OTEL_SAMPLING_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+# Redis connection (Spring Boot 4 property path)
+spring:
+  data:
+    redis:
+      host:     ${SPRING_DATA_REDIS_HOST:localhost}
+      port:     ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
 
 # ── springAIMcpServerCommon library config ──────────────────────────────────
 dynamic:

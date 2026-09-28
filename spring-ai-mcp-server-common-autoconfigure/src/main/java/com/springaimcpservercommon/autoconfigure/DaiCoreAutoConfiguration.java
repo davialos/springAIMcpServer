@@ -8,9 +8,11 @@ import com.springaimcpservercommon.core.catalog.SwappableMetadataRegistry;
 import com.springaimcpservercommon.core.environment.DefaultEnvironmentSafetyPolicy;
 import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
 import com.springaimcpservercommon.core.environment.EnvironmentSignals;
+import com.springaimcpservercommon.core.lint.TextLint;
 import com.springaimcpservercommon.core.policy.PolicyMerger;
 import com.springaimcpservercommon.core.scan.ScanOptions;
 import com.springaimcpservercommon.core.scan.SpringBeanOperationScanner;
+import com.springaimcpservercommon.core.schema.JsonSchemaMapper;
 import org.jspecify.annotations.NullMarked;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -130,8 +132,9 @@ public class DaiCoreAutoConfiguration {
                 return;
             }
             DaiProperties.Scan scanProps = props.scan();
-            ScanOptions options = ScanOptions.defaults(packages)
-                    .withStrict(scanProps.strict());
+            ScanOptions options = new ScanOptions(packages, List.of(ScanOptions.LIBRARY_PACKAGE),
+                    scanProps.strict(), scanProps.outcomeActionThreshold(),
+                    JsonSchemaMapper.Options.defaults(), TextLint.defaults(), null);
             SpringBeanOperationScanner scanner = new SpringBeanOperationScanner(options, Clock.systemUTC());
             ScannedCatalog scanned = scanner.scan(beanFactory, entitySources);
             long errors = scanned.issues().stream().filter(i -> i.error()).count();

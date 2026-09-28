@@ -1,9 +1,11 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.core.catalog.EntityCatalogSource;
 import com.springaimcpservercommon.query.ast.QueryDefinition;
 import com.springaimcpservercommon.query.criteria.CriteriaCompiler;
 import com.springaimcpservercommon.query.criteria.CriteriaQueryExecutor;
 import com.springaimcpservercommon.query.execution.QueryExecutor;
+import com.springaimcpservercommon.query.scan.JpaEntityCatalogSource;
 import jakarta.persistence.EntityManagerFactory;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -41,6 +43,27 @@ public class DaiQueryAutoConfiguration {
          * @return the definition, or {@code null} if not published
          */
         @Nullable QueryDefinition load(UUID queryId);
+    }
+
+    /**
+     * Entity catalog source backed by the host's JPA metamodel. Reads {@code @AiContext},
+     * {@code @AiEntityProperty} and {@code @AiQueryConstraints} from host entity classes and feeds them
+     * into the {@link com.springaimcpservercommon.core.catalog.MetadataRegistry} at startup (LLD-02 §3.2).
+     *
+     * <p>Only registered when no other {@link EntityCatalogSource} bean exists; hosts may supply their own.
+     *
+     * @param entityManagerFactory the host's entity manager factory
+     * @return the source
+     */
+    @Bean
+    @ConditionalOnMissingBean(EntityCatalogSource.class)
+    @ConditionalOnBean(EntityManagerFactory.class)
+    public JpaEntityCatalogSource jpaEntityCatalogSource(EntityManagerFactory entityManagerFactory) {
+        String puName = (String) entityManagerFactory.getProperties()
+                .getOrDefault("jakarta.persistence.jdbc.url", "default");
+        String id = (String) entityManagerFactory.getProperties()
+                .getOrDefault("hibernate.ejb.persistenceUnitName", puName);
+        return new JpaEntityCatalogSource(entityManagerFactory, id);
     }
 
     /**

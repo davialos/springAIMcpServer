@@ -1,18 +1,29 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
+import com.springaimcpservercommon.core.catalog.EntityCatalogSource;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
+import com.springaimcpservercommon.core.catalog.ScannedCatalog;
 import com.springaimcpservercommon.core.catalog.SwappableMetadataRegistry;
 import com.springaimcpservercommon.core.environment.DefaultEnvironmentSafetyPolicy;
 import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
 import com.springaimcpservercommon.core.environment.EnvironmentSignals;
+import com.springaimcpservercommon.core.policy.PolicyMerger;
+import com.springaimcpservercommon.core.scan.ScanOptions;
+import com.springaimcpservercommon.core.scan.SpringBeanOperationScanner;
 import org.jspecify.annotations.NullMarked;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.AutoConfigurationPackages;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
 
+import java.time.Clock;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +38,8 @@ import java.util.Map;
 @EnableConfigurationProperties(DaiProperties.class)
 @NullMarked
 public class DaiCoreAutoConfiguration {
+
+    private static final Logger log = LoggerFactory.getLogger(DaiCoreAutoConfiguration.class);
 
     /**
      * The in-process metadata registry. Starts with an empty, fail-closed catalog (generation 0).
@@ -81,5 +94,55 @@ public class DaiCoreAutoConfiguration {
                 profiles,
                 envProps.id(),
                 appName);
+    }
+
+    /**
+     * Fires the {@link SpringBeanOperationScanner} after all singletons are instantiated, applies the
+     * {@link PolicyMerger} with an empty policy layer list (generation 1), and swaps the
+     * {@link SwappableMetadataRegistry} (LLD-03 §5).
+     *
+     * <p>Base packages default to {@link AutoConfigurationPackages#get(ListableBeanFactory)} when not
+     * explicitly configured; if neither source yields packages the scan is skipped and the registry stays
+     * at generation 0 (fail-closed).
+     *
+     * @param props          framework properties
+     * @param metadataRegistry the registry to publish the first catalog generation into
+     * @param beanFactory    the host application's bean factory
+     * @param entitySources  zero or more entity catalog sources (one per host entity manager factory)
+     * @return the startup singleton
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "catalogBootstrap")
+    public SmartInitializingSingleton catalogBootstrap(
+            DaiProperties props,
+            MetadataRegistry metadataRegistry,
+            ListableBeanFactory beanFactory,
+            List<EntityCatalogSource> entitySources) {
+        return () -> {
+            List<String> packages = props.scan().basePackages();
+            if (packages.isEmpty()) {
+                packages = AutoConfigurationPackages.has(beanFactory)
+                        ? AutoConfigurationPackages.get(beanFactory) : List.of();
+            }
+            if (packages.isEmpty()) {
+                log.warn("No base packages for AI catalog scan — MetadataRegistry stays at generation 0. "
+                        + "Set dynamic.ai.agent.scan.base-packages or add @SpringBootApplication to the host.");
+                return;
+            }
+            DaiProperties.Scan scanProps = props.scan();
+            ScanOptions options = ScanOptions.defaults(packages)
+                    .withStrict(scanProps.strict());
+            SpringBeanOperationScanner scanner = new SpringBeanOperationScanner(options, Clock.systemUTC());
+            ScannedCatalog scanned = scanner.scan(beanFactory, entitySources);
+            long errors = scanned.issues().stream().filter(i -> i.error()).count();
+            if (errors > 0) {
+                log.warn("AI catalog scan completed with {} error(s); affected elements excluded", errors);
+            }
+            PolicyMerger merger = new PolicyMerger(PolicyMerger.DEFAULT_GLOBAL_MAX_LIMIT, scanProps.strict());
+            EffectiveCatalog effective = merger.merge(scanned, List.of(), 1L);
+            metadataRegistry.publish(effective);
+            log.info("AI catalog bootstrap published generation 1: {} entities, {} operations",
+                    effective.entities().size(), effective.operations().size());
+        };
     }
 }

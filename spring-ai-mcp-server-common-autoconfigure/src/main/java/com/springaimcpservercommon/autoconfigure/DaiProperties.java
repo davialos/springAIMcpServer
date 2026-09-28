@@ -21,6 +21,7 @@ import java.util.Map;
  * @param security        principal mapping and authorization settings
  * @param mcp             MCP server transport and origin configuration
  * @param query           dynamic query bulkhead settings
+ * @param scan            {@code @Ai*} annotation scan settings
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -28,7 +29,8 @@ public record DaiProperties(
         @DefaultValue Environment environment,
         @DefaultValue Security security,
         @DefaultValue Mcp mcp,
-        @DefaultValue Query query) {
+        @DefaultValue Query query,
+        @DefaultValue Scan scan) {
 
     /**
      * Environment identification settings.
@@ -107,4 +109,18 @@ public record DaiProperties(
     public record Query(
             @DefaultValue("20") int maxConcurrency,
             @DefaultValue("30s") Duration timeout) {}
+
+    /**
+     * {@code @Ai*} annotation scan settings ({@code dynamic.ai.agent.scan.*}).
+     *
+     * @param basePackages           packages to scan for {@code @AiExposedAction} and {@code @AiContext}; empty =
+     *                               use the host's auto-configuration base packages (recommended)
+     * @param strict                 exclude unbounded list-returning actions when {@code true}
+     * @param outcomeActionThreshold emit a {@code CONSIDER_OUTCOME_ACTION} hint when an entity has more actions
+     *                               than this threshold
+     */
+    public record Scan(
+            @DefaultValue List<String> basePackages,
+            @DefaultValue("false") boolean strict,
+            @DefaultValue("8") int outcomeActionThreshold) {}
 }

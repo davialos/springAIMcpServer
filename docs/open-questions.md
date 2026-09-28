@@ -53,3 +53,4 @@ Deployment criticality:
 | OQ-04 | Kotlin hosts | Runtime annotations work unchanged → ADR-0013 |
 | OQ-10 | Which DB for configuration, audit and versioning? | **PostgreSQL** (product owner, 2026-09-28) → ADR-0019, LLD-15 |
 | OQ-12 | Write capability in v1 | Reviewed change proposals only → ADR-0009, LLD-11 |
+| OQ-32 | Consolidate the three independent canonical-JSON writers (`core.json.CanonicalJson`, `persistence.support.CanonicalJson`, `persistence.config.CanonicalSpec`) on one implementation per ADR-0020, with a real build/test run to verify | Apply ADR-0020's plan as its own small, test-verified change before or early in wave 3 | user | ADR-0020 | OPEN |

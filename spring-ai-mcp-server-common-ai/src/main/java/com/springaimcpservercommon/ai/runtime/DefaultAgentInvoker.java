@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.ai.runtime;
 
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
+import com.springaimcpservercommon.ai.advisor.JsonSchemaValidationPort;
 import com.springaimcpservercommon.ai.advisor.StructuredOutputValidationAdvisor;
 import com.springaimcpservercommon.ai.advisor.SummaryMemoryAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
@@ -66,6 +67,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final UsageMeteringAdvisor.UsageSink usageSink;
     private final ObservationRegistry observationRegistry;
     private final ChatMemory chatMemory;
+    private final @Nullable JsonSchemaValidationPort schemaValidator;
 
     /**
      * Creates the invoker.
@@ -78,6 +80,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
      * @param usageSink            token usage accounting
      * @param observationRegistry  Micrometer observation registry
      * @param chatMemory           conversation history store
+     * @param schemaValidator      optional JSON Schema conformance validator (Level 2);
+     *                             when {@code null} only well-formedness is enforced
      */
     public DefaultAgentInvoker(ModelRouter modelRouter,
                                 @Nullable ToolBridge toolBridge,
@@ -86,7 +90,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 InvocationGuardAdvisor.BudgetChecker budgetChecker,
                                 UsageMeteringAdvisor.UsageSink usageSink,
                                 ObservationRegistry observationRegistry,
-                                ChatMemory chatMemory) {
+                                ChatMemory chatMemory,
+                                @Nullable JsonSchemaValidationPort schemaValidator) {
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter");
         this.toolBridge = toolBridge;
         this.metadataRegistry = Objects.requireNonNull(metadataRegistry, "metadataRegistry");
@@ -95,6 +100,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         this.usageSink = Objects.requireNonNull(usageSink, "usageSink");
         this.observationRegistry = Objects.requireNonNull(observationRegistry, "observationRegistry");
         this.chatMemory = Objects.requireNonNull(chatMemory, "chatMemory");
+        this.schemaValidator = schemaValidator;
     }
 
     // ─── Sync turn ────────────────────────────────────────────────────────────
@@ -205,7 +211,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         }
         // NONE: no memory advisor
         if (agent.output().mode() == OutputSpec.Mode.JSON_SCHEMA) {
-            advisors.add(new StructuredOutputValidationAdvisor(agent.output()));
+            advisors.add(new StructuredOutputValidationAdvisor(agent.output(), schemaValidator));
         }
         advisors.add(new UsageMeteringAdvisor(agent, principal, usageSink, observationRegistry));
 

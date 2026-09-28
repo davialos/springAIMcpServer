@@ -102,6 +102,13 @@
             <artifactId>jakarta.servlet-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Optional: enables JSON Schema conformance validation (Level 2) in StructuredOutputValidationAdvisor.
+             Hosts add this dependency to activate NetworkntJsonSchemaValidationPort. -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-test</artifactId>

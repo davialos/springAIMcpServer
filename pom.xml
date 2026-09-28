@@ -44,6 +44,7 @@
         <!-- Not managed by the Boot BOM -->
         <jspecify.version>1.0.0</jspecify.version>
         <archunit.version>1.4.1</archunit.version>
+        <networknt-json-schema.version>1.4.3</networknt-json-schema.version>
 
         <!-- Plugins -->
         <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
@@ -130,6 +131,11 @@
                 <groupId>com.tngtech.archunit</groupId>
                 <artifactId>archunit-junit5</artifactId>
                 <version>${archunit.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>${networknt-json-schema.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

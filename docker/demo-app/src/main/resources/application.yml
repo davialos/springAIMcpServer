@@ -73,6 +73,32 @@ dynamic:
         server:
           enabled: true
 
+# ── Spring AI provider (overridden per profile) ──────────────────────────────
+# Default: local Ollama.  Switch to cloud APIs with SPRING_PROFILES_ACTIVE=api
+# (see application-api.yml) or SPRING_PROFILES_ACTIVE=local,api to merge.
+#
+# The active profile drives which ChatModel bean Spring AI registers; only one
+# provider starter should contribute an auto-configured ChatModel at a time.
+spring:
+  ai:
+    ollama:
+      base-url: ${SPRING_AI_OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${SPRING_AI_OLLAMA_CHAT_MODEL:qwen2.5:3b}
+          temperature: 0.2
+    # Disable cloud providers in the base config — enabled by the 'api' profile.
+    openai:
+      api-key: ${OPENAI_API_KEY:disabled}
+      chat:
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:disabled}
+      chat:
+        options:
+          model: ${ANTHROPIC_CHAT_MODEL:claude-sonnet-5}
+
 logging:
   level:
     root: INFO

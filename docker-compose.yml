@@ -2,21 +2,28 @@
 # springAIMcpServerCommon — local dev / demo stack
 #
 # Services
-#   postgres  – primary store for dynamic_ai schema (required)
-#   redis     – optional escape-hatch cache / rate-limit backend (ADR-0021)
-#   ollama    – local LLM for AI testing without cloud credentials
-#   app       – the demo host application (built from ./Dockerfile)
+#   postgres   – primary store for dynamic_ai schema (required)
+#   redis      – optional escape-hatch cache / rate-limit backend (ADR-0021)
+#   ollama     – local LLM for AI testing without cloud credentials
+#   app        – demo app wired to Ollama  (default profile: local)
+#   app-api    – demo app wired to cloud AI APIs (profile: api) — no Ollama dep
 #
-# Quick start (Mac with Docker Desktop)
-#   1. cp .env.example .env   # and fill in values
+# Quick start — local Ollama
+#   1. cp .env.example .env   # set passwords; leave API keys blank
 #   2. docker compose up -d postgres redis ollama
-#   3. docker compose run --rm ollama-pull   # pull a model once
+#   3. docker compose run --rm ollama-pull     # pull model once (~2 GB)
 #   4. docker compose up -d app
 #   5. open http://localhost:8080/actuator/health
 #
+# Quick start — cloud API (OpenAI / Anthropic)
+#   1. cp .env.example .env   # set OPENAI_API_KEY or ANTHROPIC_API_KEY + AI_PROVIDER
+#   2. docker compose up -d postgres redis
+#   3. docker compose --profile api up -d app-api
+#   4. open http://localhost:8081/actuator/health
+#
 # Test-only (H2 in-process — no containers needed)
 #   docker compose --profile test up -d h2-console
-#   Then run: mvn test -Dspring.profiles.active=test
+#   OPENAI_API_KEY=sk-... mvn test -Dspring.profiles.active=api
 # ──────────────────────────────────────────────────────────────────────────────
 
 name: springaimcp
@@ -130,12 +137,11 @@ services:
     networks:
       - springaimcp-net
 
-  # ── Demo application ──────────────────────────────────────────────────────
+  # ── Demo application — local Ollama backend ──────────────────────────────
   app:
     build:
       context: .
       dockerfile: Dockerfile
-      # Pass through the Maven wrapper cache so re-builds are fast
       cache_from:
         - type=local,src=/tmp/.buildx-cache
       cache_to:
@@ -153,39 +159,86 @@ services:
     ports:
       - "${APP_PORT:-8080}:8080"
     environment:
-      # ── Spring / host datasource ──
-      POSTGRES_HOST:     postgres
-      POSTGRES_PORT:     5432
-      POSTGRES_DB:       ${POSTGRES_DB:-dai_store}
-      POSTGRES_USER:     ${POSTGRES_APP_USER:-dai_app}
-      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:-dai_app_secret}
-
-      # ── dynamic_ai library datasource (Flyway runs as migrator) ──
-      DAI_DB:            ${POSTGRES_DB:-dai_store}
-      DAI_DB_USER:       ${POSTGRES_MIGRATOR_USER:-dai_migrator}
-      DAI_DB_PASSWORD:   ${POSTGRES_MIGRATOR_PASSWORD:-dai_migrator_secret}
-      DAI_MIGRATE:       "true"
-      DAI_ENV_TIER:      ${DAI_ENV_TIER:-dev}
-
-      # ── Redis ──
-      SPRING_DATA_REDIS_HOST:     redis
-      SPRING_DATA_REDIS_PORT:     6379
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
-
-      # ── Local Ollama model ──
-      SPRING_AI_OLLAMA_BASE_URL:  http://ollama:11434
+      SPRING_PROFILES_ACTIVE: local
+      <<: &common-app-env
+        # ── Spring / host datasource ──
+        POSTGRES_HOST:     postgres
+        POSTGRES_PORT:     5432
+        POSTGRES_DB:       ${POSTGRES_DB:-dai_store}
+        POSTGRES_USER:     ${POSTGRES_APP_USER:-dai_app}
+        POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:-dai_app_secret}
+        # ── dynamic_ai library datasource (Flyway runs as migrator) ──
+        DAI_DB:            ${POSTGRES_DB:-dai_store}
+        DAI_DB_USER:       ${POSTGRES_MIGRATOR_USER:-dai_migrator}
+        DAI_DB_PASSWORD:   ${POSTGRES_MIGRATOR_PASSWORD:-dai_migrator_secret}
+        DAI_MIGRATE:       "true"
+        DAI_ENV_TIER:      ${DAI_ENV_TIER:-dev}
+        # ── Redis ──
+        SPRING_DATA_REDIS_HOST:     redis
+        SPRING_DATA_REDIS_PORT:     6379
+        SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+        # ── Demo credentials (dev only) ──
+        DEMO_USER:     ${DEMO_USER:-admin}
+        DEMO_PASSWORD: ${DEMO_PASSWORD:-admin}
+        # ── JVM ──
+        JAVA_OPTS: >-
+          -XX:+UseContainerSupport
+          -XX:MaxRAMPercentage=75.0
+          -XX:+ExitOnOutOfMemoryError
+          -Djava.security.egd=file:/dev/./urandom
+      # ── Ollama (local only) ──
+      SPRING_AI_OLLAMA_BASE_URL:   http://ollama:11434
       SPRING_AI_OLLAMA_CHAT_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+    deploy:
+      resources:
+        limits:
+          memory: ${APP_MEMORY_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks:
+      - springaimcp-net
 
-      # ── Demo credentials (dev only — replace with OIDC in real use) ──
-      DEMO_USER:     ${DEMO_USER:-admin}
-      DEMO_PASSWORD: ${DEMO_PASSWORD:-admin}
+  # ── Demo application — cloud API backend ─────────────────────────────────
+  # Activates the 'api' Spring profile; no Ollama dependency.
+  # Requires OPENAI_API_KEY or ANTHROPIC_API_KEY in .env.
+  # Start with: docker compose --profile api up -d app-api
+  app-api:
+    image: springaimcp-demo:latest
+    container_name: springaimcp-app-api
+    restart: unless-stopped
+    profiles:
+      - api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${APP_API_PORT:-8081}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: api
+      <<: *common-app-env
+      # ── AI provider selection ──────────────────────────────────────────
+      # Set AI_PROVIDER=openai (default) or AI_PROVIDER=anthropic in .env.
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
 
-      # ── JVM ──
-      JAVA_OPTS: >-
-        -XX:+UseContainerSupport
-        -XX:MaxRAMPercentage=75.0
-        -XX:+ExitOnOutOfMemoryError
-        -Djava.security.egd=file:/dev/./urandom
+      # ── OpenAI ────────────────────────────────────────────────────────
+      OPENAI_API_KEY:     ${OPENAI_API_KEY:}
+      OPENAI_BASE_URL:    ${OPENAI_BASE_URL:https://api.openai.com}
+      OPENAI_CHAT_MODEL:  ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+
+      # ── Anthropic Claude ──────────────────────────────────────────────
+      ANTHROPIC_API_KEY:    ${ANTHROPIC_API_KEY:}
+      ANTHROPIC_CHAT_MODEL: ${ANTHROPIC_CHAT_MODEL:-claude-sonnet-5}
+
+      # ── Shared AI tuning ──────────────────────────────────────────────
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.2}
+      AI_MAX_TOKENS:  ${AI_MAX_TOKENS:-4096}
     deploy:
       resources:
         limits:

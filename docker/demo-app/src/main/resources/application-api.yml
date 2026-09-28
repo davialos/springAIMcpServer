@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Spring profile: api
+#
+# Activates cloud AI provider integration instead of local Ollama.
+# Select the provider with AI_PROVIDER=openai|anthropic (default: openai).
+#
+# Usage — Docker Compose (app-api service):
+#   docker compose --profile api up -d app-api
+#
+# Usage — local Maven test run:
+#   OPENAI_API_KEY=sk-... mvn test -Dspring.profiles.active=api
+#   ANTHROPIC_API_KEY=sk-ant-... AI_PROVIDER=anthropic mvn test -Dspring.profiles.active=api
+#
+# The active ChatModel bean is determined by which starter is on the classpath
+# AND which autoconfiguration is enabled below.  Only one should be active at
+# a time; the other's autoconfiguration is excluded to prevent bean conflicts.
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  ai:
+    # ── OpenAI ────────────────────────────────────────────────────────────────
+    openai:
+      api-key: ${OPENAI_API_KEY:}         # required when AI_PROVIDER=openai
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}  # override for Azure OpenAI / proxy
+      chat:
+        options:
+          model:            ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+          temperature:      ${AI_TEMPERATURE:0.2}
+          max-tokens:       ${AI_MAX_TOKENS:4096}
+          # Safety: never let a single agent call burn a huge token budget
+          max-completion-tokens: ${AI_MAX_TOKENS:4096}
+      embedding:
+        options:
+          model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+
+    # ── Anthropic Claude ──────────────────────────────────────────────────────
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}      # required when AI_PROVIDER=anthropic
+      chat:
+        options:
+          model:       ${ANTHROPIC_CHAT_MODEL:claude-sonnet-5}
+          temperature: ${AI_TEMPERATURE:0.2}
+          max-tokens:  ${AI_MAX_TOKENS:4096}
+
+    # ── Disable Ollama in the api profile ────────────────────────────────────
+    ollama:
+      chat:
+        enabled: false
+
+  # Exclude the Ollama autoconfiguration when API keys are provided so Spring
+  # AI doesn't try to health-check a non-existent local Ollama server.
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.autoconfigure.ollama.OllamaAutoConfiguration
+      - org.springframework.ai.autoconfigure.ollama.OllamaChatAutoConfiguration
+      - org.springframework.ai.autoconfigure.ollama.OllamaEmbeddingAutoConfiguration
+
+# ── Conditional provider selection ────────────────────────────────────────────
+# When AI_PROVIDER=anthropic the OpenAI autoconfiguration is also excluded so
+# only the Anthropic ChatModel bean is registered.  Spring Boot's
+# spring.autoconfigure.exclude is a list — the profile merges it additionally.
+#
+# Set AI_PROVIDER=anthropic in .env to flip the active provider.
+# (Default is openai when AI_PROVIDER is unset.)
+
+---
+# Sub-document: activate only when AI_PROVIDER=anthropic
+spring:
+  config:
+    activate:
+      on-property:
+        name: AI_PROVIDER
+        havingValue: anthropic
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.autoconfigure.openai.OpenAiAutoConfiguration
+      - org.springframework.ai.autoconfigure.openai.OpenAiChatAutoConfiguration
+      - org.springframework.ai.autoconfigure.openai.OpenAiEmbeddingAutoConfiguration
+
+---
+# Sub-document: activate only when AI_PROVIDER=openai (or unset, the default)
+spring:
+  config:
+    activate:
+      on-property:
+        name: AI_PROVIDER
+        havingValue: openai
+        matchIfMissing: true
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.autoconfigure.anthropic.AnthropicAutoConfiguration
+      - org.springframework.ai.autoconfigure.anthropic.AnthropicChatAutoConfiguration
+
+logging:
+  level:
+    # Log Spring AI request/response shapes at DEBUG for API testing
+    org.springframework.ai: DEBUG
+    com.springaimcpservercommon.ai: DEBUG

@@ -74,6 +74,42 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+
+        <!--
+          Spring AI provider starters — all optional so the fat JAR can be
+          built without any specific provider on the classpath.  Activate at
+          runtime by setting SPRING_PROFILES_ACTIVE=api and supplying the
+          relevant API key (see application-api.yml).
+        -->
+
+        <!-- OpenAI (GPT-4o, o3-mini, …) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Anthropic Claude (claude-opus-5-5, claude-sonnet-5, …) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-anthropic-spring-boot-starter</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Ollama (local model — used by the default 'local' profile) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-ollama-spring-boot-starter</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- H2 — in-process store for the 'test' profile -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <build>

@@ -5,6 +5,7 @@ import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
+import com.springaimcpservercommon.ai.tool.AgentCatalogPort;
 import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
@@ -96,18 +97,60 @@ public class DaiAiAutoConfiguration {
     }
 
     /**
+     * Sub-agent callback factory. Resolves lazily through {@link ObjectProvider} to break the
+     * circular dependency between {@link ToolBridge} and {@link AgentInvoker}:
+     * <ul>
+     *   <li>{@code ToolBridge} depends on {@code AgentCallbackFactory}</li>
+     *   <li>{@code AgentCallbackFactory} holds an {@code ObjectProvider<AgentInvoker>} (lazy)</li>
+     *   <li>{@code DefaultAgentInvoker} depends on {@code ToolBridge} (via {@code ObjectProvider})</li>
+     * </ul>
+     * The {@code ObjectProvider} is only resolved at request time (inside the factory lambda),
+     * so the construction order remains acyclic.
+     *
+     * <p>Active only when an {@link AgentCatalogPort} bean is present (registered by the persistence
+     * module). Without it sub-agent delegation logs a warning and returns {@code null}.
+     *
+     * @param agentCatalogProvider  optional port for loading agent definitions by id
+     * @param agentInvokerProvider  lazy reference to the agent invoker (breaks the cycle)
+     * @return the factory
+     */
+    /**
+     * Sub-agent callback factory — active only when an {@link AgentCatalogPort} bean is present.
+     * Uses {@code ObjectProvider<AgentInvoker>} to avoid the circular bean dependency:
+     * {@code ToolBridge → AgentCallbackFactory → ObjectProvider<AgentInvoker>} (lazy).
+     *
+     * @param agentCatalogProvider optional port for loading agent definitions
+     * @param agentInvokerProvider lazy reference to the AgentInvoker
+     * @return the factory, or a no-op factory when no AgentCatalogPort is registered
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.AgentCallbackFactory.class)
+    public ToolBridge.AgentCallbackFactory agentCallbackFactory(
+            ObjectProvider<AgentCatalogPort> agentCatalogProvider,
+            ObjectProvider<AgentInvoker> agentInvokerProvider) {
+        AgentCatalogPort catalog = agentCatalogProvider.getIfAvailable();
+        if (catalog == null) {
+            // No agent catalog: AgentSource tools will log a warn and return null
+            return (agentId, binding, principal, auth) -> null;
+        }
+        return ToolBridge.defaultAgentCallbackFactory(agentInvokerProvider::getIfAvailable, catalog);
+    }
+
+    /**
      * The tool bridge singleton. Assembled when all required port beans are available:
      * {@link ToolBridge.ToolBindingLoader}, {@link ToolBridge.OperationCallbackFactory},
      * {@link ToolBridge.QueryCallbackFactory}.
      *
      * <p>The persistence module registers the binding loader; the operation and query
      * callback factories are provided by the host or by persistence-aware adapters.
+     * {@link ToolBridge.AgentCallbackFactory} is optional — sub-agent routing is disabled when absent.
      *
-     * @param bindingLoader     loads tool bindings
-     * @param operationFactory  builds operation-backed callbacks
-     * @param queryFactory      builds query-backed callbacks
-     * @param permissionChecker runtime per-call permission check
-     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
+     * @param bindingLoader        loads tool bindings
+     * @param operationFactory     builds operation-backed callbacks
+     * @param queryFactory         builds query-backed callbacks
+     * @param agentFactoryProvider optional sub-agent callback factory
+     * @param permissionChecker    runtime per-call permission check
+     * @param proposalService      creates ChangeProposal records for PROPOSE-mode tools
      * @return the bridge
      */
     @Bean
@@ -118,9 +161,11 @@ public class DaiAiAutoConfiguration {
     public ToolBridge toolBridge(ToolBridge.ToolBindingLoader bindingLoader,
                                   ToolBridge.OperationCallbackFactory operationFactory,
                                   ToolBridge.QueryCallbackFactory queryFactory,
+                                  ObjectProvider<ToolBridge.AgentCallbackFactory> agentFactoryProvider,
                                   SecuredToolCallback.ToolPermissionChecker permissionChecker,
                                   ProposalService proposalService) {
         return new ToolBridge(bindingLoader, operationFactory, queryFactory,
+                agentFactoryProvider.getIfAvailable(),
                 permissionChecker, proposalService);
     }
 

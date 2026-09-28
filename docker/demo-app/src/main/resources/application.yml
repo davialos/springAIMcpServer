@@ -1,0 +1,80 @@
+spring:
+  application:
+    name: spring-ai-mcp-demo
+
+  # Host datasource — points at the compose-managed Postgres
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:postgres}:${POSTGRES_PORT:5432}/${POSTGRES_DB:dai_store}
+    username: ${POSTGRES_USER:dai_app}
+    password: ${POSTGRES_PASSWORD:dai_app_secret}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+  security:
+    # Dev convenience: permit everything so the demo works without an IdP.
+    # Replace with your OIDC / OAuth2 config in real use.
+    user:
+      name: ${DEMO_USER:admin}
+      password: ${DEMO_PASSWORD:admin}
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+
+# ── springAIMcpServerCommon library config ──────────────────────────────────
+dynamic:
+  ai:
+    agent:
+      enabled: true
+      environment:
+        tier: ${DAI_ENV_TIER:dev}
+        id: ${spring.application.name}-${DAI_ENV_TIER:dev}
+
+      store:
+        enabled: true
+        # The library's own Flyway migrations run on startup in dev mode.
+        migrate: ${DAI_MIGRATE:true}
+        schema: dynamic_ai
+        # Use a dedicated datasource for the dynamic_ai schema (recommended).
+        # Omit datasource.* to reuse the host DataSource above.
+        datasource:
+          url: jdbc:postgresql://${POSTGRES_HOST:postgres}:${POSTGRES_PORT:5432}/${DAI_DB:dai_store}
+          username: ${DAI_DB_USER:dai_migrator}
+          password: ${DAI_DB_PASSWORD:dai_migrator_secret}
+
+      endpoints:
+        enabled: true
+
+      agents:
+        enabled: true
+
+      admin:
+        enabled: true
+        ui:
+          enabled: true      # locked off automatically when tier=prod (LLD-12 §2.2)
+
+      mcp:
+        server:
+          enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.springaimcpservercommon: DEBUG
+    org.springframework.security: WARN

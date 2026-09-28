@@ -1,0 +1,39 @@
+# Build artefacts
+**/target/
+**/build/
+**/.gradle/
+**/out/
+
+# IDE
+.idea/
+**/*.iml
+.vscode/
+**/.project
+**/.classpath
+**/.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitattributes
+
+# Secrets — never bake these into the image
+.env
+*.local.yml
+*.local.yaml
+.claude/settings.local.json
+
+# Docker itself
+Dockerfile
+docker-compose*.yml
+docker/
+
+# Docs (not needed at runtime)
+docs/
+scripts/
+
+# Agent worktrees
+.claude/worktrees/

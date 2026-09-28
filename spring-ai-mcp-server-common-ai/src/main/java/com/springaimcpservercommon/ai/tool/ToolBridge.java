@@ -117,6 +117,32 @@ public final class ToolBridge {
         return List.copyOf(result);
     }
 
+    /**
+     * Builds a single secured tool callback for an already-resolved {@link ToolBinding}.
+     *
+     * <p>Used by the MCP server layer which already has the binding in hand and does not need
+     * the agent-scoped lookup path.
+     *
+     * @param binding        the tool binding
+     * @param principal      calling principal
+     * @param authentication Spring Security authentication
+     * @param catalog        effective catalog snapshot
+     * @return the secured callback, or {@code null} if the delegate cannot be resolved
+     */
+    public @org.jspecify.annotations.Nullable ToolCallback buildCallback(ToolBinding binding, DaiPrincipal principal,
+                                                                           Authentication authentication,
+                                                                           EffectiveCatalog catalog) {
+        Objects.requireNonNull(binding, "binding");
+        Objects.requireNonNull(principal, "principal");
+        Objects.requireNonNull(authentication, "authentication");
+        Objects.requireNonNull(catalog, "catalog");
+
+        ToolCallback delegate = resolveDelegate(binding, principal, catalog);
+        if (delegate == null) return null;
+        return new SecuredToolCallback(delegate, binding, principal, authentication,
+                new AtomicInteger(0), permissionChecker);
+    }
+
     private @org.jspecify.annotations.Nullable ToolCallback resolveDelegate(
             ToolBinding binding, DaiPrincipal principal, EffectiveCatalog catalog) {
 

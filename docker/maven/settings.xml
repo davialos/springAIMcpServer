@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings for LOCAL DEVELOPMENT without internet access.
+
+  How to use
+  ──────────────────────────────────────────────────────────────────────────────
+  1. Run the dependency-bundle script once (needs Docker):
+       ./docker/scripts/prepare-local-deps.sh
+
+     This downloads every external dependency into a local Maven repository
+     bundle and produces:
+       dist/maven-local-repo.zip   (~500 MB – 1 GB depending on features)
+
+  2. Extract the bundle wherever you keep your Maven cache:
+       unzip -q dist/maven-local-repo.zip -d ~/.m2/repository
+     (safe to run multiple times — only adds/overwrites, never deletes)
+
+  3. Tell Maven to use this file:
+       mvn -s docker/maven/settings.xml <goal>
+     Or copy it to ~/.m2/settings.xml if you want it to be the default.
+
+  4. Build offline:
+       mvn -s docker/maven/settings.xml --offline install -DskipTests
+
+  Profile "local-repo" is ALWAYS active and adds the bundle as the first
+  repository so it is checked before central.  The <offline>false</offline>
+  switch means Maven still falls back to central for anything missing from
+  the bundle (remove it if you truly want air-gapped builds).
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0
+                              https://maven.apache.org/xsd/settings-1.2.0.xsd">
+
+  <!-- Point Maven at the extracted bundle directory.
+       Override on the command line: -Dmaven.repo.local=/path/to/repo  -->
+  <localRepository>${user.home}/.m2/repository</localRepository>
+
+  <offline>false</offline>
+
+  <profiles>
+    <profile>
+      <id>local-repo</id>
+      <repositories>
+        <!-- Highest priority: the offline bundle extracted from the zip -->
+        <repository>
+          <id>local-bundle</id>
+          <name>Local dependency bundle (dist/maven-local-repo.zip extracted)</name>
+          <url>file://${user.home}/.m2/repository</url>
+          <releases>
+            <enabled>true</enabled>
+            <updatePolicy>never</updatePolicy>
+            <checksumPolicy>warn</checksumPolicy>
+          </releases>
+          <snapshots>
+            <enabled>true</enabled>
+            <updatePolicy>never</updatePolicy>
+            <checksumPolicy>warn</checksumPolicy>
+          </snapshots>
+        </repository>
+
+        <!-- Spring milestones — needed for Spring Boot 4.x / Spring AI 2.x
+             until they are promoted to Maven Central.                      -->
+        <repository>
+          <id>spring-milestones</id>
+          <name>Spring Milestones</name>
+          <url>https://repo.spring.io/milestone</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+
+        <!-- Spring snapshots — only for SNAPSHOT versions during development -->
+        <repository>
+          <id>spring-snapshots</id>
+          <name>Spring Snapshots</name>
+          <url>https://repo.spring.io/snapshot</url>
+          <releases><enabled>false</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+      </repositories>
+
+      <pluginRepositories>
+        <pluginRepository>
+          <id>spring-milestones</id>
+          <name>Spring Milestones</name>
+          <url>https://repo.spring.io/milestone</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+        <pluginRepository>
+          <id>spring-snapshots</id>
+          <name>Spring Snapshots</name>
+          <url>https://repo.spring.io/snapshot</url>
+          <releases><enabled>false</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+
+  <activeProfiles>
+    <activeProfile>local-repo</activeProfile>
+  </activeProfiles>
+
+  <!--
+    Mirror configuration for air-gapped / corporate proxy scenarios.
+    Uncomment and set the URL to your Nexus / Artifactory / Sonatype proxy.
+
+  <mirrors>
+    <mirror>
+      <id>internal-mirror</id>
+      <mirrorOf>*</mirrorOf>
+      <url>https://nexus.your-company.com/repository/maven-public/</url>
+    </mirror>
+  </mirrors>
+  -->
+
+</settings>

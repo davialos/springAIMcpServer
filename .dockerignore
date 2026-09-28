@@ -37,3 +37,7 @@ scripts/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Dependency bundle — large, not needed in the Docker build context
+dist/
+

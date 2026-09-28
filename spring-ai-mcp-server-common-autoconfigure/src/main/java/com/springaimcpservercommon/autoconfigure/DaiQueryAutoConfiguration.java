@@ -1,15 +1,19 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.query.ast.QueryDefinition;
 import com.springaimcpservercommon.query.criteria.CriteriaCompiler;
 import com.springaimcpservercommon.query.criteria.CriteriaQueryExecutor;
 import com.springaimcpservercommon.query.execution.QueryExecutor;
 import jakarta.persistence.EntityManagerFactory;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
+
+import java.util.UUID;
 
 /**
  * Auto-configuration for the dynamic query engine.
@@ -22,6 +26,22 @@ import org.springframework.context.annotation.Bean;
 @ConditionalOnClass(CriteriaQueryExecutor.class)
 @NullMarked
 public class DaiQueryAutoConfiguration {
+
+    /**
+     * Port: loads a {@link QueryDefinition} by its resource UUID.
+     *
+     * <p>The default implementation (registered by {@link DaiPersistenceAutoConfiguration}) serves
+     * definitions from the latest {@link com.springaimcpservercommon.persistence.config.ConfigStore} snapshot.
+     * Hosts may replace this with a custom loader via {@code @ConditionalOnMissingBean}.
+     */
+    @FunctionalInterface
+    public interface QueryDefinitionLoader {
+        /**
+         * @param queryId the resource UUID of the published query
+         * @return the definition, or {@code null} if not published
+         */
+        @Nullable QueryDefinition load(UUID queryId);
+    }
 
     /**
      * Default query executor. Concurrency cap and timeout come from {@link DaiProperties.Query};

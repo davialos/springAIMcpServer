@@ -8,6 +8,8 @@ import com.springaimcpservercommon.ai.agent.ModelSelection;
 import com.springaimcpservercommon.ai.agent.OutputSpec;
 import com.springaimcpservercommon.ai.agent.ToolBindingRef;
 import com.springaimcpservercommon.core.catalog.CatalogElementRef;
+import com.springaimcpservercommon.core.catalog.MetadataRegistry;
+import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
 import com.springaimcpservercommon.persistence.config.PublishedResource;
 import com.springaimcpservercommon.persistence.config.PublishedSnapshot;
@@ -16,8 +18,21 @@ import com.springaimcpservercommon.persistence.config.ResourceStatus;
 import com.springaimcpservercommon.persistence.unit.DaiPersistenceSettings;
 import com.springaimcpservercommon.persistence.unit.DaiPersistenceUnit;
 import com.springaimcpservercommon.persistence.unit.DaiStore;
+import com.springaimcpservercommon.query.ast.AttributePath;
+import com.springaimcpservercommon.query.ast.FilterNode;
+import com.springaimcpservercommon.query.ast.Operand;
+import com.springaimcpservercommon.query.ast.Operator;
+import com.springaimcpservercommon.query.ast.PageSpec;
+import com.springaimcpservercommon.query.ast.Projection;
+import com.springaimcpservercommon.query.ast.QueryDefinition;
+import com.springaimcpservercommon.query.ast.QueryParam;
+import com.springaimcpservercommon.query.ast.SortSpec;
+import com.springaimcpservercommon.query.execution.QueryBulkheadException;
+import com.springaimcpservercommon.query.execution.QueryExecutor;
+import com.springaimcpservercommon.query.execution.QueryResult;
 import com.springaimcpservercommon.webmvc.endpoint.AgentChatController;
 import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
+import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -32,7 +47,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -145,6 +163,90 @@ public class DaiPersistenceAutoConfiguration {
         return cache::findById;
     }
 
+    // ─── Query snapshot cache beans ──────────────────────────────────────────
+
+    /**
+     * Shared snapshot cache for published query definitions. Indexed by resource UUID;
+     * generation-based so only one snapshot parse occurs per published generation.
+     *
+     * @param configStore the config store
+     * @return the cache
+     */
+    @Bean
+    @ConditionalOnMissingBean(QuerySnapshotCache.class)
+    @ConditionalOnBean(ConfigStore.class)
+    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore) {
+        return new QuerySnapshotCache(configStore);
+    }
+
+    /**
+     * Persistence-backed {@link DaiQueryAutoConfiguration.QueryDefinitionLoader}: loads published
+     * query definitions by UUID from the latest config store snapshot.
+     *
+     * <p>Supersedes any no-op default registered with {@code @ConditionalOnMissingBean}.
+     *
+     * @param cache the shared query snapshot cache
+     * @return the loader
+     */
+    @Bean
+    @ConditionalOnMissingBean(DaiQueryAutoConfiguration.QueryDefinitionLoader.class)
+    @ConditionalOnBean(QuerySnapshotCache.class)
+    public DaiQueryAutoConfiguration.QueryDefinitionLoader queryDefinitionLoader(QuerySnapshotCache cache) {
+        return cache::findById;
+    }
+
+    /**
+     * Real {@link DispatchingBackingExecutor.QueryBackingHandler}: loads the published
+     * {@link QueryDefinition} from the snapshot cache and executes it via {@link QueryExecutor}.
+     * Row policies are not yet applied (future: load from config store by entity + principal roles).
+     *
+     * <p>Supersedes the no-op default in {@link DaiWebMvcAutoConfiguration}.
+     *
+     * @param loader   loads QueryDefinition by UUID
+     * @param executor executes the query against the host's JPA persistence unit
+     * @param registry provides the current effective catalog
+     * @return the handler
+     */
+    @Bean
+    @ConditionalOnMissingBean(DispatchingBackingExecutor.QueryBackingHandler.class)
+    @ConditionalOnBean({DaiQueryAutoConfiguration.QueryDefinitionLoader.class,
+                        QueryExecutor.class,
+                        MetadataRegistry.class})
+    public DispatchingBackingExecutor.QueryBackingHandler queryBackingHandler(
+            DaiQueryAutoConfiguration.QueryDefinitionLoader loader,
+            QueryExecutor executor,
+            MetadataRegistry registry) {
+        return (queryId, bindings, principal) -> {
+            QueryDefinition def = loader.load(queryId);
+            if (def == null) {
+                throw new GenericDynamicHandler.BackingException(
+                        ProblemCode.RESOURCE_SUSPENDED, "Query " + queryId + " is not published.");
+            }
+            try {
+                QueryResult result = executor.execute(def, principal, bindings,
+                        List.of(), registry.current(), 0);
+                return queryResultToJson(result);
+            } catch (QueryBulkheadException e) {
+                throw new GenericDynamicHandler.BackingException(
+                        ProblemCode.RATE_LIMITED, "Query engine at capacity.");
+            } catch (jakarta.persistence.QueryTimeoutException e) {
+                throw new GenericDynamicHandler.BackingException(
+                        ProblemCode.EXECUTION_TIMEOUT, "Query timed out.");
+            }
+        };
+    }
+
+    private static String queryResultToJson(QueryResult result) {
+        java.util.LinkedHashMap<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("rows", result.rows());
+        m.put("hasMore", result.hasMore());
+        if (result.nextCursor() != null) {
+            m.put("nextCursor", result.nextCursor());
+        }
+        m.put("rowCount", result.rowCount());
+        return CanonicalJson.write(m);
+    }
+
     // ─── Snapshot-backed resolver implementations ────────────────────────────
 
     /**
@@ -201,6 +303,53 @@ public class DaiPersistenceAutoConfiguration {
                 byId = Map.copyOf(idMap);
                 cachedGeneration.set(latest);
                 LOG.debug("Agent snapshot refreshed: generation {}, {} agents indexed", latest, slugMap.size());
+            }
+        }
+    }
+
+    /**
+     * Shared snapshot cache for published query definitions. Generation-based caching with
+     * double-checked locking; indexes by resource UUID.
+     */
+    static final class QuerySnapshotCache {
+
+        private final ConfigStore configStore;
+        private final AtomicLong cachedGeneration = new AtomicLong(0L);
+        private volatile Map<UUID, QueryDefinition> byId = Map.of();
+
+        QuerySnapshotCache(ConfigStore configStore) {
+            this.configStore = configStore;
+        }
+
+        @Nullable QueryDefinition findById(UUID id) {
+            refresh();
+            return byId.get(id);
+        }
+
+        private void refresh() {
+            long latest = configStore.latestGeneration().orElse(0L);
+            if (latest <= cachedGeneration.get()) return;
+            synchronized (this) {
+                if (latest <= cachedGeneration.get()) return;
+                Optional<PublishedSnapshot> snap = configStore.loadSnapshot(latest);
+                if (snap.isEmpty()) return;
+
+                ConcurrentHashMap<UUID, QueryDefinition> idMap = new ConcurrentHashMap<>();
+                for (PublishedResource pr : snap.get().resources()) {
+                    if (pr.kind() != ResourceKind.QUERY) continue;
+                    if (pr.resourceStatus() == ResourceStatus.SUSPENDED) continue;
+                    try {
+                        QueryDefinition def = parseQuery(pr);
+                        idMap.put(def.id(), def);
+                    } catch (Exception e) {
+                        LOG.warn("Failed to parse query spec for resource {} (slug {}); skipping",
+                                pr.resourceId(), pr.slug(), e);
+                    }
+                }
+
+                byId = Map.copyOf(idMap);
+                cachedGeneration.set(latest);
+                LOG.debug("Query snapshot refreshed: generation {}, {} queries indexed", latest, idMap.size());
             }
         }
     }
@@ -381,5 +530,193 @@ public class DaiPersistenceAutoConfiguration {
     static final class RefJson {
         public @Nullable String kind;
         public @Nullable String value;
+    }
+
+    // ─── Query spec JSON parsing ─────────────────────────────────────────────
+
+    static QueryDefinition parseQuery(PublishedResource pr) {
+        QuerySpecJson spec = SPEC_MAPPER.readerFor(QuerySpecJson.class)
+                .readValue(pr.specJson());
+
+        CatalogElementRef root = spec.root != null
+                ? CatalogElementRef.parse(spec.root)
+                : CatalogElementRef.entity("unknown");
+
+        List<Projection> select = toProjections(spec.select);
+        FilterNode where = spec.where != null ? toFilterNode(spec.where) : null;
+        List<SortSpec> orderBy = toSortSpecs(spec.orderBy);
+        PageSpec page = toPageSpec(spec.page);
+        List<QueryParam> params = toQueryParams(spec.params);
+        Set<CatalogElementRef> references = toQueryReferences(spec.references);
+        String catalogHash = spec.catalogHash != null ? spec.catalogHash : "sha256:unknown";
+
+        return new QueryDefinition(
+                pr.resourceId(),
+                pr.revisionNo(),
+                pr.workspaceId(),
+                root,
+                select,
+                where,
+                orderBy,
+                page,
+                params,
+                references,
+                catalogHash);
+    }
+
+    private static List<Projection> toProjections(@Nullable List<ProjectionJson> list) {
+        if (list == null || list.isEmpty()) return List.of(new Projection(AttributePath.of("id")));
+        return list.stream()
+                .filter(p -> p.path != null)
+                .map(p -> new Projection(AttributePath.parse(p.path), p.alias))
+                .toList();
+    }
+
+    private static @Nullable FilterNode toFilterNode(@Nullable FilterNodeJson n) {
+        if (n == null) return null;
+        String type = n.type != null ? n.type.toLowerCase(Locale.ROOT) : "";
+        return switch (type) {
+            case "and" -> {
+                List<FilterNodeJson> kids = n.children != null ? n.children : List.of();
+                List<FilterNode> parsed = new ArrayList<>();
+                for (FilterNodeJson k : kids) {
+                    FilterNode fn = toFilterNode(k);
+                    if (fn != null) parsed.add(fn);
+                }
+                if (parsed.isEmpty()) yield null;
+                yield new FilterNode.And(parsed);
+            }
+            case "or" -> {
+                List<FilterNodeJson> kids = n.children != null ? n.children : List.of();
+                List<FilterNode> parsed = new ArrayList<>();
+                for (FilterNodeJson k : kids) {
+                    FilterNode fn = toFilterNode(k);
+                    if (fn != null) parsed.add(fn);
+                }
+                if (parsed.isEmpty()) yield null;
+                yield new FilterNode.Or(parsed);
+            }
+            case "not" -> {
+                FilterNode child = toFilterNode(n.child);
+                if (child == null) yield null;
+                yield new FilterNode.Not(child);
+            }
+            case "cmp", "comparison" -> {
+                if (n.path == null || n.op == null) yield null;
+                Operator op;
+                try {
+                    op = Operator.valueOf(n.op.toUpperCase(Locale.ROOT));
+                } catch (IllegalArgumentException e) {
+                    yield null;
+                }
+                Operand operand = n.operand != null ? toOperand(n.operand) : new Operand.Literal(null);
+                yield new FilterNode.Comparison(AttributePath.parse(n.path), op, operand);
+            }
+            default -> null;
+        };
+    }
+
+    private static Operand toOperand(OperandJson o) {
+        String kind = o.kind != null ? o.kind.toLowerCase(Locale.ROOT) : "literal";
+        return switch (kind) {
+            case "param" -> new Operand.ParamRef(o.name != null ? o.name : "");
+            case "principal" -> new Operand.PrincipalAttr(o.attr != null ? o.attr : "");
+            default -> new Operand.Literal(o.value);
+        };
+    }
+
+    private static List<SortSpec> toSortSpecs(@Nullable List<SortSpecJson> list) {
+        if (list == null || list.isEmpty()) return List.of();
+        return list.stream()
+                .filter(s -> s.path != null)
+                .map(s -> new SortSpec(AttributePath.parse(s.path), s.desc))
+                .toList();
+    }
+
+    private static PageSpec toPageSpec(@Nullable PageSpecJson p) {
+        if (p == null) return PageSpec.DEFAULT;
+        int defaultSize = Math.max(1, p.defaultSize > 0 ? p.defaultSize : 20);
+        int maxSize = Math.max(defaultSize, p.maxSize > 0 ? p.maxSize : 200);
+        return new PageSpec(defaultSize, maxSize, p.keysetEnabled);
+    }
+
+    private static List<QueryParam> toQueryParams(@Nullable List<QueryParamJson> list) {
+        if (list == null || list.isEmpty()) return List.of();
+        return list.stream()
+                .filter(p -> p.name != null)
+                .map(p -> new QueryParam(
+                        p.name,
+                        p.schema != null ? p.schema : "{\"type\":\"string\"}",
+                        p.required,
+                        p.defaultValue))
+                .toList();
+    }
+
+    private static Set<CatalogElementRef> toQueryReferences(@Nullable List<String> refs) {
+        if (refs == null || refs.isEmpty()) return Set.of();
+        return refs.stream()
+                .filter(Objects::nonNull)
+                .map(r -> {
+                    try {
+                        return CatalogElementRef.parse(r);
+                    } catch (Exception e) {
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    // ─── Query spec JSON DTOs ─────────────────────────────────────────────────
+
+    /** Jackson-deserializable form of a published query definition. */
+    static final class QuerySpecJson {
+        public @Nullable String root;
+        public @Nullable List<ProjectionJson> select;
+        public @Nullable FilterNodeJson where;
+        public @Nullable List<SortSpecJson> orderBy;
+        public @Nullable PageSpecJson page;
+        public @Nullable List<QueryParamJson> params;
+        public @Nullable List<String> references;
+        public @Nullable String catalogHash;
+    }
+
+    static final class ProjectionJson {
+        public @Nullable String path;
+        public @Nullable String alias;
+    }
+
+    static final class FilterNodeJson {
+        public @Nullable String type;
+        public @Nullable List<FilterNodeJson> children;
+        public @Nullable FilterNodeJson child;
+        public @Nullable String path;
+        public @Nullable String op;
+        public @Nullable OperandJson operand;
+    }
+
+    static final class OperandJson {
+        public @Nullable String kind;
+        public @Nullable String name;
+        public @Nullable Object value;
+        public @Nullable String attr;
+    }
+
+    static final class SortSpecJson {
+        public @Nullable String path;
+        public boolean desc;
+    }
+
+    static final class PageSpecJson {
+        public int defaultSize;
+        public int maxSize;
+        public boolean keysetEnabled = true;
+    }
+
+    static final class QueryParamJson {
+        public @Nullable String name;
+        public @Nullable String schema;
+        public boolean required;
+        public @Nullable Object defaultValue;
     }
 }

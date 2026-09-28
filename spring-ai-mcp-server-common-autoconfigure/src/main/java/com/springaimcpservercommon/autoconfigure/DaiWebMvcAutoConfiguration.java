@@ -1,7 +1,10 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
 import com.springaimcpservercommon.security.principal.AuthorityMapper;
+import com.springaimcpservercommon.webmvc.endpoint.AgentChatController;
+import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
 import com.springaimcpservercommon.webmvc.endpoint.DynamicEndpointRegistrar;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import io.micrometer.observation.ObservationRegistry;
@@ -115,6 +118,112 @@ public class DaiWebMvcAutoConfiguration {
             ObservationRegistry observationRegistry) {
         return new GenericDynamicHandler(registrar, principalResolver, authorizationEngine,
                 backingExecutor, killSwitchChecker, rateLimiter, observationRegistry);
+    }
+
+    /**
+     * Default query backing handler: placeholder that returns an empty JSON array.
+     * Replace with a persistence-backed implementation when the query module is present.
+     *
+     * @return the handler
+     */
+    @Bean
+    @ConditionalOnMissingBean(DispatchingBackingExecutor.QueryBackingHandler.class)
+    public DispatchingBackingExecutor.QueryBackingHandler queryBackingHandler() {
+        return (queryId, bindings, principal) -> "[]";
+    }
+
+    /**
+     * Default operation backing handler: placeholder that returns an empty JSON object.
+     * Replace with a host-provided implementation for real operation dispatch.
+     *
+     * @return the handler
+     */
+    @Bean
+    @ConditionalOnMissingBean(DispatchingBackingExecutor.OperationBackingHandler.class)
+    public DispatchingBackingExecutor.OperationBackingHandler operationBackingHandler() {
+        return (operation, bindings, principal) -> "{}";
+    }
+
+    /**
+     * Default agent-definition resolver: returns {@code null} for all slugs.
+     * Replace with a persistence-backed implementation when the persistence module is present.
+     *
+     * @return the resolver
+     */
+    @Bean
+    @ConditionalOnMissingBean(DispatchingBackingExecutor.AgentDefinitionResolver.class)
+    public DispatchingBackingExecutor.AgentDefinitionResolver agentDefinitionResolver() {
+        return agentId -> null;
+    }
+
+    /**
+     * Default agent-backing handler: wraps the {@link AgentInvoker} bean when present.
+     *
+     * @param invoker   agent invoker
+     * @param resolver  resolves agent definitions by id
+     * @return the handler
+     */
+    @Bean
+    @ConditionalOnMissingBean(DispatchingBackingExecutor.AgentBackingHandler.class)
+    @ConditionalOnBean(AgentInvoker.class)
+    public DispatchingBackingExecutor.AgentBackingHandler agentBackingHandler(
+            AgentInvoker invoker,
+            DispatchingBackingExecutor.AgentDefinitionResolver resolver) {
+        return DispatchingBackingExecutor.defaultAgentBackingHandler(invoker, resolver);
+    }
+
+    /**
+     * The dispatching backing executor: routes to query, agent, or operation handlers.
+     *
+     * @param queryHandler     handles query-backed endpoints
+     * @param agentHandler     handles agent-backed endpoints
+     * @param operationHandler handles operation-backed endpoints
+     * @return the executor
+     */
+    @Bean
+    @ConditionalOnMissingBean(DispatchingBackingExecutor.class)
+    @ConditionalOnBean({DispatchingBackingExecutor.QueryBackingHandler.class,
+                        DispatchingBackingExecutor.AgentBackingHandler.class,
+                        DispatchingBackingExecutor.OperationBackingHandler.class})
+    public DispatchingBackingExecutor dispatchingBackingExecutor(
+            DispatchingBackingExecutor.QueryBackingHandler queryHandler,
+            DispatchingBackingExecutor.AgentBackingHandler agentHandler,
+            DispatchingBackingExecutor.OperationBackingHandler operationHandler) {
+        return new DispatchingBackingExecutor(queryHandler, agentHandler, operationHandler);
+    }
+
+    /**
+     * Default agent resolver: returns {@code null} for all slugs (no published agents without
+     * the persistence module).
+     *
+     * @return the resolver
+     */
+    @Bean
+    @ConditionalOnMissingBean(AgentChatController.AgentResolver.class)
+    public AgentChatController.AgentResolver agentResolver() {
+        return slug -> null;
+    }
+
+    /**
+     * The SSE streaming + sync chat controller for agent endpoints.
+     * Registered only when the core pre-requisites ({@link AuthorizationEngine},
+     * {@link GenericDynamicHandler.DaiPrincipalResolver}) are available.
+     *
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(AgentChatController.class)
+    @ConditionalOnBean({AuthorizationEngine.class, GenericDynamicHandler.DaiPrincipalResolver.class,
+                        AgentInvoker.class})
+    public AgentChatController agentChatController(
+            AgentChatController.AgentResolver agentResolver,
+            AgentInvoker agentInvoker,
+            GenericDynamicHandler.DaiPrincipalResolver principalResolver,
+            AuthorizationEngine authorizationEngine,
+            GenericDynamicHandler.RateLimiter rateLimiter,
+            GenericDynamicHandler.KillSwitchChecker killSwitchChecker) {
+        return new AgentChatController(agentResolver, agentInvoker, principalResolver,
+                authorizationEngine, rateLimiter, killSwitchChecker);
     }
 
     /**

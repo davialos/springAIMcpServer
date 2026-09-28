@@ -1,0 +1,131 @@
+package com.springaimcpservercommon.ai.runtime;
+
+import com.springaimcpservercommon.ai.agent.AgentDefinition;
+import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.springframework.security.core.Authentication;
+import reactor.core.publisher.Flux;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Port: executes agent chat turns — both synchronous and streaming (LLD-06 §4).
+ *
+ * <p>This interface is the boundary between the HTTP layer ({@code webmvc} module) and the
+ * Spring AI runtime ({@code ai} module). Implementations assemble a {@code ChatClient} per
+ * agent revision, attach per-turn advisors, and dispatch to the model.
+ *
+ * <p>Implementations are NOT Spring components — they are registered as beans by the
+ * {@code autoconfigure} module with {@code @ConditionalOnMissingBean} so hosts can replace them.
+ */
+@NullMarked
+public interface AgentInvoker {
+
+    // ─── Request ─────────────────────────────────────────────────────────────
+
+    /**
+     * An agent chat turn request.
+     *
+     * @param conversationId  existing conversation to continue; {@code null} starts a new one
+     * @param message         user's message text
+     * @param clientRequestId client-generated idempotency key (UUID)
+     */
+    record AgentChatRequest(
+            @Nullable UUID conversationId,
+            String message,
+            String clientRequestId) {}
+
+    // ─── Sync result ─────────────────────────────────────────────────────────
+
+    /**
+     * A record of a single tool call within a turn (returned in the sync response).
+     *
+     * @param callId  unique call id
+     * @param tool    tool name
+     * @param status  outcome status ({@code ok|error|not_permitted|proposed|…})
+     */
+    record ToolCallRecord(String callId, String tool, String status) {}
+
+    /**
+     * Token usage for a completed turn.
+     *
+     * @param inputTokens  prompt tokens
+     * @param outputTokens completion tokens
+     */
+    record UsageRecord(long inputTokens, long outputTokens) {}
+
+    /**
+     * Full synchronous turn result.
+     *
+     * @param conversationId conversation id (newly created or existing)
+     * @param turnId         unique turn id
+     * @param message        assistant's final text response
+     * @param toolCalls      tool calls made during the turn
+     * @param usage          token usage
+     */
+    record SyncChatResult(
+            UUID conversationId,
+            UUID turnId,
+            String message,
+            List<ToolCallRecord> toolCalls,
+            UsageRecord usage) {}
+
+    // ─── Methods ─────────────────────────────────────────────────────────────
+
+    /**
+     * Executes a synchronous agent turn and waits for the full response.
+     *
+     * <p>Returns after all tool calls complete and the model produces its final answer.
+     * Blocks the calling thread up to {@code agent.limits().turnTimeout()}.
+     *
+     * @param agent          the published agent to invoke
+     * @param request        the chat request
+     * @param principal      calling principal (for authZ and budget tracking)
+     * @param authentication Spring Security authentication for tool permission checks
+     * @return the complete turn result
+     * @throws AgentInvocationException if the turn cannot be completed (kill-switched, budget, timeout, …)
+     */
+    SyncChatResult invoke(AgentDefinition agent, AgentChatRequest request,
+                          DaiPrincipal principal, Authentication authentication);
+
+    /**
+     * Starts a streaming agent turn and returns a cold {@link Flux} of typed events.
+     *
+     * <p>The Flux is cold: it starts the model call only on subscription.
+     * The Flux completes (normally) after the {@link StreamEvent.TurnEnd} event.
+     * Cancellation propagates from Reactor → Spring AI stream disposed → tool virtual threads interrupted.
+     *
+     * @param agent          the published agent to invoke
+     * @param request        the chat request
+     * @param principal      calling principal
+     * @param authentication Spring Security authentication for tool permission checks
+     * @return cold Flux of stream events; completes after {@link StreamEvent.TurnEnd}
+     */
+    Flux<StreamEvent> stream(AgentDefinition agent, AgentChatRequest request,
+                             DaiPrincipal principal, Authentication authentication);
+
+    // ─── Exception ───────────────────────────────────────────────────────────
+
+    /**
+     * Thrown by {@link #invoke} when the turn cannot proceed (kill switch, budget, timeout, etc.).
+     * The {@code code} maps to a problem catalog entry for HTTP response shaping.
+     */
+    class AgentInvocationException extends RuntimeException {
+        private final String code;
+        private final boolean retryable;
+
+        public AgentInvocationException(String code, String message, boolean retryable) {
+            super(message);
+            this.code = code;
+            this.retryable = retryable;
+        }
+
+        /** Stable problem code (e.g. {@code agent-disabled}, {@code budget-exhausted}). */
+        public String code() { return code; }
+
+        /** Whether the client may safely retry. */
+        public boolean retryable() { return retryable; }
+    }
+}

@@ -75,8 +75,9 @@ never block the request; drop counter metric).
 ## 6. Budgets & quotas (F-70)
 Scopes: global, workspace, agent, principal. Periods: day, month. Soft limit → alert event;
 hard limit → reject pre-turn. Cluster accuracy: reservation model — pre-turn reserve
-estimated tokens in shared counter (Redis/JDBC), settle after turn. With in-memory
-backend limits are per node (documented tradeoff). Rate limits (requests/min) share the same backend SPI.
+estimated tokens via the same `RateLimiterBackend` port endpoints use (LLD-04 §4, ADR-0021), settle after
+turn. Default backend is PostgreSQL (no new infrastructure); a host at scale may supply a Redis/Hazelcast
+implementation of the port instead. Rate limits (requests/min) share the same backend.
 
 ## 7. Health & readiness
 `HealthContributor` `dynamicAi` with details: catalog state, snapshot generation & lag,

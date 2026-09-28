@@ -102,10 +102,12 @@ to endpoints the caller may invoke. Optional springdoc `GroupedOpenApi` bridge i
 | `dynamic.ai.agent.endpoints.max-page-size` | `200` |
 | `dynamic.ai.agent.endpoints.max-routes` | `500` (hard quota; publish rejected above it; live routes never evicted — LLD-12 §4) |
 | `dynamic.ai.agent.endpoints.rate-limit.default` | `60/min per principal` |
-| `dynamic.ai.agent.endpoints.rate-limit.backend` | `in-memory` (`redis`, `jdbc`) |
+| `dynamic.ai.agent.endpoints.rate-limit.backend` | `postgres` (default, ADR-0021; `custom` via the `RateLimiterBackend` port) |
 
-Rate limiting in a cluster needs a shared backend; in-memory = per-node limit (documented).
-Bucket4j with JCache/Redis/JDBC is the candidate (OQ-07).
+Rate limiting in a cluster needs a shared backend so replicas share one limit. Default: PostgreSQL-backed
+(Bucket4j JDBC or an equivalent atomic counter over the store already required by ADR-0019) — no new
+infrastructure. Hosts at a scale where that becomes the bottleneck supply their own `RateLimiterBackend`
+bean (Redis, Hazelcast, …), auto-wired ahead of the default via `@ConditionalOnMissingBean` (ADR-0021).
 
 ## 9. Observability
 Timer `dynamic.ai.agent.endpoint.requests{workspace,endpoint,method,status,outcome}`;

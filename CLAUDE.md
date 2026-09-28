@@ -86,3 +86,22 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 - **Default deny:** nothing reachable unless explicitly exposed by code annotations AND granted to the caller.
 - Tools run **as the caller** through Spring proxies (ADR-0008); AI read tools run in a read-only scope (ADR-0014).
 - Apply global rules: clean-architecture, release-it (timeouts, bulkheads), ddia (one owner per fact), code-complete.
+- **One canonical-JSON writer:** `core.json.CanonicalJson` (ADR-0020). Never write a second value-tree JSON
+  renderer — delegate to it, the way `persistence.support.CanonicalJson` and `persistence.config.CanonicalSpec` do.
+
+## Scalability defaults (ADR-0021 — apply to every new component)
+
+- **Stateless request handling by default.** Cross-replica state lives in PostgreSQL (the single source of
+  truth already, LLD-15) or is recomputed from an immutable in-memory snapshot (effective catalog, compiled
+  plans); never in server-local session state unless a capability genuinely requires it (documented exception:
+  MCP's optional stateful mode, opt-in, not default).
+- **No sticky sessions required by default.** Any host must be able to run N replicas behind a plain
+  round-robin load balancer. MCP defaults to `STATELESS` transport for this reason.
+- **No new mandatory infrastructure.** PostgreSQL is the one thing every host already runs for this library
+  (ADR-0019); default implementations of anything shared (rate limits, budget counters) build on it rather
+  than requiring Redis/Hazelcast/etc.
+- **Escape hatch via ports, not hardcoding.** Anything that could become a throughput bottleneck at real
+  scale (shared counters, caches) is behind an SPI with a `@ConditionalOnMissingBean` PostgreSQL default, so
+  a host at scale can supply a faster backend without a code change here.
+- **Bulkheads and caps over unbounded pools** (already LLD-12/LLD-14): scaling out means adding a node, not
+  retuning a shared limit.

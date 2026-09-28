@@ -17,7 +17,7 @@ Deployment criticality:
 | OQ-13 | Distribution: internal Nexus/Artifactory or Maven Central? | — | user | release | D-BLOCKER | OPEN |
 | OQ-17 | Align runtime namespaces (`dynamic.ai.agent.*`, `dai_*`, `/dynamic-ai`) with product name before first release? | Keep current; renaming after 1.0 is breaking | user | ADR-0010 | D-BLOCKER | OPEN |
 | OQ-19 | Unknown environment tier: treat as PROD or refuse to start until `environment.tier` is set? | Treat as PROD + clear log | user | LLD-12 §2.1 | D-CONFIG | OPEN |
-| OQ-22 | MCP default mode: stateful Streamable HTTP (sticky sessions) or STATELESS? | Stateful; stateless for multi-replica hosts without sticky sessions | user | LLD-07 §5.1 | D-CONFIG | OPEN |
+| OQ-22 | MCP default mode: stateful Streamable HTTP or STATELESS? | **Resolved: STATELESS by default (scalable default, no sticky sessions); stateful available when live tool-list push is wanted** | lld-chief-architect | LLD-07 §5.1 | D-CONFIG | RESOLVED → ADR-0021 |
 | OQ-27 | Which workspaces/regulations need audit evidence mode (GDPR, HIPAA, PCI, SOX)? | Off; opt-in per workspace | user | ADR-0018 | D-CONFIG | DEFERRED |
 | OQ-28 | Propagate `traceparent` to external LLM providers? | Off (internal endpoints on) | access-management-architect | LLD-10 §3 | D-CONFIG | OPEN |
 | OQ-29 | Minimum PostgreSQL version? | **15** (needs `UNIQUE NULLS NOT DISTINCT`); 16/17 recommended | user | LLD-15 | D-BLOCKER | OPEN |
@@ -31,7 +31,7 @@ Deployment criticality:
 | OQ-01 | Support WebFlux hosts? | v1 servlet-only | lld-chief-architect | LLD-04 | LATER | OPEN |
 | OQ-05 | `mcp-security` community project vs own resource-server config | Own Spring Security config | agent-runtime-designer | LLD-07 | LATER | OPEN |
 | OQ-06 | Spring Data repository methods as actions? | Allowed with `@AiExposedAction`, read-only | metadata-extraction-designer | LLD-02 | LATER | OPEN |
-| OQ-07 | Shared rate-limit/budget backend | PostgreSQL-backed (we already require it) | dynamic-runtime-designer | LLD-04/10 | LATER | OPEN |
+| OQ-07 | Shared rate-limit/budget backend | **Resolved: PostgreSQL-backed default (no new infrastructure) behind a `RateLimiterBackend` port; hosts at scale may supply Redis/Hazelcast** | lld-chief-architect | LLD-04/10 | LATER | RESOLVED → ADR-0021 |
 | OQ-08 | Admin UI framework | React+Vite prebuilt into JAR | control-plane-designer | LLD-08 | LATER | OPEN |
 | OQ-14 | Host versioning mechanisms inventory (Envers, history tables, triggers, temporal) | All supported via `VersioningAdapter` | user | LLD-11 | LATER | DEFERRED |
 | OQ-15 | Web Components vs React library for review/display components | Web Components | control-plane-designer | LLD-11 §7 | LATER | OPEN |

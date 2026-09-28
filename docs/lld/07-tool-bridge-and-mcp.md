@@ -108,8 +108,8 @@ ScopedValue.where(INVOCATION, ctx.withMode(AI_READ)).call(() ->
 ### 5.1 Transport
 | Transport | Support | Why |
 |-----------|---------|-----|
-| **Streamable HTTP** (`spring.ai.mcp.server.protocol=STREAMABLE`) at `{base}/mcp` | **Default** | Current MCP transport (replaces HTTP+SSE); uses POST plus optional SSE streams, so remote LLM hosts reach the host app over the network |
-| **Stateless** (`protocol=STATELESS`) | Option (`dynamic.ai.agent.mcp.server.mode=stateless`) | No session state ⇒ any replica can serve any request; no sticky sessions. Loses server→client notifications (`tools/list_changed`) — clients re-list tools |
+| **Streamable HTTP, stateful** (`spring.ai.mcp.server.protocol=STREAMABLE`) at `{base}/mcp` | Option (`mode=stateful`) | Current MCP transport (replaces HTTP+SSE); adds live `tools/list_changed` push, at the cost of needing sticky sessions or a shared session store across replicas — choose this only when that trade-off is wanted |
+| **Stateless** (`protocol=STATELESS`) | **Default** (`dynamic.ai.agent.mcp.server.mode=stateless`, ADR-0021) | No session state ⇒ any replica can serve any request on a plain round-robin load balancer, no sticky sessions, no shared session store — the scalable default for horizontally-scaled hosts. Loses server→client notifications (`tools/list_changed`) — clients re-list tools |
 | Legacy HTTP+SSE (`protocol=SSE`) | Off; opt-in for old clients only | Deprecated since Spring AI 2.0 |
 | STDIO | **Not in the embedded library** | STDIO means the MCP client spawns the server as a subprocess; our server lives inside a running web application. Desktop clients that only speak STDIO use a small **stdio→HTTP bridge** (separate `mcp-stdio-bridge` CLI, v1.x) that forwards to `{base}/mcp` with the user's token |
 Endpoint path and port are the host's (`server.port` + `{base}/mcp`), never a second listener.

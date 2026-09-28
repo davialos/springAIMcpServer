@@ -12,10 +12,13 @@ import com.springaimcpservercommon.webmvc.endpoint.AgentChatController;
 import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
 import com.springaimcpservercommon.webmvc.endpoint.DynamicEndpointRegistrar;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
+import com.springaimcpservercommon.webmvc.endpoint.InMemoryTurnEventBuffer;
+import com.springaimcpservercommon.webmvc.endpoint.TurnEventBuffer;
 import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -282,6 +285,20 @@ public class DaiWebMvcAutoConfiguration {
     }
 
     /**
+     * Default in-memory turn event buffer enabling SSE stream replay (LLD-13 §5).
+     *
+     * <p>Stores up to 256 events per turn and retains completed turns for 5 minutes.
+     * Replace with a PostgreSQL-backed bean for cross-replica replay (ADR-0021).
+     *
+     * @return the buffer
+     */
+    @Bean
+    @ConditionalOnMissingBean(TurnEventBuffer.class)
+    public TurnEventBuffer turnEventBuffer() {
+        return new InMemoryTurnEventBuffer();
+    }
+
+    /**
      * Default agent-backing handler: wraps the {@link AgentInvoker} bean when present.
      *
      * @param invoker   agent invoker
@@ -334,6 +351,9 @@ public class DaiWebMvcAutoConfiguration {
      * Registered only when the core pre-requisites ({@link AuthorizationEngine},
      * {@link GenericDynamicHandler.DaiPrincipalResolver}) are available.
      *
+     * <p>{@link TurnEventBuffer} is optional — when absent the replay endpoint returns 503.
+     *
+     * @param turnEventBufferProvider optional ring buffer for SSE stream replay
      * @return the controller
      */
     @Bean
@@ -346,9 +366,11 @@ public class DaiWebMvcAutoConfiguration {
             GenericDynamicHandler.DaiPrincipalResolver principalResolver,
             AuthorizationEngine authorizationEngine,
             GenericDynamicHandler.RateLimiter rateLimiter,
-            GenericDynamicHandler.KillSwitchChecker killSwitchChecker) {
+            GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
+            ObjectProvider<TurnEventBuffer> turnEventBufferProvider) {
         return new AgentChatController(agentResolver, agentInvoker, principalResolver,
-                authorizationEngine, rateLimiter, killSwitchChecker);
+                authorizationEngine, rateLimiter, killSwitchChecker,
+                turnEventBufferProvider.getIfAvailable());
     }
 
     /**

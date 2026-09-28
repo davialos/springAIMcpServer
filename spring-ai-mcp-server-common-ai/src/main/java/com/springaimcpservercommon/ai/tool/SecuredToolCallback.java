@@ -44,6 +44,7 @@ public final class SecuredToolCallback implements ToolCallback {
     private final Authentication authentication;
     private final AtomicInteger callCount;
     private final ToolPermissionChecker permissionChecker;
+    private final ProposalService proposalService;
 
     /**
      * SPI: checks whether a principal may invoke a specific tool binding at call time.
@@ -68,16 +69,19 @@ public final class SecuredToolCallback implements ToolCallback {
      * @param authentication    Spring Security authentication for the caller
      * @param sharedCallCount   shared counter tracking calls to this tool within the current turn
      * @param permissionChecker permission checker
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tool calls
      */
     public SecuredToolCallback(ToolCallback delegate, ToolBinding binding, DaiPrincipal principal,
                                 Authentication authentication, AtomicInteger sharedCallCount,
-                                ToolPermissionChecker permissionChecker) {
+                                ToolPermissionChecker permissionChecker,
+                                ProposalService proposalService) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.binding = Objects.requireNonNull(binding, "binding");
         this.principal = Objects.requireNonNull(principal, "principal");
         this.authentication = Objects.requireNonNull(authentication, "authentication");
         this.callCount = Objects.requireNonNull(sharedCallCount, "sharedCallCount");
         this.permissionChecker = Objects.requireNonNull(permissionChecker, "permissionChecker");
+        this.proposalService = Objects.requireNonNull(proposalService, "proposalService");
     }
 
     @Override
@@ -123,12 +127,11 @@ public final class SecuredToolCallback implements ToolCallback {
     }
 
     private String handleProposal(String toolInput, ToolContext toolContext) {
-        // The actual ChangeProposal creation lives in the persistence/webmvc layer (LLD-11).
-        // The tool bridge signals the agent runtime to pause the turn.
-        // Here we return a placeholder — the autoconfigure wires a ProposalService.
-        String proposalId = "proposal:" + binding.id() + ":" + System.nanoTime();
-        LOG.info("Tool {} created proposal {} for principal {}", binding.toolName(), proposalId, principal.principalId());
-        return ToolResultEnvelope.proposed(binding.toolName(), proposalId,
+        java.util.UUID proposalId = proposalService.createProposal(
+                binding.toolName(), toolInput, binding.id(), principal);
+        LOG.info("Tool {} created proposal {} for principal {}",
+                binding.toolName(), proposalId, principal.principalId());
+        return ToolResultEnvelope.proposed(binding.toolName(), proposalId.toString(),
                 "Change proposed. Review and confirm in the dashboard.").toJson();
     }
 

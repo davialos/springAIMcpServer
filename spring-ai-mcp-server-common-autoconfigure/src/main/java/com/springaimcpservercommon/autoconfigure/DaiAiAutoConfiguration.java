@@ -2,10 +2,18 @@ package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
+import com.springaimcpservercommon.ai.model.ModelRouter;
+import com.springaimcpservercommon.ai.runtime.AgentInvoker;
+import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
+import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -72,7 +80,19 @@ public class DaiAiAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(SecuredToolCallback.ToolPermissionChecker.class)
     public SecuredToolCallback.ToolPermissionChecker toolPermissionChecker() {
-        return (binding, principal, authentication) -> true;
+        return (principal, binding) -> true;
+    }
+
+    /**
+     * Default no-op proposal service. Replaced by the persistence module when write-proposal
+     * persistence is enabled. Returns a synthetic UUID without persisting.
+     *
+     * @return the service
+     */
+    @Bean
+    @ConditionalOnMissingBean(ProposalService.class)
+    public ProposalService proposalService() {
+        return (toolName, toolInput, bindingId, principal) -> com.springaimcpservercommon.core.id.Ids.newId();
     }
 
     /**
@@ -87,6 +107,7 @@ public class DaiAiAutoConfiguration {
      * @param operationFactory  builds operation-backed callbacks
      * @param queryFactory      builds query-backed callbacks
      * @param permissionChecker runtime per-call permission check
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
      * @return the bridge
      */
     @Bean
@@ -97,8 +118,10 @@ public class DaiAiAutoConfiguration {
     public ToolBridge toolBridge(ToolBridge.ToolBindingLoader bindingLoader,
                                   ToolBridge.OperationCallbackFactory operationFactory,
                                   ToolBridge.QueryCallbackFactory queryFactory,
-                                  SecuredToolCallback.ToolPermissionChecker permissionChecker) {
-        return new ToolBridge(bindingLoader, operationFactory, queryFactory, permissionChecker);
+                                  SecuredToolCallback.ToolPermissionChecker permissionChecker,
+                                  ProposalService proposalService) {
+        return new ToolBridge(bindingLoader, operationFactory, queryFactory,
+                permissionChecker, proposalService);
     }
 
     /**
@@ -110,5 +133,57 @@ public class DaiAiAutoConfiguration {
     @ConditionalOnMissingBean(ObservationRegistry.class)
     public ObservationRegistry observationRegistry() {
         return ObservationRegistry.NOOP;
+    }
+
+    /**
+     * Default in-memory chat memory store. Replace with a PostgreSQL-backed implementation
+     * (via the persistence module) for multi-replica deployments (ADR-0021).
+     *
+     * @return the memory store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatMemory.class)
+    public ChatMemory chatMemory() {
+        return new InMemoryChatMemory();
+    }
+
+    /**
+     * Default {@link AgentInvoker}: assembles a {@code ChatClient} per turn and dispatches
+     * sync and streaming calls (LLD-06 §3).
+     *
+     * <p>Requires a {@link ModelRouter} and {@link MetadataRegistry} bean; {@link ToolBridge}
+     * is optional (injected via {@link ObjectProvider}, tools disabled when absent).
+     *
+     * @param modelRouter          resolves the ChatModel for each turn
+     * @param toolBridgeProvider   optional ToolBridge (absent when no binding loaders are registered)
+     * @param metadataRegistry     current effective catalog snapshot
+     * @param killSwitchChecker    runtime kill-switch check
+     * @param budgetChecker        token-budget pre-check
+     * @param usageSink            token usage accounting
+     * @param observationRegistry  Micrometer registry
+     * @param chatMemory           conversation history store
+     * @return the invoker
+     */
+    @Bean
+    @ConditionalOnMissingBean(AgentInvoker.class)
+    @ConditionalOnBean({ModelRouter.class, MetadataRegistry.class})
+    public DefaultAgentInvoker defaultAgentInvoker(
+            ModelRouter modelRouter,
+            ObjectProvider<ToolBridge> toolBridgeProvider,
+            MetadataRegistry metadataRegistry,
+            InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
+            InvocationGuardAdvisor.BudgetChecker budgetChecker,
+            UsageMeteringAdvisor.UsageSink usageSink,
+            ObservationRegistry observationRegistry,
+            ChatMemory chatMemory) {
+        return new DefaultAgentInvoker(
+                modelRouter,
+                toolBridgeProvider.getIfAvailable(),
+                metadataRegistry,
+                killSwitchChecker,
+                budgetChecker,
+                usageSink,
+                observationRegistry,
+                chatMemory);
     }
 }

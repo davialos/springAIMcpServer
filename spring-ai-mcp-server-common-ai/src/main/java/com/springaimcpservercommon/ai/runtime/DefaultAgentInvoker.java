@@ -2,6 +2,7 @@ package com.springaimcpservercommon.ai.runtime;
 
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.StructuredOutputValidationAdvisor;
+import com.springaimcpservercommon.ai.advisor.SummaryMemoryAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.MemorySpec;
@@ -42,7 +43,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Advisor order (outside the Spring AI tool-calling loop at HIGHEST_PRECEDENCE + 300):
  * <ol>
  *   <li>{@link InvocationGuardAdvisor} at {@code HIGHEST_PRECEDENCE + 200} — kill-switch, guardrails.</li>
- *   <li>{@link MessageChatMemoryAdvisor} at {@code HIGHEST_PRECEDENCE + 201} — history injection.</li>
+ *   <li>{@link MessageChatMemoryAdvisor} / {@link SummaryMemoryAdvisor} at {@code HIGHEST_PRECEDENCE + 201} — history injection (WINDOW / SUMMARY strategy respectively).</li>
  *   <li>{@link StructuredOutputValidationAdvisor} at {@code LOWEST_PRECEDENCE - 100} — JSON validation.</li>
  *   <li>{@link UsageMeteringAdvisor} at {@code LOWEST_PRECEDENCE} — token usage accounting.</li>
  * </ol>
@@ -195,12 +196,14 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ChatModel chatModel) {
         List<Advisor> advisors = new ArrayList<>();
         advisors.add(new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker));
-        if (agent.memory().strategy() != MemorySpec.Strategy.NONE) {
-            // SUMMARY falls back to WINDOW until LLM-summary memory is implemented (OQ-pending)
+        if (agent.memory().strategy() == MemorySpec.Strategy.SUMMARY) {
+            advisors.add(new SummaryMemoryAdvisor(chatMemory, chatModel, MEMORY_ORDER));
+        } else if (agent.memory().strategy() == MemorySpec.Strategy.WINDOW) {
             advisors.add(MessageChatMemoryAdvisor.builder(chatMemory)
                     .order(MEMORY_ORDER)
                     .build());
         }
+        // NONE: no memory advisor
         if (agent.output().mode() == OutputSpec.Mode.JSON_SCHEMA) {
             advisors.add(new StructuredOutputValidationAdvisor(agent.output()));
         }

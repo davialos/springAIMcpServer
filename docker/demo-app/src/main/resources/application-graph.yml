@@ -1,0 +1,76 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Spring profile: graph
+#
+# Activates Neo4j as the conversation history and rule-group context store.
+# Works alongside the 'local' (Ollama) or 'api' (cloud AI) profile.
+#
+# Usage:
+#   # alongside Ollama:
+#   SPRING_PROFILES_ACTIVE=local,graph docker compose --profile graph up -d app-graph
+#
+#   # alongside cloud API:
+#   SPRING_PROFILES_ACTIVE=api,graph docker compose --profile graph up -d app-graph
+#
+#   # Maven test with graph:
+#   mvn test -Dspring.profiles.active=api,graph
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  neo4j:
+    uri:          ${NEO4J_URI:bolt://localhost:7687}
+    authentication:
+      username:   ${NEO4J_USER:neo4j}
+      password:   ${NEO4J_PASSWORD:neo4j_secret}
+    # Connection pool tuning for a dev/test single node
+    pool:
+      max-connection-pool-size:       25
+      connection-acquisition-timeout: 30s
+      max-connection-lifetime:        1h
+      liveness-check-timeout:         5s
+      metrics-enabled:                true
+
+  data:
+    neo4j:
+      repositories:
+        enabled: true
+
+  # Spring AI — Neo4j Vector Store
+  # Stores message and context embeddings for semantic retrieval.
+  # The embedding model must match vector.dimensions in 01_schema.cypher (1536).
+  ai:
+    vectorstore:
+      neo4j:
+        # Label for the vector store nodes (Spring AI default: Document)
+        database-name:      ${NEO4J_DATABASE:neo4j}
+        # Index to use for similarity search — matches 01_schema.cypher
+        index-name:         context_embedding
+        embedding-dimension: 1536
+        distance-type:       cosine
+        # Create the index automatically if missing (redundant in dev — init
+        # script runs first, but safe to leave on for integration tests)
+        initialize-schema:  false
+
+# ── dynamic_ai graph integration ─────────────────────────────────────────────
+# These properties will be read by a future ConversationGraphPort SPI bean
+# (database schema TBD — see docs/open-questions.md).
+# Defined here now so the env vars and namespace are locked in.
+dynamic:
+  ai:
+    graph:
+      enabled:              true
+      uri:                  ${NEO4J_URI:bolt://localhost:7687}
+      database:             ${NEO4J_DATABASE:neo4j}
+      # Embedding dimension — must match the vector index in 01_schema.cypher
+      embedding-dimension:  ${NEO4J_EMBEDDING_DIMENSION:1536}
+      # How many similar context nodes to retrieve per query
+      top-k:                ${NEO4J_TOP_K:5}
+      # Minimum cosine similarity score to include a result (0.0 – 1.0)
+      min-score:            ${NEO4J_MIN_SCORE:0.70}
+      # How long to keep conversation turn nodes before archiving
+      turn-retention-days:  ${NEO4J_TURN_RETENTION_DAYS:90}
+
+logging:
+  level:
+    org.springframework.data.neo4j: DEBUG
+    org.neo4j.driver:               WARN
+    com.springaimcpservercommon:    DEBUG

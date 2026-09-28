@@ -60,6 +60,18 @@ class CanonicalJsonTest {
         assertThatThrownBy(() -> CanonicalJson.canonicalizeObject("[]")).isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * Regression guard for ADR-0020: this class must delegate writing to
+     * {@link com.springaimcpservercommon.core.json.CanonicalJson} rather than have its own writer, so a value
+     * parsed here and the same value rendered by the shared writer are always byte-identical.
+     */
+    @Test
+    void writeDelegatesToTheSharedCoreWriter() {
+        Object parsed = CanonicalJson.parse("{\"b\":[1,2],\"a\":\"x\"}");
+        assertThat(CanonicalJson.write(parsed))
+                .isEqualTo(com.springaimcpservercommon.core.json.CanonicalJson.write(parsed));
+    }
+
     @Test
     void writesJavaValues() {
         Map<String, Object> map = new LinkedHashMap<>();

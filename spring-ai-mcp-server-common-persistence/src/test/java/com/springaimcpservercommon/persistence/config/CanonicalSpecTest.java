@@ -1,12 +1,33 @@
 package com.springaimcpservercommon.persistence.config;
 
 import com.springaimcpservercommon.core.hash.Sha256;
+import com.springaimcpservercommon.core.json.CanonicalJson;
 import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CanonicalSpecTest {
+
+    /**
+     * Regression guard for ADR-0020: a spec parsed here and an equivalent value tree built directly against the
+     * shared writer must render to identical bytes. If this ever fails, {@link CanonicalSpec} has stopped
+     * delegating to {@link CanonicalJson} and the two are diverging again.
+     */
+    @Test
+    void rendersIdenticallyToTheSharedCoreWriter() {
+        Map<String, Object> tree = new LinkedHashMap<>();
+        tree.put("b", new BigDecimal("1.50"));
+        tree.put("a", "x");
+        tree.put("c", Map.of("nested", true));
+
+        assertThat(CanonicalSpec.of("{\"b\":1.50,\"a\":\"x\",\"c\":{\"nested\":true}}").json())
+                .isEqualTo(CanonicalJson.write(tree));
+    }
 
     @Test
     void sortsKeysRecursivelyAndDropsWhitespace() {

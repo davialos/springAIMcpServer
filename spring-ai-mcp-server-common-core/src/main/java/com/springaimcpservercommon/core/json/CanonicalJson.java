@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 /**
  * Minimal, dependency-free writer for <em>canonical</em> JSON: object keys sorted by {@link String#compareTo},
@@ -18,12 +19,25 @@ import java.util.TreeMap;
  * for {@code JsonSchema} documents so that equal content always renders to identical bytes, independent of the
  * host's {@code JsonMapper} configuration (which the library must never touch, ADR-0019).
  *
+ * <p><b>This is the single canonical-JSON writer for the whole codebase (ADR-0020).</b> Every module that needs
+ * to render a value tree for hashing or export — including {@code persistence.support.CanonicalJson}'s parser
+ * output and {@code persistence.config.CanonicalSpec}'s Jackson-parsed specs — must render through {@link #write}
+ * rather than re-implementing escaping or number formatting, so the same logical content always produces the
+ * same bytes no matter which module computed it.
+ *
  * <p>Supported values: {@code null}, {@link Boolean}, {@link String}, {@link Character}, {@link Enum} (by name),
- * integral numbers ({@link Byte}, {@link Short}, {@link Integer}, {@link Long}, {@link BigInteger}),
- * {@link BigDecimal} (plain notation, trailing zeros stripped), finite {@link Double}/{@link Float},
- * {@link Map} with {@link String} keys and {@link Collection}s.
+ * {@link UUID} (its string form), integral numbers ({@link Byte}, {@link Short}, {@link Integer}, {@link Long},
+ * {@link BigInteger}), {@link BigDecimal} (plain notation, trailing zeros stripped), finite
+ * {@link Double}/{@link Float}, {@link Map} with {@link String} keys and {@link Collection}s.
  */
 public final class CanonicalJson {
+
+    /**
+     * Largest nesting depth {@link #write} and {@link #immutableCopy} will descend, guarding against a
+     * {@link StackOverflowError} from a deeply nested (or maliciously crafted) value tree. Matches the depth limit
+     * independently chosen by both callers this class now replaces (ADR-0020).
+     */
+    public static final int MAX_DEPTH = 128;
 
     private CanonicalJson() {
     }
@@ -33,11 +47,12 @@ public final class CanonicalJson {
      *
      * @param value the value tree
      * @return canonical JSON text
-     * @throws IllegalArgumentException for unsupported values, non-string map keys or non-finite numbers
+     * @throws IllegalArgumentException for unsupported values, non-string map keys, non-finite numbers or nesting
+     *                                   deeper than {@value #MAX_DEPTH}
      */
     public static String write(@Nullable Object value) {
         StringBuilder out = new StringBuilder(256);
-        append(out, value);
+        append(out, value, 0);
         return out.toString();
     }
 
@@ -47,18 +62,24 @@ public final class CanonicalJson {
      *
      * @param value the value tree
      * @return an immutable copy
+     * @throws IllegalArgumentException for unsupported values or nesting deeper than {@value #MAX_DEPTH}
      */
     public static @Nullable Object immutableCopy(@Nullable Object value) {
+        return immutableCopy(value, 0);
+    }
+
+    private static @Nullable Object immutableCopy(@Nullable Object value, int depth) {
+        checkDepth(depth);
         return switch (value) {
             case null -> null;
             case Map<?, ?> map -> {
                 Map<String, @Nullable Object> copy = new TreeMap<>();
-                map.forEach((k, v) -> copy.put(key(k), immutableCopy(v)));
+                map.forEach((k, v) -> copy.put(key(k), immutableCopy(v, depth + 1)));
                 yield Collections.unmodifiableMap(new LinkedHashMap<>(copy));
             }
             case Collection<?> collection -> {
                 List<@Nullable Object> copy = new ArrayList<>(collection.size());
-                collection.forEach(v -> copy.add(immutableCopy(v)));
+                collection.forEach(v -> copy.add(immutableCopy(v, depth + 1)));
                 yield Collections.unmodifiableList(copy);
             }
             default -> {
@@ -68,13 +89,15 @@ public final class CanonicalJson {
         };
     }
 
-    private static void append(StringBuilder out, @Nullable Object value) {
+    private static void append(StringBuilder out, @Nullable Object value, int depth) {
+        checkDepth(depth);
         switch (value) {
             case null -> out.append("null");
             case Boolean b -> out.append(b);
             case String s -> appendString(out, s);
             case Character c -> appendString(out, c.toString());
             case Enum<?> e -> appendString(out, e.name());
+            case UUID u -> appendString(out, u.toString());
             case Byte n -> out.append(n.longValue());
             case Short n -> out.append(n.longValue());
             case Integer n -> out.append(n.longValue());
@@ -95,7 +118,7 @@ public final class CanonicalJson {
                     first = false;
                     appendString(out, entry.getKey());
                     out.append(':');
-                    append(out, entry.getValue());
+                    append(out, entry.getValue(), depth + 1);
                 }
                 out.append('}');
             }
@@ -107,11 +130,17 @@ public final class CanonicalJson {
                         out.append(',');
                     }
                     first = false;
-                    append(out, element);
+                    append(out, element, depth + 1);
                 }
                 out.append(']');
             }
             default -> throw new IllegalArgumentException("unsupported JSON value type: " + value.getClass().getName());
+        }
+    }
+
+    private static void checkDepth(int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException("JSON nesting deeper than " + MAX_DEPTH);
         }
     }
 
@@ -135,7 +164,7 @@ public final class CanonicalJson {
 
     private static void checkScalar(Object value) {
         if (!(value instanceof Boolean || value instanceof String || value instanceof Character
-                || value instanceof Enum<?> || value instanceof Byte || value instanceof Short
+                || value instanceof Enum<?> || value instanceof UUID || value instanceof Byte || value instanceof Short
                 || value instanceof Integer || value instanceof Long || value instanceof BigInteger
                 || value instanceof BigDecimal || value instanceof Double || value instanceof Float)) {
             throw new IllegalArgumentException("unsupported JSON value type: " + value.getClass().getName());

@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.persistence.config;
 
 import com.springaimcpservercommon.core.hash.Sha256;
+import com.springaimcpservercommon.core.json.CanonicalJson;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
@@ -8,30 +9,24 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.List;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
-import java.util.TreeMap;
 
 /**
  * A JSON object in canonical form together with its hash — the {@code spec}/{@code spec_hash} pair of a revision.
  *
- * <p><b>Canonicalisation</b> (modelled on RFC 8785 / JCS, but with decimal instead of IEEE-754 number rendering,
- * so that values survive PostgreSQL {@code jsonb}/{@code numeric} round trips unchanged):
- * <ol>
- *   <li>The input is parsed strictly (no trailing tokens); floating point numbers are read as exact decimals.
- *       The root must be an object. For duplicate keys the last one wins (same as {@code jsonb}).</li>
- *   <li>Object members are sorted by key, comparing UTF-16 code units ({@link String#compareTo}); array order is
- *       kept.</li>
- *   <li>No insignificant whitespace; {@code ,} and {@code :} without spaces.</li>
- *   <li>Strings: {@code "} and {@code \} are escaped, control characters U+0000–U+001F use {@code \b \f \n \r \t} or
- *       {@code \}{@code u00xx} (lowercase hex); every other character, including non-ASCII, is written as is.</li>
- *   <li>Numbers: rendered as plain decimals without exponent and without trailing fractional zeros, so
- *       {@code 1}, {@code 1.0} and {@code 1e0} all become {@code 1}; {@code -0} becomes {@code 0}. Numbers whose plain
- *       form would exceed {@value #MAX_NUMBER_DIGITS} digits are rejected.</li>
- *   <li>{@code true}, {@code false}, {@code null} as literals.</li>
- * </ol>
- * The hash is {@link Sha256#of(String) sha256} over the UTF-8 bytes of the canonical text ({@code sha256:<hex>}).
+ * <p><b>Parsing</b> is strict Jackson 3 (no trailing tokens; floating-point numbers read as exact
+ * {@link BigDecimal}s, so values survive PostgreSQL {@code jsonb}/{@code numeric} round trips unchanged). The root
+ * must be an object. For duplicate keys the last one wins (same as {@code jsonb}). Numbers whose plain-decimal form
+ * would exceed {@value #MAX_NUMBER_DIGITS} digits are rejected before rendering (guards against a crafted
+ * {@code 1e999999999}-style admin-submitted value).
+ *
+ * <p><b>Rendering</b> delegates to {@link CanonicalJson#write} — the single canonical-JSON writer for the whole
+ * codebase (ADR-0020) — so a spec's hash is computed the same way as every other hashed value in the system
+ * (audit events, proposal payloads, catalog/policy fingerprints).
+ *
+ * <p>The hash is {@link Sha256#of(String) sha256} over the UTF-8 bytes of the canonical text ({@code sha256:<hex>}).
  * Because {@code jsonb} re-orders keys and re-formats whitespace, the stored spec must always be canonicalised again
  * before its hash is recomputed — which this class makes idempotent: {@code of(of(x).json()).equals(of(x))}.
  *
@@ -92,52 +87,39 @@ public record CanonicalSpec(String json, String hash) {
         if (!(root instanceof Map<?, ?>)) {
             throw new IllegalArgumentException("JSON root must be an object");
         }
-        StringBuilder out = new StringBuilder(json.length());
-        write(root, out);
-        return out.toString();
+        checkNumberSizes(root);
+        return CanonicalJson.write(root);
     }
 
-    private static void write(@Nullable Object value, StringBuilder out) {
+    /**
+     * Walks the parsed tree rejecting any number whose plain-decimal form would exceed
+     * {@value #MAX_NUMBER_DIGITS} digits, before the value ever reaches the writer. Runs only over the shapes
+     * Jackson's untyped binding produces ({@code Map}, {@code Collection}, {@code Number}, {@code String},
+     * {@code Boolean}, {@code null}).
+     *
+     * @param value a node of the parsed tree
+     */
+    private static void checkNumberSizes(@Nullable Object value) {
         switch (value) {
-            case null -> out.append("null");
-            case Map<?, ?> map -> {
-                TreeMap<String, @Nullable Object> sorted = new TreeMap<>();
-                map.forEach((k, v) -> sorted.put(String.valueOf(k), v));
-                out.append('{');
-                boolean first = true;
-                for (Map.Entry<String, @Nullable Object> e : sorted.entrySet()) {
-                    if (!first) {
-                        out.append(',');
-                    }
-                    first = false;
-                    writeString(e.getKey(), out);
-                    out.append(':');
-                    write(e.getValue(), out);
-                }
-                out.append('}');
-            }
-            case List<?> list -> {
-                out.append('[');
-                for (int i = 0; i < list.size(); i++) {
-                    if (i > 0) {
-                        out.append(',');
-                    }
-                    write(list.get(i), out);
-                }
-                out.append(']');
-            }
-            case String s -> writeString(s, out);
-            case Boolean b -> out.append(b.booleanValue());
-            case BigDecimal d -> out.append(plain(d));
-            case BigInteger i -> out.append(plain(new BigDecimal(i)));
-            case Integer i -> out.append(i.intValue());
-            case Long l -> out.append(l.longValue());
-            case Short s -> out.append(s.shortValue());
-            case Number n -> out.append(plain(new BigDecimal(n.toString())));
-            default -> throw new IllegalArgumentException("unsupported JSON value type " + value.getClass().getName());
+            case null -> { }
+            case Map<?, ?> map -> map.values().forEach(CanonicalSpec::checkNumberSizes);
+            case Collection<?> collection -> collection.forEach(CanonicalSpec::checkNumberSizes);
+            case BigDecimal d -> plain(d);
+            case BigInteger i -> plain(new BigDecimal(i));
+            case Number n when !(n instanceof Integer) && !(n instanceof Long) && !(n instanceof Short) -> plain(new BigDecimal(n.toString()));
+            default -> { }
         }
     }
 
+    /**
+     * The plain-decimal form of {@code value}, used only to enforce {@value #MAX_NUMBER_DIGITS} before rendering —
+     * {@link CanonicalJson#write} performs the equivalent {@code stripTrailingZeros().toPlainString()} rendering
+     * itself, so this method's return value is a size check, not the text that ends up in the output.
+     *
+     * @param value the number to check
+     * @return its plain-decimal form (for the caller's own use, if needed)
+     * @throws IllegalArgumentException if the plain form would exceed {@value #MAX_NUMBER_DIGITS} digits
+     */
     private static String plain(BigDecimal value) {
         if (value.signum() == 0) {
             return "0";
@@ -149,29 +131,5 @@ public record CanonicalSpec(String json, String hash) {
             throw new IllegalArgumentException("JSON number exceeds " + MAX_NUMBER_DIGITS + " digits");
         }
         return stripped.toPlainString();
-    }
-
-    private static void writeString(String s, StringBuilder out) {
-        out.append('"');
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"' -> out.append("\\\"");
-                case '\\' -> out.append("\\\\");
-                case '\b' -> out.append("\\b");
-                case '\f' -> out.append("\\f");
-                case '\n' -> out.append("\\n");
-                case '\r' -> out.append("\\r");
-                case '\t' -> out.append("\\t");
-                default -> {
-                    if (c < 0x20) {
-                        out.append("\\u00").append(Character.forDigit(c >> 4, 16)).append(Character.forDigit(c & 0xF, 16));
-                    } else {
-                        out.append(c);
-                    }
-                }
-            }
-        }
-        out.append('"');
     }
 }

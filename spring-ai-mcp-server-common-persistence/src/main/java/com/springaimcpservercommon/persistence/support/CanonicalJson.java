@@ -3,32 +3,30 @@ package com.springaimcpservercommon.persistence.support;
 import org.jspecify.annotations.Nullable;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
-import java.util.UUID;
 
 /**
- * Minimal, dependency-free JSON parser and canonical writer used for every JSON value the store hashes or builds
- * (audit {@code details}, proposal event details). It deliberately does not use Jackson: the output format must never
- * change with a library upgrade, because audit hashes computed today must verify in ten years.
+ * Dependency-free JSON parser for every JSON value the store hashes or builds (audit {@code details}, proposal
+ * event details), paired with the single canonical writer {@link com.springaimcpservercommon.core.json.CanonicalJson}
+ * (ADR-0020) so that a value parsed here and a value built directly as a {@code Map}/{@code List} in Java code
+ * always render to identical bytes. This class deliberately does not use Jackson for parsing: the output format
+ * must never change with a library upgrade, because audit hashes computed today must verify in ten years.
  *
- * <h2>Canonical form (version 1)</h2>
+ * <h2>Canonical form (version 1) — see {@link com.springaimcpservercommon.core.json.CanonicalJson} for the
+ * authoritative rendering rules</h2>
  * <ul>
  *   <li>No insignificant whitespace.</li>
  *   <li>Object members sorted by key, comparing UTF-16 code units ({@link String#compareTo}); duplicate keys keep the
  *       last value (the same rule as PostgreSQL {@code jsonb}).</li>
- *   <li>Strings: {@code "} and {@code \} escaped as {@code \"} and {@code \\}; U+0008, U+0009, U+000A, U+000C, U+000D as
- *       {@code \b \t \n \f \r}; other characters below U+0020 as a backslash, {@code u00} and two lowercase hex digits; every other character
- *       literally (the hash input is UTF-8). Lone surrogates are rejected (as {@code jsonb} does).</li>
- *   <li>Numbers: parsed exactly as {@link BigDecimal} and written as {@code stripTrailingZeros().toPlainString()}, so
+ *   <li>Numbers: parsed exactly as {@link BigDecimal} and rendered as {@code stripTrailingZeros().toPlainString()}, so
  *       {@code 1.50}, {@code 1.5} and {@code 15e-1} are all {@code 1.5}, and {@code -0} is {@code 0} — equal numbers in
- *       {@code jsonb} are equal here, whatever text PostgreSQL returns for them. Exponents beyond ±1000 are rejected.</li>
- *   <li>{@code true}, {@code false}, {@code null} as literals.</li>
+ *       {@code jsonb} are equal here, whatever text PostgreSQL returns for them. Exponents beyond ±1000 are rejected
+ *       at <em>parse</em> time by this class (a size guard on external input, independent of the writer).</li>
+ *   <li>{@code true}, {@code false}, {@code null} as literals. Lone surrogates in strings are rejected at parse time
+ *       (as {@code jsonb} does).</li>
  * </ul>
  * Because JSON read back from a {@code jsonb} column is re-canonicalised before hashing, the whitespace and key order
  * PostgreSQL uses for output do not matter.
@@ -42,7 +40,8 @@ public final class CanonicalJson {
     }
 
     /**
-     * Parses JSON text and writes it back in canonical form.
+     * Parses JSON text and writes it back in canonical form via
+     * {@link com.springaimcpservercommon.core.json.CanonicalJson#write(Object)}.
      *
      * @param json JSON text
      * @return canonical JSON
@@ -87,135 +86,29 @@ public final class CanonicalJson {
     }
 
     /**
-     * Writes a value in canonical form. Supported: {@code Map} with {@code String} keys, {@code Collection},
-     * {@code String}, {@code Number} (integral types, {@code BigInteger}, {@code BigDecimal}), {@code Boolean},
-     * {@code Enum} (its name), {@code UUID} (its string form) and {@code null}.
+     * Writes a value in canonical form via
+     * {@link com.springaimcpservercommon.core.json.CanonicalJson#write(Object)} (ADR-0020) — this class no longer
+     * has its own writer, so a value built directly in Java code and a value produced by {@link #parse} always
+     * render identically. Supported: {@code Map} with {@code String} keys, {@code Collection}, {@code String},
+     * {@code Number} (integral types, {@code BigInteger}, {@code BigDecimal}), {@code Boolean}, {@code Enum} (its
+     * name), {@code UUID} (its string form) and {@code null}.
      *
      * @param value value to write
      * @return canonical JSON
-     * @throws IllegalArgumentException for unsupported types or non-finite floating point numbers
+     * @throws IllegalArgumentException for unsupported types, non-finite floating point numbers or excessive nesting
      */
     public static String write(@Nullable Object value) {
-        StringBuilder out = new StringBuilder();
-        writeValue(out, value, 0);
-        return out.toString();
+        return com.springaimcpservercommon.core.json.CanonicalJson.write(value);
     }
 
     /**
-     * Renders a string as a canonical JSON string literal.
+     * Renders a string as a canonical JSON string literal, via the same writer as {@link #write}.
      *
      * @param text the text
      * @return quoted and escaped literal
      */
     public static String quote(String text) {
-        StringBuilder out = new StringBuilder(text.length() + 2);
-        writeString(out, text);
-        return out.toString();
-    }
-
-    private static void writeValue(StringBuilder out, @Nullable Object value, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("JSON nesting deeper than " + MAX_DEPTH);
-        }
-        switch (value) {
-            case null -> out.append("null");
-            case String s -> writeString(out, s);
-            case Boolean b -> out.append(b ? "true" : "false");
-            case BigDecimal d -> out.append(canonicalNumber(d));
-            case BigInteger i -> out.append(i);
-            case Long l -> out.append(l.longValue());
-            case Integer i -> out.append(i.intValue());
-            case Short s -> out.append(s.shortValue());
-            case Byte b -> out.append(b.byteValue());
-            case Double d -> out.append(canonicalNumber(finite(d)));
-            case Float f -> out.append(canonicalNumber(finite(f.doubleValue())));
-            case Enum<?> e -> writeString(out, e.name());
-            case UUID u -> writeString(out, u.toString());
-            case Map<?, ?> map -> writeObject(out, map, depth);
-            case Collection<?> list -> {
-                out.append('[');
-                boolean first = true;
-                for (Object element : list) {
-                    if (!first) {
-                        out.append(',');
-                    }
-                    first = false;
-                    writeValue(out, element, depth + 1);
-                }
-                out.append(']');
-            }
-            default -> throw new IllegalArgumentException("unsupported JSON value type " + value.getClass().getName());
-        }
-    }
-
-    private static void writeObject(StringBuilder out, Map<?, ?> map, int depth) {
-        TreeMap<String, @Nullable Object> sorted = new TreeMap<>();
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (!(entry.getKey() instanceof String key)) {
-                throw new IllegalArgumentException("JSON object keys must be strings");
-            }
-            sorted.put(key, entry.getValue());
-        }
-        out.append('{');
-        boolean first = true;
-        for (Map.Entry<String, @Nullable Object> entry : sorted.entrySet()) {
-            if (!first) {
-                out.append(',');
-            }
-            first = false;
-            writeString(out, entry.getKey());
-            out.append(':');
-            writeValue(out, entry.getValue(), depth + 1);
-        }
-        out.append('}');
-    }
-
-    private static BigDecimal finite(double d) {
-        if (Double.isNaN(d) || Double.isInfinite(d)) {
-            throw new IllegalArgumentException("JSON numbers must be finite");
-        }
-        return new BigDecimal(Double.toString(d));
-    }
-
-    private static String canonicalNumber(BigDecimal d) {
-        if (d.signum() == 0) {
-            return "0";
-        }
-        return d.stripTrailingZeros().toPlainString();
-    }
-
-    private static void writeString(StringBuilder out, String s) {
-        out.append('"');
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (Character.isHighSurrogate(c)) {
-                if (i + 1 >= s.length() || !Character.isLowSurrogate(s.charAt(i + 1))) {
-                    throw new IllegalArgumentException("lone surrogate in JSON string");
-                }
-                out.append(c).append(s.charAt(++i));
-                continue;
-            }
-            if (Character.isLowSurrogate(c)) {
-                throw new IllegalArgumentException("lone surrogate in JSON string");
-            }
-            switch (c) {
-                case '"' -> out.append("\\\"");
-                case '\\' -> out.append("\\\\");
-                case '\b' -> out.append("\\b");
-                case '\t' -> out.append("\\t");
-                case '\n' -> out.append("\\n");
-                case '\f' -> out.append("\\f");
-                case '\r' -> out.append("\\r");
-                default -> {
-                    if (c < 0x20) {
-                        out.append("\\u00").append(Character.forDigit(c >> 4, 16)).append(Character.forDigit(c & 0xF, 16));
-                    } else {
-                        out.append(c);
-                    }
-                }
-            }
-        }
-        out.append('"');
+        return com.springaimcpservercommon.core.json.CanonicalJson.write(text);
     }
 
     /** Recursive-descent parser (RFC 8259, strict). */

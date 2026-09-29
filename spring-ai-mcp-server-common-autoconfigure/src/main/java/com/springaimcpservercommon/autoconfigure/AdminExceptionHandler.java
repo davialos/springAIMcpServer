@@ -36,7 +36,11 @@ import java.util.NoSuchElementException;
         WorkspaceAdminController.class,
         RoleMappingAdminController.class,
         GrantAdminController.class,
-        ServiceAccountAdminController.class})
+        ServiceAccountAdminController.class,
+        BudgetAdminController.class,
+        UsageAdminController.class,
+        TraceAdminController.class,
+        ConversationController.class})
 public final class AdminExceptionHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(AdminExceptionHandler.class);

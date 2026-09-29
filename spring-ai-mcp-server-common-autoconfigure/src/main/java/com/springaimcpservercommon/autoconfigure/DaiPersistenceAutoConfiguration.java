@@ -18,6 +18,10 @@ import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
 import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
 import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
+import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
+import com.springaimcpservercommon.persistence.usage.BudgetStore;
+import com.springaimcpservercommon.persistence.usage.PriceStore;
+import com.springaimcpservercommon.persistence.usage.UsageLedger;
 import com.springaimcpservercommon.persistence.config.PublishedResource;
 import com.springaimcpservercommon.persistence.config.PublishedSnapshot;
 import com.springaimcpservercommon.persistence.config.ResourceKind;
@@ -221,6 +225,58 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(DaiStore.class)
     public ChangeProposalStore changeProposalStore(DaiStore store, DaiProperties props) {
         return new ChangeProposalStore(store, java.time.Clock.systemUTC(), props.write().retention());
+    }
+
+    /**
+     * Token/cost budget store (F-70).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(BudgetStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public BudgetStore budgetStore(DaiStore store) {
+        return new BudgetStore(store);
+    }
+
+    /**
+     * Hourly usage ledger (F-70, F-71).
+     *
+     * @param store the framework's persistence unit
+     * @return the ledger
+     */
+    @Bean
+    @ConditionalOnMissingBean(UsageLedger.class)
+    @ConditionalOnBean(DaiStore.class)
+    public UsageLedger usageLedger(DaiStore store) {
+        return new UsageLedger(store);
+    }
+
+    /**
+     * Model price history (F-71).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(PriceStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public PriceStore priceStore(DaiStore store) {
+        return new PriceStore(store);
+    }
+
+    /**
+     * Telemetry store: conversations, turns, model calls, tool invocations (F-44, F-72).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(TelemetryStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public TelemetryStore telemetryStore(DaiStore store) {
+        return new TelemetryStore(store, java.time.Clock.systemUTC());
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {

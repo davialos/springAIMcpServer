@@ -11,6 +11,10 @@ import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
 import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
 import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
+import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
+import com.springaimcpservercommon.persistence.usage.BudgetStore;
+import com.springaimcpservercommon.persistence.usage.PriceStore;
+import com.springaimcpservercommon.persistence.usage.UsageLedger;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import org.jspecify.annotations.NullMarked;
@@ -37,6 +41,8 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *   <li>{@link ProposalReviewController} (data plane, {@code /dynamic-ai/api/proposals}) and the access
  *       management controllers {@link WorkspaceAdminController}, {@link RoleMappingAdminController},
  *       {@link GrantAdminController}, {@link ServiceAccountAdminController}</li>
+ *   <li>{@link BudgetAdminController}, {@link UsageAdminController}, {@link TraceAdminController} (admin) and
+ *       {@link ConversationController} (end users, {@code /dynamic-ai/api/conversations})</li>
  * </ul>
  *
  * <p>Catalog endpoints are registered whenever a {@link MetadataRegistry} bean is present
@@ -254,5 +260,68 @@ public class DaiAdminAutoConfiguration {
     public ServiceAccountAdminController serviceAccountAdminController(ApiKeyStore store, AdminAudit audit,
                                                                        AdminApi api) {
         return new ServiceAccountAdminController(store, audit, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Budget admin API.
+     *
+     * @param store  budget store
+     * @param ledger usage ledger (current-period usage)
+     * @param audit  audit recorder
+     * @param api    admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(BudgetAdminController.class)
+    @ConditionalOnBean({BudgetStore.class, UsageLedger.class, AdminAudit.class, AdminApi.class})
+    public BudgetAdminController budgetAdminController(BudgetStore store, UsageLedger ledger, AdminAudit audit,
+                                                       AdminApi api) {
+        return new BudgetAdminController(store, ledger, audit, api);
+    }
+
+    /**
+     * Usage and price API.
+     *
+     * @param ledger usage ledger
+     * @param prices price store
+     * @param audit  audit recorder
+     * @param api    admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(UsageAdminController.class)
+    @ConditionalOnBean({UsageLedger.class, PriceStore.class, AdminAudit.class, AdminApi.class})
+    public UsageAdminController usageAdminController(UsageLedger ledger, PriceStore prices, AdminAudit audit,
+                                                     AdminApi api) {
+        return new UsageAdminController(ledger, prices, audit, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Trace viewer API.
+     *
+     * @param store telemetry store
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceAdminController.class)
+    @ConditionalOnBean({TelemetryStore.class, AdminApi.class})
+    public TraceAdminController traceAdminController(TelemetryStore store, AdminApi api) {
+        return new TraceAdminController(store, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Conversation history API for end users.
+     *
+     * @param store telemetry store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationController.class)
+    @ConditionalOnBean({TelemetryStore.class, AdminAudit.class, AdminApi.class})
+    public ConversationController conversationController(TelemetryStore store, AdminAudit audit, AdminApi api) {
+        return new ConversationController(store, audit, api);
     }
 }

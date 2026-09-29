@@ -94,6 +94,28 @@ final class AdminApi {
     }
 
     /**
+     * Authenticates the caller and requires at least one of several permissions.
+     *
+     * @param request     current request
+     * @param workspaceId workspace scope, or {@code null} for global checks
+     * @param permissions accepted permissions (any one suffices)
+     * @return the gate outcome
+     */
+    Gate gateAny(HttpServletRequest request, @Nullable UUID workspaceId, Permission... permissions) {
+        Gate authenticated = authenticated(request);
+        if (!authenticated.open()) {
+            return authenticated;
+        }
+        DaiPrincipal caller = authenticated.caller();
+        for (Permission permission : permissions) {
+            if (permits(caller, permission, workspaceId)) {
+                return authenticated;
+            }
+        }
+        return new Gate(null, problem(ProblemCode.ACCESS_DENIED, "Access denied", null, request));
+    }
+
+    /**
      * Checks a permission for an already authenticated caller without producing a response.
      *
      * @param principal   the caller

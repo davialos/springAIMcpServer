@@ -95,6 +95,20 @@ class SecuredToolCallbackRecordingTest {
     }
 
     @Test
+    void theToolRunsInTheAiReadScope() {
+        AtomicInteger inScope = new AtomicInteger();
+        callback(binding(WriteMode.EXECUTE, 0), delegate(in -> {
+            if (com.springaimcpservercommon.ai.guard.AiReadScope.isActive()) {
+                inScope.incrementAndGet();
+            }
+            return "ok";
+        }), true).call("{}");
+
+        assertThat(inScope).hasValue(1);
+        assertThat(com.springaimcpservercommon.ai.guard.AiReadScope.isActive()).isFalse();
+    }
+
+    @Test
     void aDeniedCallIsRecordedAndNeverReachesTheTool() {
         callback(binding(WriteMode.EXECUTE, 0), delegate(in -> "x"), false).call("{}");
 

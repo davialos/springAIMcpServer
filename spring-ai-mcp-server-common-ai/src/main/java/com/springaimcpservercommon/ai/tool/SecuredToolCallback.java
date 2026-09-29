@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.ai.tool;
 
+import com.springaimcpservercommon.ai.guard.AiReadScope;
 import com.springaimcpservercommon.ai.guard.AiWriteViolationException;
 import com.springaimcpservercommon.core.catalog.CatalogElementRef;
 import com.springaimcpservercommon.core.hash.Sha256;
@@ -36,7 +37,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       of what the model put in its input.</li>
  *   <li>Enforces the per-turn call count cap ({@link ToolBinding#maxCallsPerTurn()}).</li>
  *   <li>If {@link WriteMode#PROPOSE}: does NOT invoke the delegate; returns a proposal envelope.</li>
- *   <li>Runs the delegate with the caller's {@link SecurityContext} set on the executing thread.</li>
+ *   <li>Runs the delegate with the caller's {@link SecurityContext} set on the executing thread, inside the
+ *       {@link AiReadScope} (ADR-0014).</li>
  *   <li>Post-processes the result into a {@link ToolResultEnvelope} JSON string.</li>
  * </ol>
  *
@@ -206,7 +208,10 @@ public final class SecuredToolCallback implements ToolCallback {
         callerContext.setAuthentication(authentication);
         SecurityContextHolder.setContext(callerContext);
         try {
-            String raw = delegate.call(toolInput, toolContext != null ? toolContext : new ToolContext(Map.of()));
+            ToolContext context = toolContext != null ? toolContext : new ToolContext(Map.of());
+            // Tools that execute (as opposed to PROPOSE) are read tools: run them in the AI read scope so the write
+            // guard vetoes any entity mutation (ADR-0014).
+            String raw = AiReadScope.callScoped(() -> delegate.call(toolInput, context));
             return postProcess(raw);
         } catch (AccessDeniedException e) {
             LOG.info("Tool {} access denied for principal {}: {}", binding.toolName(), principal.principalId(), e.getMessage());

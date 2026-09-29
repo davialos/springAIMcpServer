@@ -26,6 +26,7 @@ import java.util.Map;
  * @param budget          budget enforcement in the invocation path (F-70, LLD-10 §6)
  * @param review          approval policy for publishing configuration (F-64)
  * @param chat            agent chat endpoint limits (LLD-13)
+ * @param conversations   conversation history recording and retention (F-44)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -38,7 +39,36 @@ public record DaiProperties(
         @DefaultValue Write write,
         @DefaultValue Budget budget,
         @DefaultValue Review review,
-        @DefaultValue Chat chat) {
+        @DefaultValue Chat chat,
+        @DefaultValue Conversations conversations) {
+
+    /**
+     * Conversation history (F-44). Transcripts contain what users typed, so recording is off by default.
+     *
+     * @param enabled          store the user message and answer of every successful turn, redacted
+     * @param retention        how long a conversation is kept after its last activity (positive, at most 3660 days)
+     * @param maxStoredChars   longest stored message; longer ones are cut
+     * @param purgeInterval    how often expired conversations are deleted (at least one minute); runs whenever
+     *                         the store exists so old transcripts never outlive their retention
+     */
+    public record Conversations(
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("30d") Duration retention,
+            @DefaultValue("100000") int maxStoredChars,
+            @DefaultValue("15m") Duration purgeInterval) {
+        /** Validates the settings. */
+        public Conversations {
+            if (retention.isNegative() || retention.isZero() || retention.toDays() > 3660) {
+                throw new IllegalArgumentException("dynamic.ai.agent.conversations.retention must be 1ms..3660d");
+            }
+            if (maxStoredChars < 100) {
+                throw new IllegalArgumentException("dynamic.ai.agent.conversations.max-stored-chars must be >= 100");
+            }
+            if (purgeInterval.compareTo(Duration.ofMinutes(1)) < 0) {
+                throw new IllegalArgumentException("dynamic.ai.agent.conversations.purge-interval must be >= 1m");
+            }
+        }
+    }
 
     /**
      * Approval policy for configuration revisions.

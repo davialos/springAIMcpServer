@@ -16,11 +16,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Writes finished agent turns to the {@code dynamic_ai} store: one {@code dai_agent_turn} row and, when the
@@ -46,9 +41,7 @@ final class StoreTurnRecorder implements TurnRecorder, AutoCloseable {
 
     private final TelemetryStore store;
     private final ModelCostCalculator costs;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-    private final Semaphore bulkhead = new Semaphore(MAX_IN_FLIGHT);
-    private final AtomicLong failures = new AtomicLong();
+    private final BoundedAsyncWriter writer = new BoundedAsyncWriter(MAX_IN_FLIGHT, "dynamic.ai.agent.turn.record", LOG);
 
     StoreTurnRecorder(TelemetryStore store, ModelCostCalculator costs) {
         this.store = Objects.requireNonNull(store, "store");
@@ -57,28 +50,10 @@ final class StoreTurnRecorder implements TurnRecorder, AutoCloseable {
 
     @Override
     public void record(TurnRecord turn) {
-        if (!bulkhead.tryAcquire()) {
-            SafeMetrics.count("dynamic.ai.agent.turn.record.dropped");
-            return;
-        }
-        try {
-            executor.execute(() -> {
-                try {
-                    write(turn);
-                    SafeMetrics.count("dynamic.ai.agent.turns.recorded", "outcome", turn.outcome().name());
-                } catch (RuntimeException e) {
-                    SafeMetrics.count("dynamic.ai.agent.turn.record.failures");
-                    if (failures.getAndIncrement() % 100 == 0) {
-                        LOG.warn("Recording turn {} failed ({}); further failures are logged every 100th",
-                                turn.turnId(), e.getClass().getSimpleName());
-                    }
-                } finally {
-                    bulkhead.release();
-                }
-            });
-        } catch (RejectedExecutionException e) {
-            bulkhead.release();
-        }
+        writer.submit("Recording turn " + turn.turnId(), () -> {
+            write(turn);
+            SafeMetrics.count("dynamic.ai.agent.turns.recorded", "outcome", turn.outcome().name());
+        });
     }
 
     private void write(TurnRecord t) {
@@ -117,6 +92,6 @@ final class StoreTurnRecorder implements TurnRecorder, AutoCloseable {
 
     @Override
     public void close() {
-        executor.shutdown();
+        writer.close();
     }
 }

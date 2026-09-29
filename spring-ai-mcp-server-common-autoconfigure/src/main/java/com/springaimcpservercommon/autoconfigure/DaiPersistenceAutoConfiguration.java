@@ -2,6 +2,7 @@ package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
+import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
@@ -347,6 +348,41 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean({TelemetryStore.class, ModelCostCalculator.class})
     public TurnRecorder storeTurnRecorder(TelemetryStore store, ModelCostCalculator costs) {
         return new StoreTurnRecorder(store, costs);
+    }
+
+    /**
+     * Store-backed conversation history (F-44): the redacted user message and answer of every successful turn.
+     * Off unless {@code dynamic.ai.agent.conversations.enabled=true}. Supersedes the no-op default of
+     * {@link DaiAiAutoConfiguration}.
+     *
+     * @param store telemetry store
+     * @param props framework properties (retention, stored size)
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationRecorder.class)
+    @ConditionalOnBean(TelemetryStore.class)
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.conversations", name = "enabled", havingValue = "true")
+    public ConversationRecorder storeConversationRecorder(TelemetryStore store, DaiProperties props) {
+        DaiProperties.Conversations c = props.conversations();
+        return new StoreConversationRecorder(store,
+                new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(), c.maxStoredChars()),
+                c.retention());
+    }
+
+    /**
+     * Deletes conversations past their retention, whether or not recording is currently enabled.
+     *
+     * @param store telemetry store
+     * @param props framework properties (purge interval)
+     * @return the job
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(ConversationRetentionJob.class)
+    @ConditionalOnBean(TelemetryStore.class)
+    ConversationRetentionJob conversationRetentionJob(TelemetryStore store, DaiProperties props) {
+        return new ConversationRetentionJob(store, props.conversations().purgeInterval());
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {

@@ -5,6 +5,7 @@ import com.springaimcpservercommon.ai.advisor.JsonSchemaValidationPort;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
+import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
 import com.springaimcpservercommon.ai.tool.AgentCatalogPort;
@@ -74,6 +75,18 @@ public class DaiAiAutoConfiguration {
     @ConditionalOnMissingBean(TurnRecorder.class)
     public TurnRecorder turnRecorder() {
         return TurnRecorder.NOOP;
+    }
+
+    /**
+     * Default no-op conversation recorder. Superseded by the store-backed recorder from
+     * {@link DaiPersistenceAutoConfiguration} when {@code dynamic.ai.agent.conversations.enabled=true}.
+     *
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationRecorder.class)
+    public ConversationRecorder conversationRecorder() {
+        return ConversationRecorder.NOOP;
     }
 
     /**
@@ -260,6 +273,7 @@ public class DaiAiAutoConfiguration {
      * @param budgetChecker            token-budget pre-check
      * @param usageSink                token usage accounting
      * @param turnRecorder             per-turn telemetry (trace viewer)
+     * @param conversationRecorder     conversation history (F-44)
      * @param observationRegistry      Micrometer registry
      * @param chatMemory               conversation history store
      * @param schemaValidatorProvider  optional JSON Schema conformance validator
@@ -276,6 +290,7 @@ public class DaiAiAutoConfiguration {
             InvocationGuardAdvisor.BudgetChecker budgetChecker,
             UsageMeteringAdvisor.UsageSink usageSink,
             TurnRecorder turnRecorder,
+            ConversationRecorder conversationRecorder,
             ObservationRegistry observationRegistry,
             ChatMemory chatMemory,
             ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider) {
@@ -287,6 +302,7 @@ public class DaiAiAutoConfiguration {
                 budgetChecker,
                 usageSink,
                 turnRecorder,
+                conversationRecorder,
                 observationRegistry,
                 chatMemory,
                 schemaValidatorProvider.getIfAvailable());

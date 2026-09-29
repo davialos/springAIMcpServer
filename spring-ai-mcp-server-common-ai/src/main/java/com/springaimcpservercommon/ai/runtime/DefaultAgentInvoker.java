@@ -109,7 +109,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     public SyncChatResult invoke(AgentDefinition agent, AgentChatRequest request,
                                   DaiPrincipal principal, Authentication authentication) {
         UUID conversationId = request.conversationId() != null ? request.conversationId() : Ids.newId();
-        UUID turnId = Ids.newId();
+        UUID turnId = request.turnId() != null ? request.turnId() : Ids.newId();
         LOG.debug("Agent {} sync turn {} for principal {}", agent.slug(), turnId, principal.principalId());
 
         try {
@@ -151,7 +151,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     public Flux<StreamEvent> stream(AgentDefinition agent, AgentChatRequest request,
                                      DaiPrincipal principal, Authentication authentication) {
         UUID conversationId = request.conversationId() != null ? request.conversationId() : Ids.newId();
-        UUID turnId = Ids.newId();
+        UUID turnId = request.turnId() != null ? request.turnId() : Ids.newId();
 
         return Flux.defer(() -> {
             LOG.debug("Agent {} stream turn {} for principal {}",

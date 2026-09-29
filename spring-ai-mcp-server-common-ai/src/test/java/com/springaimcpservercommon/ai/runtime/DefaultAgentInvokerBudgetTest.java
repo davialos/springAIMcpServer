@@ -54,7 +54,8 @@ class DefaultAgentInvokerBudgetTest {
                 null);
     }
 
-    private final AgentChatRequest request = new AgentChatRequest(null, "hello", "req-1");
+    private final UUID turnId = UUID.randomUUID();
+    private final AgentChatRequest request = new AgentChatRequest(null, "hello", "req-1", turnId);
 
     @Test
     void syncTurnIsRefusedWithBudgetExhaustedBeforeAnyModelWork() {
@@ -75,7 +76,18 @@ class DefaultAgentInvokerBudgetTest {
         assertThat(events.get(0)).isInstanceOfSatisfying(StreamEvent.ErrorEvent.class, e -> {
             assertThat(e.code()).isEqualTo("budget-exhausted");
             assertThat(e.retryable()).isFalse();
+            assertThat(e.turnId()).isEqualTo(turnId);
         });
         assertThat(modelResolutions).hasValue(0);
+    }
+
+    @Test
+    void aRequestWithoutATurnIdStillGetsAGeneratedOneOnStreamErrors() {
+        AgentChatRequest anonymous = new AgentChatRequest(null, "hello", "req-2");
+
+        List<StreamEvent> events = invoker(false).stream(agent, anonymous, principal, null).collectList().block();
+
+        assertThat(events).singleElement().isInstanceOfSatisfying(StreamEvent.ErrorEvent.class,
+                e -> assertThat(e.turnId()).isNotNull().isNotEqualTo(turnId));
     }
 }

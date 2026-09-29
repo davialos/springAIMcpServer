@@ -115,7 +115,7 @@ public final class BudgetAdminController {
                             boolean hardLimit, boolean enabled, Instant createdAt, Instant updatedAt, long version,
                             @Nullable UsageDto usage) {
         static BudgetDto of(BudgetView b, @Nullable UsageDto usage) {
-            UUID ws = workspaceOf(b.target());
+            UUID ws = BudgetMath.workspaceOf(b.target());
             UUID agent = b.target() instanceof BudgetTarget.Agent a ? a.agentResourceId() : null;
             UUID principal = b.target() instanceof BudgetTarget.Principal p ? p.principalId() : null;
             BudgetLimits l = b.limits();
@@ -325,32 +325,15 @@ public final class BudgetAdminController {
 
     /** Workspace routes see budgets of that workspace; global routes see GLOBAL and cross-workspace principal budgets. */
     private static boolean inFamily(BudgetView b, @Nullable UUID workspaceId) {
-        UUID ws = workspaceOf(b.target());
+        UUID ws = BudgetMath.workspaceOf(b.target());
         return workspaceId == null ? ws == null : workspaceId.equals(ws);
-    }
-
-    private static @Nullable UUID workspaceOf(BudgetTarget target) {
-        return switch (target) {
-            case BudgetTarget.Global _ -> null;
-            case BudgetTarget.Workspace w -> w.workspaceId();
-            case BudgetTarget.Agent a -> a.workspaceId();
-            case BudgetTarget.Principal p -> p.workspaceId();
-        };
     }
 
     private @Nullable UsageDto usageOf(BudgetView b) {
         UsageTotals totals = ledger.currentPeriodTotals(b);
         BudgetLimits l = b.limits();
-        double percent = 0;
-        if (l.limitTokens() != null) {
-            percent = Math.max(percent, 100.0 * totals.totalTokens() / l.limitTokens());
-        }
-        Long cost = null;
-        if (l.limitCostMicros() != null && l.currency() != null) {
-            cost = totals.costMicros(l.currency());
-            percent = Math.max(percent, 100.0 * cost / l.limitCostMicros());
-        }
-        return new UsageDto(totals.calls(), totals.totalTokens(), cost, percent);
+        Long cost = l.limitCostMicros() != null && l.currency() != null ? totals.costMicros(l.currency()) : null;
+        return new UsageDto(totals.calls(), totals.totalTokens(), cost, BudgetMath.percentUsed(l, totals));
     }
 
     private static @Nullable BudgetTarget target(CreateRequest body, @Nullable UUID workspaceId,
@@ -437,7 +420,7 @@ public final class BudgetAdminController {
     }
 
     private void record(DaiPrincipal caller, String action, BudgetView b) {
-        audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, action, workspaceOf(b.target()), "budget",
+        audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, action, BudgetMath.workspaceOf(b.target()), "budget",
                 b.id().toString(), null, null,
                 Map.of("scope", b.target().scope().name(), "period", b.period().name(),
                         "hardLimit", b.limits().hardLimit()));

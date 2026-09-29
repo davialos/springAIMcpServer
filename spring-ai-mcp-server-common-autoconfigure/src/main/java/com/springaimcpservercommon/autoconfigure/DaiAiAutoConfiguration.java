@@ -32,32 +32,35 @@ import org.springframework.context.annotation.Configuration;
  * instantiated by the agent runtime per invocation, not registered as singleton beans.
  * This class registers the singleton port implementations and no-op defaults used by those advisors.
  */
-@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiSecurityAutoConfiguration.class})
+@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiSecurityAutoConfiguration.class,
+                             DaiPersistenceAutoConfiguration.class})
 @ConditionalOnClass(ToolBridge.class)
 @NullMarked
 public class DaiAiAutoConfiguration {
 
     /**
-     * Default no-op usage sink. Replaced by the persistence module when budget tracking is enabled.
+     * Default no-op usage sink. Superseded by the ledger-backed sink from {@link DaiPersistenceAutoConfiguration}
+     * when the {@code dynamic_ai} store is present.
      *
      * @return the sink
      */
     @Bean
     @ConditionalOnMissingBean(UsageMeteringAdvisor.UsageSink.class)
     public UsageMeteringAdvisor.UsageSink usageSink() {
-        return (principal, agentId, promptTokens, completionTokens) -> {};
+        return (agent, principal, promptTokens, completionTokens) -> {};
     }
 
     /**
      * Default no-op budget checker — all turns are permitted by default.
-     * Replace with a persistence-backed implementation for budget enforcement.
+     * Superseded by the ledger-backed checker from {@link DaiPersistenceAutoConfiguration} when the
+     * {@code dynamic_ai} store is present and {@code dynamic.ai.agent.budget.enforce} is not {@code false}.
      *
      * @return the checker
      */
     @Bean
     @ConditionalOnMissingBean(InvocationGuardAdvisor.BudgetChecker.class)
     public InvocationGuardAdvisor.BudgetChecker budgetChecker() {
-        return (principal, agentId) -> true;
+        return (agent, principal) -> true;
     }
 
     /**

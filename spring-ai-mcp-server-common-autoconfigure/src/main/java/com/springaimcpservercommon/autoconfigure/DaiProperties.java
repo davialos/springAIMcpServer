@@ -23,6 +23,7 @@ import java.util.Map;
  * @param query           dynamic query bulkhead settings
  * @param scan            {@code @Ai*} annotation scan settings
  * @param write           reviewed change-proposal settings (LLD-11 §12)
+ * @param budget          budget enforcement in the invocation path (F-70, LLD-10 §6)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -32,7 +33,22 @@ public record DaiProperties(
         @DefaultValue Mcp mcp,
         @DefaultValue Query query,
         @DefaultValue Scan scan,
-        @DefaultValue Write write) {
+        @DefaultValue Write write,
+        @DefaultValue Budget budget) {
+
+    /**
+     * Budget enforcement settings.
+     *
+     * @param enforce   refuse turns once a hard budget limit is reached; when {@code false} usage is still
+     *                  recorded and shown but nothing is refused
+     * @param cacheTtl  how long a per-(workspace, agent, principal) decision is reused, bounding both the
+     *                  database load of the check and how stale it can be; {@code 0} disables the cache
+     * @param failOpen  allow the turn when the budget store cannot be read ({@code false} refuses it)
+     */
+    public record Budget(
+            @DefaultValue("true") boolean enforce,
+            @DefaultValue("10s") Duration cacheTtl,
+            @DefaultValue("true") boolean failOpen) {}
 
     /**
      * Reviewed change-proposal settings (LLD-11 §12).

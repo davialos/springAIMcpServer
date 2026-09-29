@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
+import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.core.catalog.EffectiveOperation;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.catalog.OperationDescriptor;
@@ -354,6 +355,7 @@ public class DaiWebMvcAutoConfiguration {
      * <p>{@link TurnEventBuffer} is optional — when absent the replay endpoint returns 503.
      *
      * @param turnEventBufferProvider optional ring buffer for SSE stream replay
+     * @param budgetCheckerProvider   optional budget check for an early {@code 429 budget-exhausted}
      * @return the controller
      */
     @Bean
@@ -367,10 +369,11 @@ public class DaiWebMvcAutoConfiguration {
             AuthorizationEngine authorizationEngine,
             GenericDynamicHandler.RateLimiter rateLimiter,
             GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
-            ObjectProvider<TurnEventBuffer> turnEventBufferProvider) {
+            ObjectProvider<TurnEventBuffer> turnEventBufferProvider,
+            ObjectProvider<InvocationGuardAdvisor.BudgetChecker> budgetCheckerProvider) {
         return new AgentChatController(agentResolver, agentInvoker, principalResolver,
                 authorizationEngine, rateLimiter, killSwitchChecker,
-                turnEventBufferProvider.getIfAvailable());
+                turnEventBufferProvider.getIfAvailable(), budgetCheckerProvider.getIfAvailable());
     }
 
     /**

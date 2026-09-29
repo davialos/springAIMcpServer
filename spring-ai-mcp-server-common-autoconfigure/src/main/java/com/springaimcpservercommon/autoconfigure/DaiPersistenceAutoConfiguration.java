@@ -1,5 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
+import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
 import com.springaimcpservercommon.ai.agent.LimitSpec;
@@ -277,6 +279,44 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(DaiStore.class)
     public TelemetryStore telemetryStore(DaiStore store) {
         return new TelemetryStore(store, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Ledger-backed budget check for the invocation path (F-70). Supersedes the permit-all default of
+     * {@link DaiAiAutoConfiguration}; disable enforcement with {@code dynamic.ai.agent.budget.enforce=false}.
+     *
+     * @param budgets       budget store
+     * @param ledger        usage ledger
+     * @param auditTrailProvider optional audit trail for soft-limit and exceeded alerts
+     * @param props         framework properties
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(InvocationGuardAdvisor.BudgetChecker.class)
+    @ConditionalOnBean({BudgetStore.class, UsageLedger.class})
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.budget", name = "enforce", havingValue = "true", matchIfMissing = true)
+    public InvocationGuardAdvisor.BudgetChecker ledgerBudgetChecker(
+            BudgetStore budgets, UsageLedger ledger,
+            org.springframework.beans.factory.ObjectProvider<AuditTrail> auditTrailProvider, DaiProperties props) {
+        DaiProperties.Budget budget = props.budget();
+        return new LedgerBudgetChecker(budgets, ledger, auditTrailProvider.getIfAvailable(), budget.cacheTtl(),
+                budget.failOpen(), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Ledger-backed usage recording: tokens and priced cost of every completed model call (F-70, F-71).
+     * Supersedes the no-op default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param ledger usage ledger
+     * @param prices model price history
+     * @return the sink
+     */
+    @Bean
+    @ConditionalOnMissingBean(UsageMeteringAdvisor.UsageSink.class)
+    @ConditionalOnBean({UsageLedger.class, PriceStore.class})
+    public UsageMeteringAdvisor.UsageSink ledgerUsageSink(UsageLedger ledger, PriceStore prices) {
+        return new LedgerUsageSink(ledger, prices, Duration.ofSeconds(60), java.time.Clock.systemUTC());
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {

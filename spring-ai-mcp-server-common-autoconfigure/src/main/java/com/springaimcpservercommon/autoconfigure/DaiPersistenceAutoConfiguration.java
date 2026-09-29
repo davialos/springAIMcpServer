@@ -582,8 +582,8 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(AgentSnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    public AgentSnapshotCache agentSnapshotCache(ConfigStore configStore) {
-        return new AgentSnapshotCache(configStore);
+    public AgentSnapshotCache agentSnapshotCache(ConfigStore configStore, DaiProperties props) {
+        return new AgentSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
     }
 
     @Bean
@@ -621,8 +621,8 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(QuerySnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore) {
-        return new QuerySnapshotCache(configStore);
+    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore, DaiProperties props) {
+        return new QuerySnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
     }
 
     /**
@@ -639,6 +639,85 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(QuerySnapshotCache.class)
     public DaiQueryAutoConfiguration.QueryDefinitionLoader queryDefinitionLoader(QuerySnapshotCache cache) {
         return cache::findById;
+    }
+
+    /**
+     * Background maintenance of this node (OQ-46): partition maintenance and retention on the cron, node heartbeat
+     * with the applied generation, snapshot polling, stale-approval expiry, silent-node pruning and reconciliation
+     * of proposals stuck in APPLYING. Off with {@code dynamic.ai.agent.store.maintenance.enabled=false}.
+     *
+     * <p>Declared after the stores and snapshot caches so its conditions see them.
+     *
+     * @param store     the persistence unit
+     * @param config    config store (heartbeat, node pruning, approval expiry)
+     * @param proposals proposal store (expiry, purge, apply reconciliation)
+     * @param telemetry telemetry store (conversation purge inside partition maintenance)
+     * @param views     snapshot caches to poll
+     * @param props     framework properties
+     * @return the runner
+     */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    @ConditionalOnMissingBean(MaintenanceRunner.class)
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.store.maintenance", name = "enabled", havingValue = "true",
+            matchIfMissing = true)
+    @ConditionalOnBean({DaiStore.class, ConfigStore.class, ChangeProposalStore.class, TelemetryStore.class})
+    MaintenanceRunner maintenanceRunner(DaiStore store, ConfigStore config, ChangeProposalStore proposals,
+                                        TelemetryStore telemetry,
+                                        org.springframework.beans.factory.ObjectProvider<SnapshotView> views,
+                                        DaiProperties props) {
+        DaiProperties.Maintenance settings = props.store().maintenance();
+        java.time.Clock clock = java.time.Clock.systemUTC();
+        String nodeId = settings.nodeId() != null ? settings.nodeId() : defaultNodeId();
+        var partitions = new com.springaimcpservercommon.persistence.maintenance.PartitionMaintenance(
+                store, proposals, telemetry, clock, nodeId, Map.of());
+        java.util.List<SnapshotView> snapshotViews = views.orderedStream().toList();
+        String app = props.environment().applicationName() != null ? props.environment().applicationName()
+                : "application";
+        String libraryVersion = MaintenanceRunner.class.getPackage().getImplementationVersion();
+        var steps = new MaintenanceRunner.Steps(
+                () -> snapshotViews.forEach(SnapshotView::refreshNow),
+                () -> snapshotViews.stream().mapToLong(SnapshotView::loadedGeneration).filter(g -> g > 0).min()
+                        .orElse(0L),
+                config::heartbeat,
+                () -> config.pruneNodes(settings.nodeRetention()),
+                () -> config.expireApprovals(clock.instant().minus(settings.approvalTtl())),
+                () -> failStuckApplies(proposals, settings.applyTimeout()),
+                partitions::run);
+        return new MaintenanceRunner(steps, new MaintenanceRunner.Identity(nodeId, app, null,
+                libraryVersion == null ? "unknown" : libraryVersion), settings, clock);
+    }
+
+    /**
+     * Proposals in APPLYING longer than the timeout have an unknown outcome (the node applying them may have
+     * crashed after the host write). They are failed with a fixed message so an operator verifies the host state;
+     * a write is never retried automatically (ADR-0009).
+     */
+    static int failStuckApplies(ChangeProposalStore proposals, Duration timeout) {
+        int failed = 0;
+        for (java.util.UUID id : proposals.applyingSince(timeout, MaintenanceRunner.APPLY_BATCH)) {
+            try {
+                proposals.markFailed(id, "APPLY_TIMEOUT",
+                        "The apply did not finish in time; check the host state before proposing again.");
+                failed++;
+            } catch (RuntimeException e) {
+                // finished or failed concurrently on another node: nothing to reconcile
+                LOG.debug("Proposal {} left APPLYING before reconciliation ({})", id, e.getClass().getSimpleName());
+            }
+        }
+        return failed;
+    }
+
+    private static String defaultNodeId() {
+        String host;
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (java.io.IOException | RuntimeException e) {
+            host = "node";
+        }
+        String suffix = Long.toString(java.util.concurrent.ThreadLocalRandom.current().nextLong(0x100000, 0xFFFFFF), 16);
+        String id = host + "-" + suffix;
+        return id.length() > 255 ? id.substring(id.length() - 255) : id;
     }
 
     /**
@@ -695,11 +774,20 @@ public class DaiPersistenceAutoConfiguration {
 
     // ─── Snapshot-backed resolver implementations ────────────────────────────
 
+    /** What the maintenance runner needs from a snapshot cache. */
+    interface SnapshotView {
+        /** Checks the store for a newer generation now (ignores the throttle) and loads it. */
+        void refreshNow();
+
+        /** @return the generation currently served, 0 when nothing is loaded */
+        long loadedGeneration();
+    }
+
     /**
      * Shared snapshot cache: loads the config store snapshot once per generation and indexes agents
      * by both slug and resource UUID. Thread-safe; resolvers hold a reference to the same instance.
      */
-    static final class AgentSnapshotCache {
+    static final class AgentSnapshotCache implements SnapshotView {
 
         private final ConfigStore configStore;
         /** last generation we loaded; 0 = nothing cached. */
@@ -707,8 +795,28 @@ public class DaiPersistenceAutoConfiguration {
         private volatile Map<String, AgentDefinition> bySlug = Map.of();
         private volatile Map<UUID, AgentDefinition> byId = Map.of();
 
-        AgentSnapshotCache(ConfigStore configStore) {
+        private final long maxAgeNanos;
+        private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
+        private volatile boolean everChecked;
+
+        /**
+         * @param configStore the config store
+         * @param maxAge      longest a lookup trusts the cached generation before asking the store again
+         *                    (the maintenance runner also polls, so idle nodes stay current)
+         */
+        AgentSnapshotCache(ConfigStore configStore, Duration maxAge) {
             this.configStore = configStore;
+            this.maxAgeNanos = maxAge.toNanos();
+        }
+
+        @Override
+        public long loadedGeneration() {
+            return cachedGeneration.get();
+        }
+
+        @Override
+        public void refreshNow() {
+            refresh(true);
         }
 
         @Nullable AgentDefinition findBySlug(String slug) {
@@ -722,6 +830,14 @@ public class DaiPersistenceAutoConfiguration {
         }
 
         private void refresh() {
+            refresh(false);
+        }
+
+        private void refresh(boolean force) {
+            long now = System.nanoTime();
+            if (!force && everChecked && now - checkedAtNanos.get() < maxAgeNanos) return;
+            checkedAtNanos.set(now);
+            everChecked = true;
             long latest = configStore.latestGeneration().orElse(0L);
             if (latest <= cachedGeneration.get()) return;
             synchronized (this) {
@@ -757,14 +873,34 @@ public class DaiPersistenceAutoConfiguration {
      * Shared snapshot cache for published query definitions. Generation-based caching with
      * double-checked locking; indexes by resource UUID.
      */
-    static final class QuerySnapshotCache {
+    static final class QuerySnapshotCache implements SnapshotView {
 
         private final ConfigStore configStore;
         private final AtomicLong cachedGeneration = new AtomicLong(0L);
         private volatile Map<UUID, QueryDefinition> byId = Map.of();
 
-        QuerySnapshotCache(ConfigStore configStore) {
+        private final long maxAgeNanos;
+        private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
+        private volatile boolean everChecked;
+
+        /**
+         * @param configStore the config store
+         * @param maxAge      longest a lookup trusts the cached generation before asking the store again
+         *                    (the maintenance runner also polls, so idle nodes stay current)
+         */
+        QuerySnapshotCache(ConfigStore configStore, Duration maxAge) {
             this.configStore = configStore;
+            this.maxAgeNanos = maxAge.toNanos();
+        }
+
+        @Override
+        public long loadedGeneration() {
+            return cachedGeneration.get();
+        }
+
+        @Override
+        public void refreshNow() {
+            refresh(true);
         }
 
         @Nullable QueryDefinition findById(UUID id) {
@@ -773,6 +909,14 @@ public class DaiPersistenceAutoConfiguration {
         }
 
         private void refresh() {
+            refresh(false);
+        }
+
+        private void refresh(boolean force) {
+            long now = System.nanoTime();
+            if (!force && everChecked && now - checkedAtNanos.get() < maxAgeNanos) return;
+            checkedAtNanos.set(now);
+            everChecked = true;
             long latest = configStore.latestGeneration().orElse(0L);
             if (latest <= cachedGeneration.get()) return;
             synchronized (this) {

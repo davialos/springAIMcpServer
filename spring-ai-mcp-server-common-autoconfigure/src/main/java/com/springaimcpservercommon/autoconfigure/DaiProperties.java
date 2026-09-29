@@ -27,6 +27,7 @@ import java.util.Map;
  * @param review          approval policy for publishing configuration (F-64)
  * @param chat            agent chat endpoint limits (LLD-13)
  * @param conversations   conversation history recording and retention (F-44)
+ * @param store           background maintenance of the {@code dynamic_ai} store (LLD-15 §10, LLD-09 §4)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -40,7 +41,65 @@ public record DaiProperties(
         @DefaultValue Budget budget,
         @DefaultValue Review review,
         @DefaultValue Chat chat,
-        @DefaultValue Conversations conversations) {
+        @DefaultValue Conversations conversations,
+        @DefaultValue Store store) {
+
+    /**
+     * Store settings.
+     *
+     * @param maintenance background jobs of this node
+     */
+    public record Store(@DefaultValue Maintenance maintenance) {}
+
+    /**
+     * Background maintenance (OQ-46). Every node runs it; work that must happen once per cluster is guarded by a
+     * PostgreSQL advisory lock or {@code FOR UPDATE SKIP LOCKED}, so no coordination service is needed (ADR-0021).
+     *
+     * @param enabled              run the jobs on this node; {@code false} leaves partitioning, retention and
+     *                             node bookkeeping to the operator
+     * @param cron                 Spring cron (six fields, UTC) of the partition maintenance and retention run
+     * @param snapshotPollInterval how often a node checks for a newer published generation (1s..5m); also the
+     *                             longest a request-path lookup relies on a cached generation
+     * @param heartbeatInterval    how often the node reports itself and its applied generation (5s..10m)
+     * @param sweepInterval        how often stale approvals, silent nodes and stuck applies are handled (1m..1d)
+     * @param nodeRetention        a node silent this long is removed from the cluster view (at least 1m)
+     * @param approvalTtl          an approved revision not published within this time becomes stale (LLD-09 §2)
+     * @param applyTimeout         a proposal in APPLYING this long is marked failed for the operator to verify
+     * @param nodeId               id of this node; default is the host name plus a random suffix
+     */
+    public record Maintenance(
+            @DefaultValue("true") boolean enabled,
+            @DefaultValue("0 17 3 * * *") String cron,
+            @DefaultValue("5s") Duration snapshotPollInterval,
+            @DefaultValue("15s") Duration heartbeatInterval,
+            @DefaultValue("5m") Duration sweepInterval,
+            @DefaultValue("24h") Duration nodeRetention,
+            @DefaultValue("30d") Duration approvalTtl,
+            @DefaultValue("10m") Duration applyTimeout,
+            @Nullable String nodeId) {
+        /** Validates the settings. */
+        public Maintenance {
+            if (!org.springframework.scheduling.support.CronExpression.isValidExpression(cron)) {
+                throw new IllegalArgumentException("dynamic.ai.agent.store.maintenance.cron is not a valid cron");
+            }
+            range(snapshotPollInterval, Duration.ofSeconds(1), Duration.ofMinutes(5), "snapshot-poll-interval");
+            range(heartbeatInterval, Duration.ofSeconds(5), Duration.ofMinutes(10), "heartbeat-interval");
+            range(sweepInterval, Duration.ofMinutes(1), Duration.ofDays(1), "sweep-interval");
+            range(nodeRetention, Duration.ofMinutes(1), Duration.ofDays(365), "node-retention");
+            range(approvalTtl, Duration.ofDays(1), Duration.ofDays(3660), "approval-ttl");
+            range(applyTimeout, Duration.ofMinutes(1), Duration.ofDays(1), "apply-timeout");
+            if (nodeId != null && (nodeId.isBlank() || nodeId.length() > 255)) {
+                throw new IllegalArgumentException("dynamic.ai.agent.store.maintenance.node-id must be 1..255 chars");
+            }
+        }
+
+        private static void range(Duration value, Duration min, Duration max, String name) {
+            if (value.compareTo(min) < 0 || value.compareTo(max) > 0) {
+                throw new IllegalArgumentException("dynamic.ai.agent.store.maintenance." + name + " must be "
+                        + min + ".." + max);
+            }
+        }
+    }
 
     /**
      * Conversation history (F-44). Transcripts contain what users typed, so recording is off by default.

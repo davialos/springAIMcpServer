@@ -162,4 +162,14 @@ class DaiWiringTest {
                             .isEmpty();
                 });
     }
+
+    @Test
+    void theMaintenanceRunnerIsRegisteredUnlessDisabled() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(MaintenanceRunner.class)).containsExactly("maintenanceRunner"));
+        runner().withBean(DaiStore.class, () -> STUB_STORE)
+                .withPropertyValues("dynamic.ai.agent.store.maintenance.enabled=false")
+                .run(context -> assertThat(context.getBeanNamesForType(MaintenanceRunner.class)).isEmpty());
+        runner().run(context -> assertThat(context.getBeanNamesForType(MaintenanceRunner.class)).isEmpty());
+    }
 }

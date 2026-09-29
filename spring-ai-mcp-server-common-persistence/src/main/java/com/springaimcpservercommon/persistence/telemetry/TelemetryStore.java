@@ -31,6 +31,9 @@ import java.util.UUID;
  */
 public final class TelemetryStore {
 
+    /** Most turns {@link #turnsOfTrace} returns. */
+    public static final int TRACE_LOOKUP_LIMIT = 20;
+
     /** Largest number of messages {@link #messages(UUID, int)} returns. */
     public static final int MAX_MESSAGES = 10_000;
 
@@ -435,21 +438,75 @@ public final class TelemetryStore {
      * @return one page
      */
     public Slice<AgentTurn> turnsOfWorkspace(UUID workspaceId, TimeRange range, PageRequest page) {
-        return db.read(em -> StoreSupport.slice(em.createQuery(
-                        "select t from AgentTurn t where t.workspaceId = :w and t.startedAt >= :from and t.startedAt < :to "
-                                + "order by t.startedAt desc, t.id desc", AgentTurn.class)
-                .setParameter("w", workspaceId)
-                .setParameter("from", range.from())
-                .setParameter("to", range.to()), page));
+        return turnsOfWorkspace(workspaceId, range, TurnFilter.NONE, page);
     }
 
     /**
-     * Finds a turn by id within a time range containing its start.
+     * Agent turns of a workspace in a time range, newest first, optionally narrowed.
      *
-     * @param turnId turn id
-     * @param range  range containing the turn's {@code started_at}
-     * @return the turn, if found
+     * @param workspaceId workspace
+     * @param range       time window on {@code started_at}
+     * @param filter      optional narrowing
+     * @param page        page
+     * @return the slice
      */
+    public Slice<AgentTurn> turnsOfWorkspace(UUID workspaceId, TimeRange range, TurnFilter filter, PageRequest page) {
+        StringBuilder jpql = new StringBuilder("select t from AgentTurn t where t.workspaceId = :w "
+                + "and t.startedAt >= :from and t.startedAt < :to");
+        if (filter.principalId() != null) {
+            jpql.append(" and t.principalId = :principal");
+        }
+        if (filter.agentResourceId() != null) {
+            jpql.append(" and t.agentResourceId = :agent");
+        }
+        if (filter.outcome() != null) {
+            jpql.append(" and t.outcome = :outcome");
+        }
+        if (filter.channel() != null) {
+            jpql.append(" and t.channel = :channel");
+        }
+        jpql.append(" order by t.startedAt desc, t.id desc");
+        return db.read(em -> {
+            var query = em.createQuery(jpql.toString(), AgentTurn.class)
+                    .setParameter("w", workspaceId)
+                    .setParameter("from", range.from())
+                    .setParameter("to", range.to());
+            if (filter.principalId() != null) {
+                query.setParameter("principal", filter.principalId());
+            }
+            if (filter.agentResourceId() != null) {
+                query.setParameter("agent", filter.agentResourceId());
+            }
+            if (filter.outcome() != null) {
+                query.setParameter("outcome", filter.outcome());
+            }
+            if (filter.channel() != null) {
+                query.setParameter("channel", filter.channel());
+            }
+            return StoreSupport.slice(query, page);
+        });
+    }
+
+    /**
+     * Turns that carry a trace correlation id, newest first (at most {@value #TRACE_LOOKUP_LIMIT}); this links an
+     * OpenTelemetry trace back to the store.
+     *
+     * @param traceId trace id
+     * @param range   time window on {@code started_at} (the table is partitioned by time)
+     * @return matching turns
+     */
+    public List<AgentTurn> turnsOfTrace(String traceId, TimeRange range) {
+        Checks.text(traceId, "traceId", 128);
+        return db.read(em -> em.createQuery("select t from AgentTurn t where t.traceId = :trace "
+                        + "and t.startedAt >= :from and t.startedAt < :to order by t.startedAt desc, t.id desc",
+                        AgentTurn.class)
+                .setParameter("trace", traceId)
+                .setParameter("from", range.from())
+                .setParameter("to", range.to())
+                .setMaxResults(TRACE_LOOKUP_LIMIT)
+                .getResultList());
+    }
+
     public Optional<AgentTurn> findTurn(UUID turnId, TimeRange range) {
         return db.read(em -> em.createQuery(
                         "select t from AgentTurn t where t.id = :id and t.startedAt >= :from and t.startedAt < :to",
@@ -565,24 +622,162 @@ public final class TelemetryStore {
      */
     public Slice<ToolInvocation> toolInvocationsOfWorkspace(UUID workspaceId, TimeRange range, boolean violationsOnly,
                                                             PageRequest page) {
-        String violation = violationsOnly ? " and i.writeViolation = true" : "";
-        return db.read(em -> StoreSupport.slice(em.createQuery(
-                        "select i from ToolInvocation i where i.workspaceId = :w and i.startedAt >= :from "
-                                + "and i.startedAt < :to" + violation + " order by i.startedAt desc, i.id desc",
-                        ToolInvocation.class)
-                .setParameter("w", workspaceId)
-                .setParameter("from", range.from())
-                .setParameter("to", range.to()), page));
+        return toolInvocationsOfWorkspace(workspaceId, range, ToolInvocationFilter.violations(violationsOnly), page);
     }
 
     /**
-     * MCP requests of a session in a time range, in arrival order.
+     * Tool invocations of a workspace in a time range, newest first, optionally narrowed.
      *
-     * @param mcpSessionId session row id
-     * @param range        time range on {@code received_at}
-     * @param page         page
-     * @return one page
+     * @param workspaceId workspace
+     * @param range       time window on {@code started_at}
+     * @param filter      optional narrowing
+     * @param page        page
+     * @return the slice
      */
+    public Slice<ToolInvocation> toolInvocationsOfWorkspace(UUID workspaceId, TimeRange range,
+                                                            ToolInvocationFilter filter, PageRequest page) {
+        StringBuilder jpql = new StringBuilder("select i from ToolInvocation i where i.workspaceId = :w "
+                + "and i.startedAt >= :from and i.startedAt < :to");
+        if (filter.toolName() != null) {
+            jpql.append(" and i.toolName = :tool");
+        }
+        if (filter.status() != null) {
+            jpql.append(" and i.status = :status");
+        }
+        if (filter.principalId() != null) {
+            jpql.append(" and i.principalId = :principal");
+        }
+        if (filter.violationsOnly()) {
+            jpql.append(" and i.writeViolation = true");
+        }
+        if (filter.problemsOnly()) {
+            jpql.append(" and i.status <> :ok and i.status <> :empty");
+        }
+        jpql.append(" order by i.startedAt desc, i.id desc");
+        return db.read(em -> {
+            var query = em.createQuery(jpql.toString(), ToolInvocation.class)
+                    .setParameter("w", workspaceId)
+                    .setParameter("from", range.from())
+                    .setParameter("to", range.to());
+            if (filter.toolName() != null) {
+                query.setParameter("tool", filter.toolName());
+            }
+            if (filter.status() != null) {
+                query.setParameter("status", filter.status());
+            }
+            if (filter.principalId() != null) {
+                query.setParameter("principal", filter.principalId());
+            }
+            if (filter.problemsOnly()) {
+                query.setParameter("ok", ToolInvocationStatus.OK).setParameter("empty", ToolInvocationStatus.EMPTY);
+            }
+            return StoreSupport.slice(query, page);
+        });
+    }
+
+    /**
+     * Per-tool aggregates of a workspace in a time window, most used first.
+     *
+     * @param workspaceId workspace
+     * @param range       time window on {@code started_at}
+     * @param limit       most tools returned (1..{@value PageRequest#MAX_LIMIT})
+     * @return one row per tool
+     */
+    public List<ToolStat> toolStats(UUID workspaceId, TimeRange range, int limit) {
+        if (limit < 1 || limit > PageRequest.MAX_LIMIT) {
+            throw new IllegalArgumentException("limit must be between 1 and " + PageRequest.MAX_LIMIT);
+        }
+        String sql = "SELECT tool_name, count(*), "
+                + "count(*) FILTER (WHERE status IN ('ERROR', 'TIMEOUT', 'UNAVAILABLE')), "
+                + "count(*) FILTER (WHERE status = 'NOT_PERMITTED'), "
+                + "count(*) FILTER (WHERE write_violation), "
+                + "avg(extract(epoch FROM (ended_at - started_at)) * 1000), "
+                + "max(extract(epoch FROM (ended_at - started_at)) * 1000) "
+                + "FROM " + db.qualified("dai_tool_invocation")
+                + " WHERE workspace_id = ?1 AND started_at >= ?2 AND started_at < ?3 "
+                + "GROUP BY tool_name ORDER BY count(*) DESC, tool_name LIMIT ?4";
+        return db.read(em -> {
+            @SuppressWarnings("unchecked")
+            List<Object[]> rows = em.createNativeQuery(sql)
+                    .setParameter(1, workspaceId)
+                    .setParameter(2, range.from())
+                    .setParameter(3, range.to())
+                    .setParameter(4, limit)
+                    .getResultList();
+            List<ToolStat> stats = new ArrayList<>(rows.size());
+            for (Object[] row : rows) {
+                stats.add(new ToolStat((String) row[0], ((Number) row[1]).longValue(),
+                        ((Number) row[2]).longValue(), ((Number) row[3]).longValue(), ((Number) row[4]).longValue(),
+                        ((Number) row[5]).doubleValue(), ((Number) row[6]).doubleValue()));
+            }
+            return stats;
+        });
+    }
+
+    /**
+     * MCP requests of a workspace in a time range, newest first, optionally narrowed.
+     *
+     * @param workspaceId workspace
+     * @param range       time window on {@code received_at}
+     * @param filter      optional narrowing
+     * @param page        page
+     * @return the slice
+     */
+    public Slice<McpRequest> mcpRequestsOfWorkspace(UUID workspaceId, TimeRange range, McpRequestFilter filter,
+                                                    PageRequest page) {
+        StringBuilder jpql = new StringBuilder("select r from McpRequest r where r.workspaceId = :w "
+                + "and r.receivedAt >= :from and r.receivedAt < :to");
+        if (filter.method() != null) {
+            jpql.append(" and r.jsonrpcMethod = :method");
+        }
+        if (filter.toolName() != null) {
+            jpql.append(" and r.toolName = :tool");
+        }
+        if (filter.status() != null) {
+            jpql.append(" and r.status = :status");
+        }
+        if (filter.principalId() != null) {
+            jpql.append(" and r.principalId = :principal");
+        }
+        jpql.append(" order by r.receivedAt desc, r.id desc");
+        return db.read(em -> {
+            var query = em.createQuery(jpql.toString(), McpRequest.class)
+                    .setParameter("w", workspaceId)
+                    .setParameter("from", range.from())
+                    .setParameter("to", range.to());
+            if (filter.method() != null) {
+                query.setParameter("method", filter.method());
+            }
+            if (filter.toolName() != null) {
+                query.setParameter("tool", filter.toolName());
+            }
+            if (filter.status() != null) {
+                query.setParameter("status", filter.status());
+            }
+            if (filter.principalId() != null) {
+                query.setParameter("principal", filter.principalId());
+            }
+            return StoreSupport.slice(query, page);
+        });
+    }
+
+    /**
+     * One MCP request.
+     *
+     * @param requestId request id
+     * @param range     time window on {@code received_at} (the table is partitioned by time)
+     * @return the request, if it is in the window
+     */
+    public Optional<McpRequest> findMcpRequest(UUID requestId, TimeRange range) {
+        return db.read(em -> em.createQuery("select r from McpRequest r where r.id = :id "
+                        + "and r.receivedAt >= :from and r.receivedAt < :to", McpRequest.class)
+                .setParameter("id", requestId)
+                .setParameter("from", range.from())
+                .setParameter("to", range.to())
+                .getResultStream()
+                .findFirst());
+    }
+
     public Slice<McpRequest> mcpRequestsOfSession(UUID mcpSessionId, TimeRange range, PageRequest page) {
         return db.read(em -> StoreSupport.slice(em.createQuery(
                         "select r from McpRequest r where r.mcpSessionId = :s and r.receivedAt >= :from "

@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.StreamEvent;
+import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
@@ -267,16 +268,19 @@ public class AgentChatController {
         DaiPrincipal principal = preCheck.principal();
         Authentication auth = preCheck.authentication();
 
+        UUID turnId = Ids.newId();
         String clientRequestId = clientRequestId(body);
-        if (clientRequestId != null
-                && clientRequests.register(principal.principalId(), agent.id(), clientRequestId, UUID.randomUUID()) != null) {
-            return duplicateRequest(null, slug, httpRequest);
+        if (clientRequestId != null) {
+            UUID earlier = clientRequests.register(principal.principalId(), agent.id(), clientRequestId, turnId);
+            if (earlier != null) {
+                return duplicateRequest(earlier, false, slug, httpRequest);
+            }
         }
 
         try {
             var request = new AgentInvoker.AgentChatRequest(
                     body.conversationId(), body.message(),
-                    clientRequestId != null ? clientRequestId : UUID.randomUUID().toString());
+                    clientRequestId != null ? clientRequestId : UUID.randomUUID().toString(), turnId);
 
             AgentInvoker.SyncChatResult result = agentInvoker.invoke(agent, request, principal, auth);
             return ResponseEntity.ok()
@@ -338,19 +342,20 @@ public class AgentChatController {
         AgentDefinition agent = preCheck.agent();
         DaiPrincipal principal = preCheck.principal();
         Authentication auth = preCheck.authentication();
-        UUID turnId = UUID.randomUUID();
+        UUID turnId = Ids.newId();
 
         String clientRequestId = clientRequestId(body);
         if (clientRequestId != null) {
             UUID earlier = clientRequests.register(principal.principalId(), agent.id(), clientRequestId, turnId);
             if (earlier != null) {
-                return duplicateRequest(earlier, slug, httpRequest);
+                return duplicateRequest(earlier, true, slug, httpRequest);
             }
         }
 
+        // The invoker uses this id for turn.start and telemetry, so SSE ids, the replay URL and the trace agree.
         var chatRequest = new AgentInvoker.AgentChatRequest(
                 body.conversationId(), body.message(),
-                clientRequestId != null ? clientRequestId : UUID.randomUUID().toString());
+                clientRequestId != null ? clientRequestId : UUID.randomUUID().toString(), turnId);
 
         // Sequence counter for SSE event ids
         AtomicInteger seq = new AtomicInteger(0);
@@ -700,12 +705,12 @@ public class AgentChatController {
         }
     }
 
-    private static ResponseEntity<String> duplicateRequest(@Nullable UUID earlierTurn, String slug,
+    private static ResponseEntity<String> duplicateRequest(UUID earlierTurn, boolean resumable, String slug,
                                                             HttpServletRequest httpRequest) {
-        String detail = earlierTurn == null
-                ? "This clientRequestId was already used for a turn that is running or has completed."
-                : "This clientRequestId already started turn " + earlierTurn + ". Resume it with GET "
-                        + "/dynamic-ai/api/agents/" + slug + "/turns/" + earlierTurn + "/events.";
+        String detail = resumable
+                ? "This clientRequestId already started turn " + earlierTurn + ". Resume it with GET "
+                        + "/dynamic-ai/api/agents/" + slug + "/turns/" + earlierTurn + "/events."
+                : "This clientRequestId already started turn " + earlierTurn + ", which is running or has completed.";
         return ResponseEntity.status(ProblemCode.CONFLICT.httpStatus())
                 .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
                 .body(ProblemDetailFactory.build(ProblemCode.CONFLICT, "Duplicate request", detail,

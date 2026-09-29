@@ -26,6 +26,28 @@ public record ToolBinding(ResourceId id, int revision, WorkspaceId workspace,
         ResultPolicy result) {}             // maxChars, masking, summarization
 ```
 
+**Tool binding spec (published `TOOL_BINDING` resource, `ToolBindingSpecs`).**
+
+```json
+{ "toolName": "find_orders",
+  "description": "optional override of the catalog description",
+  "source": {"kind": "operation", "ref": "op:com.acme.OrderService#find(java.lang.String)"}
+          | {"kind": "query", "ref": "<query resource uuid>"}
+          | {"kind": "agent", "ref": "<agent resource uuid>"}
+          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"},
+  "writeMode": "EXECUTE | PROPOSE",
+  "argConstraints": {"customerId": {"kind": "principalAttr", "attr": "customerId"},
+                     "status": {"kind": "literal", "value": "OPEN"},
+                     "limit": {"kind": "range", "min": 1, "max": 50}},
+  "returnDirect": false, "timeoutSeconds": 30, "maxCallsPerTurn": 5,
+  "result": {"maxChars": 0, "maskSensitive": true},
+  "mcpExposed": false }
+```
+`mcp` sources are parsed but not yet executed (the remote-MCP client is v1.x, §6). Argument constraints are enforced
+by `SecuredToolCallback` (`ArgConstraints`): `principalAttr` and `literal` overwrite what the model sent, a missing
+caller attribute refuses the call, a `range` violation refuses it. A binding whose spec does not parse is skipped
+with a warning; the others keep working.
+
 ## 3. Building a ToolCallback (per request, from cached definitions)
 ```
 OperationSource:
@@ -106,7 +128,18 @@ ScopedValue.where(INVOCATION, ctx.withMode(AI_READ)).call(() ->
 - `readOnly=false` actions never reach this path — they are proposal-only (§3 step 5, LLD-11).
 - Not an AOP aspect: enforcement lives only on the AI path, so ordinary host traffic is untouched (ADR-0014 context).
 
-## 5. MCP server (F-55, v1.0 behind `dynamic.ai.agent.mcp.server.enabled`, default off) — ADR-0016
+## 5. MCP server (F-55, v1.0 behind `dynamic.ai.agent.mcp.enabled`, default off) — ADR-0016
+
+> **Implemented (2026-09-29):** the endpoint speaks the MCP protocol directly instead of using the MCP Java SDK
+> (see the ADR-0016 amendment). `McpProtocolHandler` (mcp module) parses one stateless JSON-RPC POST and answers
+> `initialize`, `ping`, `tools/list` and `tools/call` for protocol versions 2025-11-25, 2025-06-18 and 2025-03-26;
+> `McpEndpointController` adds the HTTP checks (Origin, `MCP-Protocol-Version`, size cap, authentication, workspace,
+> approved client). The workspace is the `X-DAI-Workspace` header or `mcp.workspace-id`. Tool bindings are published
+> `TOOL_BINDING` resources (§2). Every request is recorded in `dai_mcp_request`, every tool call in
+> `dai_tool_invocation` under that request. Not implemented: stateful mode and sessions (§5.1), resources/prompts
+> (§5.2), the `insufficient_scope` step-up `403` (§5.4; a tool outside the token's scopes is not listed and looks
+> unknown), per-session/per-client rate limits (§5.5). Tracked in OQ-48 and OQ-49.
+
 ### 5.1 Transport
 | Transport | Support | Why |
 |-----------|---------|-----|

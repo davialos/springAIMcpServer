@@ -409,8 +409,8 @@ dynamic:
         ui:
           enabled: true          # embedded admin dashboard — see §8 for the PROD default
       mcp:
-        server:
-          enabled: true          # exposes agents/tools over MCP at /dynamic-ai/mcp — LLD-07 §5, confirm v1.x status
+        enabled: true            # serves POST /dynamic-ai/mcp (default false) — §9
+        workspace-id: 0193…      # workspace used when a request sends no X-DAI-Workspace header
 ```
 
 `dynamic.ai.agent.store.enabled` (default `true`) is independent of these — the persistence unit initializes
@@ -474,8 +474,37 @@ client records a consent entry (`dai_mcp_client_consent`), visible and revocable
 | `dai.mcp.propose` | Call write tools — which only ever create a proposal (§6), never execute directly |
 | `dai.mcp.agents` | Call `ask_<agent>` tools |
 
-`dynamic.ai.agent.mcp.server.mode` (`stateful` default, or `stateless` for multi-replica hosts without sticky
-sessions — OQ-22) controls whether the server keeps per-session state or treats every request independently.
+**Enabling it.** Off by default. Set `dynamic.ai.agent.mcp.enabled=true` and make the endpoint reachable:
+
+```yaml
+dynamic.ai.agent.mcp:
+  enabled: true
+  workspace-id: <uuid>            # or require every client to send the X-DAI-Workspace header
+  resource-uri: https://host.example.com/dynamic-ai/mcp   # audience of the tokens; used in the metadata
+  authorization-servers: [https://login.example.com/realms/acme]
+  allowed-origins: []             # Origin values allowed for browser clients; requests without Origin are fine
+  max-request-bytes: 1048576
+  require-approved-client: true   # default; false only for trusted networks
+```
+
+The endpoint is **stateless** (`POST` only, one JSON-RPC message per request, JSON responses, no
+`Mcp-Session-Id`; `GET`/`DELETE` answer 405), so any replica behind a plain round-robin balancer can serve it
+(ADR-0021). `transport: STATEFUL` is not implemented and logs a warning. Authentication is **your** Spring
+Security filter chain: configure it as an OAuth2 resource server (audience = `resource-uri`, see
+`McpAudienceValidators`) or with API keys, and require authentication for `/dynamic-ai/mcp`; permit
+`/.well-known/oauth-protected-resource/dynamic-ai/mcp` without authentication. Unauthenticated calls get `401`
+with `WWW-Authenticate: Bearer resource_metadata="…"`.
+
+**Tools.** A tool is offered only if a published `TOOL_BINDING` resource has `mcpExposed: true`, the caller's
+token has the scope and the caller holds the grant (`tool:invoke`, `agent:invoke`, plus `data:write-propose` for
+proposal tools). A tool the caller may not use looks exactly like an unknown tool. Every call runs as the caller,
+in the read-only scope, with the binding's argument constraints applied, and is recorded in `dai_tool_invocation`
+(hashes only) under a `dai_mcp_request` row. Writes never execute: a PROPOSE tool answers
+`proposal_unavailable` until the store-backed proposal service exists (OQ-48).
+
+**Not yet:** MCP resources and prompts, server-initiated notifications (`tools/list_changed`), per-client rate
+limits, `insufficient_scope` step-up challenges (a tool outside the token's scopes is simply not listed), and the
+STDIO bridge (OQ-49).
 
 ### Conversation history (opt-in)
 

@@ -97,6 +97,8 @@ the check fails open by default (logged and counted in `dynamic.ai.agent.budget.
 | `dynamic.ai.agent.budget.cache-ttl` | `10s` (`0` disables the per-(workspace, agent, principal) decision cache) |
 | `dynamic.ai.agent.budget.fail-open` | `true` |
 
+**Turn telemetry (implemented slice):** `DefaultAgentInvoker` reports every finished turn, including refused, failed and cancelled ones, to the `TurnRecorder` port (no-op by default). `StoreTurnRecorder` writes one `dai_agent_turn` row and, when the provider reported tokens, one priced `dai_model_call` row on a virtual thread behind a 64-slot bulkhead; a full bulkhead or a failed write drops the record and increments `dynamic.ai.agent.turn.record.dropped` / `...failures`, never affecting the turn. Records hold identifiers, timings, token counts and outcome codes only. The turn id is the one the client saw (SSE ids, replay URL, response). See OQ-43 for what is not recorded yet.
+
 ## 7. Health & readiness
 `HealthContributor` `dynamicAi` with details: catalog state, snapshot generation & lag,
 config store reachability, model providers' breaker states. Configurable whether it

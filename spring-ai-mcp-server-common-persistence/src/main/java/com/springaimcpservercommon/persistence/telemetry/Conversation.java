@@ -88,7 +88,7 @@ public class Conversation {
             throw new IllegalArgumentException("retention must be positive and at most " + MAX_RETENTION.toDays() + " days");
         }
         Conversation c = new Conversation();
-        c.id = Ids.newId();
+        c.id = conversation.id() != null ? conversation.id() : Ids.newId();
         c.conversationKeyHash = Checks.sha256(conversation.conversationKeyHash(), "conversationKeyHash");
         c.workspaceId = Checks.required(conversation.workspaceId(), "workspaceId");
         c.agentResourceId = conversation.agentResourceId();

@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
+import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
 import com.springaimcpservercommon.ai.agent.LimitSpec;
@@ -361,6 +362,20 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean({TelemetryStore.class, ModelCostCalculator.class})
     public TurnRecorder storeTurnRecorder(TelemetryStore store, ModelCostCalculator costs) {
         return new StoreTurnRecorder(store, costs);
+    }
+
+    /**
+     * Store-backed tool-call recording (F-72): one {@code dai_tool_invocation} row per tool call, written off the
+     * request path. Supersedes the no-op default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param store telemetry store
+     * @return the recorder
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(ToolCallRecorder.class)
+    @ConditionalOnBean(TelemetryStore.class)
+    public ToolCallRecorder storeToolCallRecorder(TelemetryStore store) {
+        return new StoreToolCallRecorder(store);
     }
 
     /**

@@ -85,6 +85,8 @@ public final class ToolBridge {
     private final @Nullable AgentCallbackFactory agentFactory;
     private final SecuredToolCallback.ToolPermissionChecker permissionChecker;
     private final ProposalService proposalService;
+    private final ToolCallRecorder recorder;
+    private final java.time.Clock clock;
 
     /**
      * Constructs the bridge with all required ports and no sub-agent delegation support.
@@ -119,12 +121,38 @@ public final class ToolBridge {
                        @Nullable AgentCallbackFactory agentFactory,
                        SecuredToolCallback.ToolPermissionChecker permissionChecker,
                        ProposalService proposalService) {
+        this(bindingLoader, operationFactory, queryFactory, agentFactory, permissionChecker, proposalService,
+                ToolCallRecorder.NOOP, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Constructs the bridge with tool-call recording.
+     *
+     * @param bindingLoader     loads ToolBindings from the catalog store
+     * @param operationFactory  builds delegate callbacks for operation-backed tools
+     * @param queryFactory      builds delegate callbacks for query-backed tools
+     * @param agentFactory      builds delegate callbacks for agent-backed tools; {@code null} disables AgentSource routing
+     * @param permissionChecker runtime permission check per call
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
+     * @param recorder          receives one record per tool call made through callbacks built with a scope
+     * @param clock             time source for call timing
+     */
+    public ToolBridge(ToolBindingLoader bindingLoader,
+                       OperationCallbackFactory operationFactory,
+                       QueryCallbackFactory queryFactory,
+                       @Nullable AgentCallbackFactory agentFactory,
+                       SecuredToolCallback.ToolPermissionChecker permissionChecker,
+                       ProposalService proposalService,
+                       ToolCallRecorder recorder,
+                       java.time.Clock clock) {
         this.bindingLoader = Objects.requireNonNull(bindingLoader, "bindingLoader");
         this.operationFactory = Objects.requireNonNull(operationFactory, "operationFactory");
         this.queryFactory = Objects.requireNonNull(queryFactory, "queryFactory");
         this.agentFactory = agentFactory; // optional
         this.permissionChecker = Objects.requireNonNull(permissionChecker, "permissionChecker");
         this.proposalService = Objects.requireNonNull(proposalService, "proposalService");
+        this.recorder = Objects.requireNonNull(recorder, "recorder");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     /**
@@ -141,6 +169,22 @@ public final class ToolBridge {
      */
     public List<ToolCallback> buildCallbacks(AgentDefinition agent, DaiPrincipal principal,
                                               Authentication authentication, EffectiveCatalog catalog) {
+        return buildCallbacks(agent, principal, authentication, catalog, null);
+    }
+
+    /**
+     * Builds the tool callback list for one agent turn, recording every tool call under the given scope.
+     *
+     * @param agent          the agent definition governing this turn
+     * @param principal      the calling principal
+     * @param authentication Spring Security authentication for the caller
+     * @param catalog        the effective catalog snapshot for this workspace
+     * @param scope          channel and turn the calls belong to; {@code null} disables recording
+     * @return an ordered, immutable list of secured tool callbacks
+     */
+    public List<ToolCallback> buildCallbacks(AgentDefinition agent, DaiPrincipal principal,
+                                              Authentication authentication, EffectiveCatalog catalog,
+                                              @Nullable ToolCallScope scope) {
         Objects.requireNonNull(agent, "agent");
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(authentication, "authentication");
@@ -162,7 +206,7 @@ public final class ToolBridge {
             }
             result.add(new SecuredToolCallback(
                     delegate, binding, principal, authentication,
-                    new AtomicInteger(0), permissionChecker, proposalService));
+                    new AtomicInteger(0), permissionChecker, proposalService, recorder, scope, clock));
         }
         return List.copyOf(result);
     }
@@ -182,6 +226,23 @@ public final class ToolBridge {
     public @org.jspecify.annotations.Nullable ToolCallback buildCallback(ToolBinding binding, DaiPrincipal principal,
                                                                            Authentication authentication,
                                                                            EffectiveCatalog catalog) {
+        return buildCallback(binding, principal, authentication, catalog, null);
+    }
+
+    /**
+     * Builds a single secured tool callback that records its calls under the given scope.
+     *
+     * @param binding        the tool binding
+     * @param principal      calling principal
+     * @param authentication Spring Security authentication
+     * @param catalog        effective catalog snapshot
+     * @param scope          channel and request the calls belong to; {@code null} disables recording
+     * @return the secured callback, or {@code null} if the delegate cannot be resolved
+     */
+    public @org.jspecify.annotations.Nullable ToolCallback buildCallback(ToolBinding binding, DaiPrincipal principal,
+                                                                           Authentication authentication,
+                                                                           EffectiveCatalog catalog,
+                                                                           @Nullable ToolCallScope scope) {
         Objects.requireNonNull(binding, "binding");
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(authentication, "authentication");
@@ -190,7 +251,7 @@ public final class ToolBridge {
         ToolCallback delegate = resolveDelegate(binding, principal, authentication, catalog);
         if (delegate == null) return null;
         return new SecuredToolCallback(delegate, binding, principal, authentication,
-                new AtomicInteger(0), permissionChecker, proposalService);
+                new AtomicInteger(0), permissionChecker, proposalService, recorder, scope, clock);
     }
 
     /**

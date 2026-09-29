@@ -10,6 +10,7 @@ import com.springaimcpservercommon.ai.agent.MemorySpec;
 import com.springaimcpservercommon.ai.agent.OutputSpec;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.ai.tool.ToolCallScope;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
@@ -138,7 +139,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         "The usage budget for this agent is exhausted for the current period.", false);
             }
             ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
+            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId);
             ChatClient client = buildChatClient(agent, principal, chatModel);
             String convKey = convKey(principal, agent, conversationId);
 
@@ -199,7 +200,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             "budget-exhausted", false, turnId));
                 }
                 ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
+                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId);
                 ChatClient client = buildChatClient(agent, principal, chatModel);
                 String convKey = convKey(principal, agent, conversationId);
 
@@ -369,11 +370,13 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     // ─── Tool callbacks ───────────────────────────────────────────────────────
 
     private List<ToolCallback> buildToolCallbacks(AgentDefinition agent, DaiPrincipal principal,
-                                                    Authentication authentication) {
+                                                    Authentication authentication, AgentChatRequest request,
+                                                    UUID turnId) {
         if (toolBridge == null || agent.tools().isEmpty()) {
             return List.of();
         }
-        return toolBridge.buildCallbacks(agent, principal, authentication, metadataRegistry.current());
+        return toolBridge.buildCallbacks(agent, principal, authentication, metadataRegistry.current(),
+                ToolCallScope.ofTurn(request.effectiveChannel(), turnId));
     }
 
     // ─── Conversation key ─────────────────────────────────────────────────────

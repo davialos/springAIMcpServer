@@ -12,6 +12,7 @@ import com.springaimcpservercommon.ai.tool.AgentCatalogPort;
 import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
@@ -77,6 +78,18 @@ public class DaiAiAutoConfiguration {
     @ConditionalOnMissingBean(TurnRecorder.class)
     public TurnRecorder turnRecorder() {
         return TurnRecorder.NOOP;
+    }
+
+    /**
+     * Default no-op tool-call recorder. Superseded by the store-backed recorder from
+     * {@link DaiPersistenceAutoConfiguration} when the {@code dynamic_ai} store is present.
+     *
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolCallRecorder.class)
+    public ToolCallRecorder toolCallRecorder() {
+        return ToolCallRecorder.NOOP;
     }
 
     /**
@@ -199,6 +212,7 @@ public class DaiAiAutoConfiguration {
      * @param agentFactoryProvider optional sub-agent callback factory
      * @param permissionChecker    runtime per-call permission check
      * @param proposalService      creates ChangeProposal records for PROPOSE-mode tools
+     * @param toolCallRecorder     receives one record per tool call
      * @return the bridge
      */
     @Bean
@@ -211,10 +225,11 @@ public class DaiAiAutoConfiguration {
                                   ToolBridge.QueryCallbackFactory queryFactory,
                                   ObjectProvider<ToolBridge.AgentCallbackFactory> agentFactoryProvider,
                                   SecuredToolCallback.ToolPermissionChecker permissionChecker,
-                                  ProposalService proposalService) {
+                                  ProposalService proposalService,
+                                  ToolCallRecorder toolCallRecorder) {
         return new ToolBridge(bindingLoader, operationFactory, queryFactory,
                 agentFactoryProvider.getIfAvailable(),
-                permissionChecker, proposalService);
+                permissionChecker, proposalService, toolCallRecorder, java.time.Clock.systemUTC());
     }
 
     /**

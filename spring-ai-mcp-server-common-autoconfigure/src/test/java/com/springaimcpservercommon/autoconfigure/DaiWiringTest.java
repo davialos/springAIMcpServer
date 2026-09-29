@@ -172,4 +172,14 @@ class DaiWiringTest {
                 .run(context -> assertThat(context.getBeanNamesForType(MaintenanceRunner.class)).isEmpty());
         runner().run(context -> assertThat(context.getBeanNamesForType(MaintenanceRunner.class)).isEmpty());
     }
+
+    @Test
+    void toolCallsAreRecordedToTheStoreWhenItExists() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ToolCallRecorder.class))
+                        .containsExactly("storeToolCallRecorder"));
+        runner().run(context ->
+                assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ToolCallRecorder.class))
+                        .containsExactly("toolCallRecorder"));
+    }
 }

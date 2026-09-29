@@ -83,6 +83,8 @@ Rules:
 - `error` carries a stable `code` + safe `message` (e.g. `invalid_argument: date must be ISO-8601`), never a stack trace or SQL.
 - `truncated: true` whenever the row cap (LLD-05 §5a) or `result-max-chars` cut the data.
 
+**Recording (F-72, implemented).** `ToolBridge` builds each turn's callbacks with a `ToolCallScope` (channel plus turn id, or MCP request id) fixed at build time, so nothing depends on thread-local or scoped state reaching the thread that runs a tool. `SecuredToolCallback` reports every call it handles, whatever the outcome (OK, EMPTY, TRUNCATED, ERROR, NOT_PERMITTED, PROPOSED, call-limit, write-guard veto) to a `ToolCallRecorder`. The record carries hashes of the arguments and of the result, never the values. `StoreToolCallRecorder` writes it to `dai_tool_invocation` off the request path (bounded virtual-thread bulkhead; a full bulkhead or failed write drops and counts the record). Recording failures never change what the model receives. Gaps are tracked in OQ-43.
+
 ## 4. Why proxies & runs-as-caller (ADR-0008)
 An LLM is an untrusted planner. If tools ran with a service identity, any user could
 reach any data the service can (confused deputy). Therefore: caller's `Authentication`

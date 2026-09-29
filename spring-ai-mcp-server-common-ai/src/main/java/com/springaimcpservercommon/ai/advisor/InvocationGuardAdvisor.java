@@ -62,16 +62,19 @@ public final class InvocationGuardAdvisor implements CallAroundAdvisor {
     /**
      * Port: checks whether the principal has remaining token/cost budget.
      *
-     * <p>Implemented in the {@code webmvc} or {@code autoconfigure} module; injected at construction time.
+     * <p>Implemented in the {@code autoconfigure} module on top of the usage ledger; injected at
+     * construction time. Implementations must be cheap (called on every turn) and must decide what to do
+     * when their backing store is unavailable; the default implementation fails open.
      */
     @FunctionalInterface
     public interface BudgetChecker {
         /**
+         * @param agent     the agent being invoked (its workspace and id scope the applicable budgets)
          * @param principal the calling principal
-         * @param agentId   the agent being invoked
-         * @return {@code true} if the budget allows the turn to proceed
+         * @return {@code true} if the budget allows the turn to proceed, {@code false} if a hard limit
+         *         that applies to this turn has been reached
          */
-        boolean hasRemainingBudget(DaiPrincipal principal, java.util.UUID agentId);
+        boolean hasRemainingBudget(AgentDefinition agent, DaiPrincipal principal);
     }
 
     private final AgentDefinition agent;
@@ -146,7 +149,7 @@ public final class InvocationGuardAdvisor implements CallAroundAdvisor {
         }
 
         // Budget check
-        if (!budgetChecker.hasRemainingBudget(principal, agent.id())) {
+        if (!budgetChecker.hasRemainingBudget(agent, principal)) {
             LOG.warn("Agent {} budget exhausted for principal {}", agent.slug(), principal.principalId());
             return blocked(request, "budget_exhausted",
                     "Usage limit reached. Please contact your administrator.");

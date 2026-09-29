@@ -41,19 +41,20 @@ public final class UsageMeteringAdvisor implements CallAroundAdvisor {
     /**
      * Port: persists token usage for budget accounting.
      *
-     * <p>Implemented in the {@code persistence} module or a no-op default in {@code autoconfigure}.
+     * <p>Implemented in {@code autoconfigure} on top of the usage ledger, with a no-op default. Called once
+     * per completed model call, for both synchronous and streamed turns.
      */
     @FunctionalInterface
     public interface UsageSink {
         /**
          * Records token usage for the given turn.
          *
+         * @param agent            agent that produced the usage (workspace, id and configured model)
          * @param principal        calling principal
-         * @param agentId          agent that produced the usage
          * @param promptTokens     input tokens consumed
          * @param completionTokens output tokens produced
          */
-        void record(DaiPrincipal principal, java.util.UUID agentId, long promptTokens, long completionTokens);
+        void record(AgentDefinition agent, DaiPrincipal principal, long promptTokens, long completionTokens);
     }
 
     private final AgentDefinition agent;
@@ -124,6 +125,6 @@ public final class UsageMeteringAdvisor implements CallAroundAdvisor {
         LOG.debug("Agent {} used {} prompt + {} completion = {} total tokens for principal {}",
                 agent.slug(), prompt, completion, total, principal.principalId());
 
-        usageSink.record(principal, agent.id(), prompt, completion);
+        usageSink.record(agent, principal, prompt, completion);
     }
 }

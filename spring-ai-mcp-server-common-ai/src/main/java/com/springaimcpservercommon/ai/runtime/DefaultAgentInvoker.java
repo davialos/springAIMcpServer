@@ -113,6 +113,12 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         LOG.debug("Agent {} sync turn {} for principal {}", agent.slug(), turnId, principal.principalId());
 
         try {
+            if (!budgetChecker.hasRemainingBudget(agent, principal)) {
+                LOG.warn("Agent {} budget exhausted for principal {}; sync turn {} rejected",
+                        agent.slug(), principal.principalId(), turnId);
+                throw new AgentInvocationException("budget-exhausted",
+                        "The usage budget for this agent is exhausted for the current period.", false);
+            }
             ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
             List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
             ChatClient client = buildChatClient(agent, principal, chatModel);
@@ -151,6 +157,13 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             LOG.debug("Agent {} stream turn {} for principal {}",
                     agent.slug(), turnId, principal.principalId());
             try {
+                if (!budgetChecker.hasRemainingBudget(agent, principal)) {
+                    LOG.warn("Agent {} budget exhausted for principal {}; stream turn {} rejected",
+                            agent.slug(), principal.principalId(), turnId);
+                    return Flux.just(new StreamEvent.ErrorEvent(
+                            "/errors/agent/budget-exhausted", "Usage limit reached",
+                            "budget-exhausted", false, turnId));
+                }
                 ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
                 List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
                 ChatClient client = buildChatClient(agent, principal, chatModel);
@@ -169,8 +182,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         .doOnNext(lastResponse::set)
                         .flatMapIterable(r -> extractTextDeltas(r, seq));
 
-                Flux<StreamEvent> ending = Flux.defer(() ->
-                        Flux.fromIterable(buildEndingEvents(lastResponse.get(), agent, turnId)));
+                Flux<StreamEvent> ending = Flux.defer(() -> {
+                    ChatResponse last = lastResponse.get();
+                    recordStreamUsage(agent, principal, last);
+                    return Flux.fromIterable(buildEndingEvents(last, agent, turnId));
+                });
 
                 StreamEvent turnStart = new StreamEvent.TurnStart(
                         turnId, conversationId, agent.slug(), agent.revision(),
@@ -262,6 +278,25 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         String text = response.getResult().getOutput().getText();
         if (text == null || text.isEmpty()) return List.of();
         return List.of(new StreamEvent.TextDelta(seq.incrementAndGet(), text));
+    }
+
+    /** Streamed turns bypass the call advisor chain, so their usage is recorded here (failures never break the turn). */
+    private void recordStreamUsage(AgentDefinition agent, DaiPrincipal principal, @Nullable ChatResponse last) {
+        if (last == null || last.getMetadata() == null || last.getMetadata().getUsage() == null) {
+            return;
+        }
+        var u = last.getMetadata().getUsage();
+        long prompt = u.getPromptTokens() != null ? u.getPromptTokens() : 0L;
+        long completion = u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L;
+        if (prompt + completion == 0) {
+            return;
+        }
+        try {
+            usageSink.record(agent, principal, prompt, completion);
+        } catch (RuntimeException e) {
+            LOG.warn("Usage recording failed for streamed turn of agent {} principal {}; usage not recorded",
+                    agent.slug(), principal.principalId(), e);
+        }
     }
 
     private static List<StreamEvent> buildEndingEvents(@Nullable ChatResponse last,

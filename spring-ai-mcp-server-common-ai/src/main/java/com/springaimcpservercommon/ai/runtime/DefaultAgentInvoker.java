@@ -63,6 +63,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultAgentInvoker.class);
     private static final int MEMORY_ORDER = Ordered.HIGHEST_PRECEDENCE + 201;
+    /** Cap on the answer text kept in memory for a streamed turn that is being recorded. */
+    private static final int MAX_RECORDED_ANSWER_CHARS = 200_000;
 
     private final ModelRouter modelRouter;
     private final @Nullable ToolBridge toolBridge;
@@ -71,6 +73,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final InvocationGuardAdvisor.BudgetChecker budgetChecker;
     private final UsageMeteringAdvisor.UsageSink usageSink;
     private final TurnRecorder turnRecorder;
+    private final ConversationRecorder conversationRecorder;
     private final Clock clock = Clock.systemUTC();
     private final ObservationRegistry observationRegistry;
     private final ChatMemory chatMemory;
@@ -86,6 +89,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
      * @param budgetChecker        token-budget pre-check
      * @param usageSink            token usage accounting
      * @param turnRecorder         receives one record per finished turn (trace viewer, F-72)
+     * @param conversationRecorder receives the user message and answer of each successful turn (F-44)
      * @param observationRegistry  Micrometer observation registry
      * @param chatMemory           conversation history store
      * @param schemaValidator      optional JSON Schema conformance validator (Level 2);
@@ -98,6 +102,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 InvocationGuardAdvisor.BudgetChecker budgetChecker,
                                 UsageMeteringAdvisor.UsageSink usageSink,
                                 TurnRecorder turnRecorder,
+                                ConversationRecorder conversationRecorder,
                                 ObservationRegistry observationRegistry,
                                 ChatMemory chatMemory,
                                 @Nullable JsonSchemaValidationPort schemaValidator) {
@@ -108,6 +113,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         this.budgetChecker = Objects.requireNonNull(budgetChecker, "budgetChecker");
         this.usageSink = Objects.requireNonNull(usageSink, "usageSink");
         this.turnRecorder = Objects.requireNonNull(turnRecorder, "turnRecorder");
+        this.conversationRecorder = Objects.requireNonNull(conversationRecorder, "conversationRecorder");
         this.observationRegistry = Objects.requireNonNull(observationRegistry, "observationRegistry");
         this.chatMemory = Objects.requireNonNull(chatMemory, "chatMemory");
         this.schemaValidator = schemaValidator;
@@ -151,6 +157,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, null,
                     result.usage().inputTokens(), result.usage().outputTokens());
+            recordExchange(agent, request, principal, turnId, conversationId, startedAt, result.message());
             return result;
         } catch (AgentInvocationException e) {
             boolean budget = "budget-exhausted".equals(e.code());
@@ -200,6 +207,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 AtomicReference<@Nullable ChatResponse> lastResponse = new AtomicReference<>();
                 AtomicReference<@Nullable Instant> firstText = new AtomicReference<>();
                 AtomicReference<@Nullable String> failure = new AtomicReference<>();
+                StringBuilder answer = new StringBuilder();
 
                 Flux<StreamEvent> content = client.prompt()
                         .user(request.message())
@@ -213,6 +221,15 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             List<StreamEvent> deltas = extractTextDeltas(r, seq);
                             if (!deltas.isEmpty()) {
                                 firstText.compareAndSet(null, clock.instant());
+                                for (StreamEvent e : deltas) {
+                                    if (e instanceof StreamEvent.TextDelta d) {
+                                        synchronized (answer) {
+                                            if (answer.length() < MAX_RECORDED_ANSWER_CHARS) {
+                                                answer.append(d.text());
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             return deltas;
                         });
@@ -260,6 +277,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, ttft,
                                 usage[0], usage[1]);
+                        String text;
+                        synchronized (answer) {
+                            text = answer.toString();
+                        }
+                        recordExchange(agent, request, principal, turnId, conversationId, startedAt, text);
                     }
                 });
             } catch (Exception e) {
@@ -287,6 +309,21 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                     finish, errorCode, timeToFirstTokenMs, streaming, inputTokens, outputTokens));
         } catch (RuntimeException e) {
             LOG.warn("Turn recording failed for agent {} turn {}; the turn is unaffected", agent.slug(), turnId, e);
+        }
+    }
+
+    /** Hands the message pair of a successful turn to the conversation recorder (never affects the turn). */
+    private void recordExchange(AgentDefinition agent, AgentChatRequest request, DaiPrincipal principal, UUID turnId,
+                                UUID conversationId, Instant startedAt, String answer) {
+        if (answer.isBlank() || request.message().isBlank()) {
+            return;
+        }
+        try {
+            conversationRecorder.record(new ConversationRecorder.Exchange(conversationId, turnId, agent, principal,
+                    request.effectiveChannel(), request.message(), answer, startedAt));
+        } catch (RuntimeException e) {
+            LOG.warn("Conversation recording failed for agent {} turn {}; the turn is unaffected",
+                    agent.slug(), turnId, e);
         }
     }
 

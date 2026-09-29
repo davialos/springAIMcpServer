@@ -28,6 +28,7 @@ class DefaultAgentInvokerBudgetTest {
 
     private final AtomicInteger modelResolutions = new AtomicInteger();
     private final AtomicInteger usageRecords = new AtomicInteger();
+    private final List<ConversationRecorder.Exchange> exchanges = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<TurnRecorder.TurnRecord> recorded = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private final AgentDefinition agent = new AgentDefinition(UUID.randomUUID(), 1, UUID.randomUUID(), "support-bot",
@@ -55,6 +56,7 @@ class DefaultAgentInvokerBudgetTest {
                 (a, p) -> withinBudget,
                 (a, p, prompt, completion) -> usageRecords.incrementAndGet(),
                 recorder,
+                exchanges::add,
                 ObservationRegistry.NOOP,
                 new InMemoryChatMemory(),
                 null);
@@ -142,5 +144,14 @@ class DefaultAgentInvokerBudgetTest {
         List<StreamEvent> events = invoker(false, broken).stream(agent, request, principal, null)
                 .collectList().block();
         assertThat(events).hasSize(1);
+    }
+
+    @Test
+    void refusedTurnsNeverReachTheConversationRecorder() {
+        assertThatThrownBy(() -> invoker(false).invoke(agent, request, principal, null))
+                .isInstanceOf(AgentInvocationException.class);
+        invoker(false).stream(agent, request, principal, null).collectList().block();
+
+        assertThat(exchanges).isEmpty();
     }
 }

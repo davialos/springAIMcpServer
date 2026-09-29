@@ -191,13 +191,20 @@ public record DaiProperties(
      * @param requireApprover every proposal also needs a second person's approval (a delete always does)
      * @param maxConcurrentApplies most confirmed proposals applied at the same time on this node (1..100); more get
      *                        429 and can retry (bulkhead, LLD-12)
+     * @param requireBaseVersion  an update or delete proposal must carry the version of the record it changes (the
+     *                        tool binding names the id argument and the entity is versioned); otherwise it is refused
+     * @param captureBeforeValues also store the record's exposed, non-sensitive values (within the caller's
+     *                        clearance) as the before-snapshot for the review diff; off by default because the host's
+     *                        row-level visibility is not applied when reading them
      */
     public record Write(
             @DefaultValue("7d") Duration retention,
             @DefaultValue("false") boolean enabled,
             @DefaultValue("15m") Duration proposalTtl,
             @DefaultValue("false") boolean requireApprover,
-            @DefaultValue("8") int maxConcurrentApplies) {
+            @DefaultValue("8") int maxConcurrentApplies,
+            @DefaultValue("false") boolean requireBaseVersion,
+            @DefaultValue("false") boolean captureBeforeValues) {
         /** Validates the settings. */
         public Write {
             if (maxConcurrentApplies < 1 || maxConcurrentApplies > 100) {

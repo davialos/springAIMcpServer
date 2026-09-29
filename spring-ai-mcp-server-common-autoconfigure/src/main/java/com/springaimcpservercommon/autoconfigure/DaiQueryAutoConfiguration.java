@@ -87,6 +87,28 @@ public class DaiQueryAutoConfiguration {
         return new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent, timeoutMs);
     }
 
+    /**
+     * Versions of the host's records for the write path (LLD-11 §5): host-registered
+     * {@link com.springaimcpservercommon.core.versioning.VersioningAdapter} beans first (Envers, history tables), then
+     * JPA {@code @Version}, then a hash of the exposed attributes. Read-only, over the host's own persistence unit.
+     *
+     * @param entityManagerFactory the host's entity manager factory
+     * @param registry             the live catalog
+     * @param hostAdapters         adapters the host registered
+     * @return the record versions
+     */
+    @Bean
+    @ConditionalOnMissingBean(com.springaimcpservercommon.core.versioning.RecordVersions.class)
+    @ConditionalOnBean({EntityManagerFactory.class, com.springaimcpservercommon.core.catalog.MetadataRegistry.class})
+    public com.springaimcpservercommon.core.versioning.RecordVersions recordVersions(
+            EntityManagerFactory entityManagerFactory,
+            com.springaimcpservercommon.core.catalog.MetadataRegistry registry,
+            org.springframework.beans.factory.ObjectProvider<
+                    com.springaimcpservercommon.core.versioning.VersioningAdapter> hostAdapters) {
+        return com.springaimcpservercommon.query.versioning.VersioningRegistry.forJpa(entityManagerFactory,
+                registry::current, hostAdapters.orderedStream().toList());
+    }
+
     private static int clamp(int value, int min, int max, int defaultValue) {
         if (value < min || value > max) return defaultValue;
         return value;

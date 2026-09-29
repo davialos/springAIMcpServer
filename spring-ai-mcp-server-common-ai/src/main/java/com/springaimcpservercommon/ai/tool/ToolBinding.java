@@ -30,6 +30,8 @@ import java.util.regex.Pattern;
  * @param mcpExposed          whether this binding is also exposed over MCP (LLD-07 §5.2)
  * @param change              what a PROPOSE tool stands for (create, update, delete); {@code null} means update. It decides
  *                            the default approval requirement of the proposal (delete needs an approver)
+ * @param entityIdArgument    for a PROPOSE tool: the name of the tool argument that holds the id of the record it
+ *                            changes; with it a proposal remembers the record's version and values (LLD-11 §5)
  */
 public record ToolBinding(
         UUID id,
@@ -45,7 +47,8 @@ public record ToolBinding(
         int maxCallsPerTurn,
         ResultPolicy result,
         boolean mcpExposed,
-        ProposalService.@Nullable Change change) {
+        ProposalService.@Nullable Change change,
+        @Nullable String entityIdArgument) {
 
     /**
      * Binding without a change kind ({@code UPDATE} is assumed if it proposes).
@@ -69,7 +72,33 @@ public record ToolBinding(
                        WriteMode writeMode, boolean returnDirect, Duration timeout, int maxCallsPerTurn,
                        ResultPolicy result, boolean mcpExposed) {
         this(id, revision, workspaceId, toolName, source, descriptionOverride, argConstraints, writeMode,
-                returnDirect, timeout, maxCallsPerTurn, result, mcpExposed, null);
+                returnDirect, timeout, maxCallsPerTurn, result, mcpExposed, null, null);
+    }
+
+    /**
+     * Binding without the name of the id argument (no base version is captured for a proposal).
+     *
+     * @param id                 binding resource id
+     * @param revision           revision number
+     * @param workspaceId        workspace
+     * @param toolName           tool name
+     * @param source             what the tool is backed by
+     * @param descriptionOverride description override
+     * @param argConstraints     server-decided arguments
+     * @param writeMode          EXECUTE or PROPOSE
+     * @param returnDirect       whether the result goes straight to the user
+     * @param timeout            per-call timeout
+     * @param maxCallsPerTurn    calls per turn cap
+     * @param result             result policy
+     * @param mcpExposed         whether offered over MCP
+     * @param change             what a PROPOSE tool stands for
+     */
+    public ToolBinding(UUID id, int revision, UUID workspaceId, String toolName, ToolSource source,
+                       @Nullable String descriptionOverride, Map<String, ArgConstraint> argConstraints,
+                       WriteMode writeMode, boolean returnDirect, Duration timeout, int maxCallsPerTurn,
+                       ResultPolicy result, boolean mcpExposed, ProposalService.@Nullable Change change) {
+        this(id, revision, workspaceId, toolName, source, descriptionOverride, argConstraints, writeMode,
+                returnDirect, timeout, maxCallsPerTurn, result, mcpExposed, change, null);
     }
 
     private static final Pattern TOOL_NAME_PATTERN = Pattern.compile("^[a-z][a-z0-9_]{2,63}$");

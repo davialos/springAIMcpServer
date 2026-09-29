@@ -503,9 +503,14 @@ in the read-only scope, with the binding's argument constraints applied, and is 
 (owned by the caller, `dynamic.ai.agent.write.enabled=true` needed, otherwise it answers `writes_disabled`); the
 caller confirms it through the review API, which then runs your operation **through your own Spring bean, as that
 user** (your `@PreAuthorize`, transactions, `@Version`, auditing and Envers see the real user). A host `OptimisticLock`
-failure is reported as a conflict. Applying is refused unless `write.enabled=true`, the capability `REVIEWED_WRITES`
-is on for the environment, and the user still holds `data:write-confirm`. Not yet: before-snapshots, a host revision
-reference on the proposal, editing (OQ-36).
+failure is reported as a conflict. **Record versions:** name the id argument in the tool binding
+(`entityIdArgument`) and the proposal remembers the record's version (JPA `@Version`, or a hash of the exposed,
+non-sensitive attributes when the entity has none); if the record changed before the user confirmed, the change is
+reported as a conflict and your operation is not called. Register a `VersioningAdapter` bean for Envers or a history
+table to be consulted first. Applying is refused unless `write.enabled=true`, the capability `REVIEWED_WRITES`
+is on for the environment, and the user still holds `data:write-confirm`. Optional: `write.capture-before-values`
+(store the record's exposed, non-sensitive values for the review diff; row-level visibility is not applied) and
+`write.require-base-version`. Not yet: Envers/history-table adapters, editing (OQ-36).
 
 **Not yet:** MCP resources and prompts, server-initiated notifications (`tools/list_changed`), per-client rate
 limits, `insufficient_scope` step-up challenges (a tool outside the token's scopes is simply not listed), and the

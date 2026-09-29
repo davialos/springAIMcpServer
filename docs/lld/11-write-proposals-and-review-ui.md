@@ -32,9 +32,22 @@
 > `PROPOSAL_CONFLICT`, `PROPOSAL_FAILED`. A crash between the host commit and `APPLIED` leaves `APPLYING`; the
 > maintenance runner marks it `FAILED/APPLY_TIMEOUT` for an operator to verify (never retried, §10).
 >
-> **Not implemented yet:** the before-snapshot and base version (`VersioningAdapter`; so no conflict is detected before
-> the host runs, only the host's own optimistic lock), the host revision reference on `APPLIED`, edit (`PATCH`),
-> `ENTITY_WRITE`, bulk, step-up authentication, and the `ui.component` events.
+> **Implemented (2026-09-29): record versions** (`VersioningAdapter` SPI in `core.versioning`; built-ins in the `query`
+> module, over the host's JPA metamodel with plain JPQL). The tool binding names the argument that holds the changed
+> record's id (`entityIdArgument`). At proposal time the record's **version token** is stored as the record's base
+> version (`JPA_VERSION` = the `@Version` attribute, else `ROW_HASH` = a hash of the exposed, enabled, non-sensitive
+> attributes); a record that does not exist cannot be updated or deleted (`record_not_found`). With
+> `write.capture-before-values=true` the exposed, non-sensitive values within the caller's clearance are stored as the
+> before-snapshot (off by default: the host's row-level visibility is not applied when reading them). At apply time the
+> token is compared **before the host runs**: changed or deleted → `CONFLICT/version_conflict`, unreadable →
+> `FAILED/version_unavailable`; afterwards the record's new token is stored as the host revision reference
+> (`JPA_VERSION:8`, or `DELETED`). The host's own optimistic lock stays the final guard (check-then-act).
+> `write.require-base-version=true` refuses proposals whose record version cannot be captured. Hosts register their own
+> `VersioningAdapter` bean (Envers, history table, temporal) and it is consulted first.
+>
+> **Not implemented yet:** the Envers, history-table and temporal adapters themselves (SPI only; the Envers API could not
+> be verified), history for the review UI, edit (`PATCH`), `ENTITY_WRITE`, bulk, step-up authentication, and the
+> `ui.component` events.
 
 ## 1. Purpose & responsibilities
 Let agents (and write endpoints) **propose** changes to host data, render those proposals
@@ -259,6 +272,8 @@ After apply, the agent conversation receives a tool result `{status: APPLIED, ho
 | `dynamic.ai.agent.write.retention` | `7d` (implemented) |
 | `dynamic.ai.agent.write.require-approver` | `false` (implemented; a delete always needs an approver) |
 | `dynamic.ai.agent.write.max-concurrent-applies` | `8` (implemented, 1..100; node-local bulkhead) |
+| `dynamic.ai.agent.write.require-base-version` | `false` (implemented) |
+| `dynamic.ai.agent.write.capture-before-values` | `false` (implemented) |
 
 ## 13. Observability
 Counter `dynamic.ai.agent.proposals{state,kind,origin}`, timer propose→confirm latency,

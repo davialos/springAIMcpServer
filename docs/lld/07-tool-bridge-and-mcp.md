@@ -37,6 +37,7 @@ public record ToolBinding(ResourceId id, int revision, WorkspaceId workspace,
           | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"},
   "writeMode": "EXECUTE | PROPOSE",            // PROPOSE needs an operation source (LLD-11)
   "change": "create | update | delete",        // what a PROPOSE tool does; default update, delete needs an approver
+  "entityIdArgument": "orderId",               // the argument holding the changed record's id (update/delete): enables the version check
   "argConstraints": {"customerId": {"kind": "principalAttr", "attr": "customerId"},
                      "status": {"kind": "literal", "value": "OPEN"},
                      "limit": {"kind": "range", "min": 1, "max": 50}},

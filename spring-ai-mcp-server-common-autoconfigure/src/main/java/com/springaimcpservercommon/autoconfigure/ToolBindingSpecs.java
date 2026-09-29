@@ -31,6 +31,7 @@ import java.util.UUID;
  *          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"},
  *   "writeMode": "EXECUTE" | "PROPOSE",              // default EXECUTE (a read tool)
  *   "change": "create" | "update" | "delete",        // what a PROPOSE tool does; default update, delete needs an approver
+ *   "entityIdArgument": "orderId",                   // the argument holding the changed record's id (update/delete)
  *   "argConstraints": {"customerId": {"kind": "principalAttr", "attr": "customerId"},
  *                      "status": {"kind": "literal", "value": "OPEN"},
  *                      "limit": {"kind": "range", "min": 1, "max": 50}},
@@ -78,7 +79,8 @@ final class ToolBindingSpecs {
                 new ResultPolicy((int) bounded(result.get("maxChars"), 0, 0, 10_000_000, "result.maxChars"),
                         bool(result.get("maskSensitive"), true)),
                 bool(spec.get("mcpExposed"), false),
-                spec.get("change") == null ? null : parseEnum(ProposalService.Change.class, spec.get("change"), "change"));
+                spec.get("change") == null ? null : parseEnum(ProposalService.Change.class, spec.get("change"), "change"),
+                spec.get("entityIdArgument") == null ? null : string(spec.get("entityIdArgument"), "entityIdArgument"));
     }
 
     private static ToolSource source(Map<String, Object> source) {

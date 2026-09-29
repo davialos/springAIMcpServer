@@ -10,7 +10,11 @@ import com.springaimcpservercommon.core.catalog.ResultBounding;
 import com.springaimcpservercommon.core.invocation.Channel;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.core.principal.SubjectType;
+import com.springaimcpservercommon.core.versioning.RecordVersions;
+import com.springaimcpservercommon.core.versioning.VersionLookup;
+import com.springaimcpservercommon.core.versioning.VersionToken;
 import com.springaimcpservercommon.persistence.proposal.ApprovalRequirement;
+import com.springaimcpservercommon.persistence.proposal.BaseVersionKind;
 import com.springaimcpservercommon.persistence.proposal.ChangeKind;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposal;
 import com.springaimcpservercommon.persistence.proposal.NewChangeProposal;
@@ -53,7 +57,7 @@ class ProposalApplierTest {
     private static final CatalogElementRef OP = CatalogElementRef.operation("com.acme.OrderService", "update",
             List.of());
     private static final DaiProperties.Write SETTINGS = new DaiProperties.Write(Duration.ofDays(7), true,
-            Duration.ofMinutes(15), false, 8);
+            Duration.ofMinutes(15), false, 8, false, false);
 
     private final DaiPrincipal alice = principal();
     private final Map<UUID, ChangeProposal> proposals = new HashMap<>();
@@ -106,9 +110,27 @@ class ProposalApplierTest {
         return proposal;
     }
 
+    private ChangeProposal confirmedWithVersion(String value) {
+        Map<String, Object> args = StoreProposalService.arguments("{\"orderId\":101}");
+        NewChangeProposal data = new NewChangeProposal(UUID.randomUUID(), ProposalOrigin.AGENT_TOOL, Channel.CHAT, null,
+                UUID.randomUUID(), UUID.randomUUID(), null, alice.principalId(), ProposalTargetKind.HOST_OPERATION, OP,
+                "{\"orderId\":101}", ChangeKind.UPDATE, ApprovalRequirement.SELF_CONFIRM, 0,
+                StoreProposalService.contentHash(OP, ChangeKind.UPDATE, args), "summary", null, null,
+                Duration.ofMinutes(15), Duration.ofDays(7),
+                List.of(new NewProposalRecord(ORDER, "101", null, "{\"orderId\":101}", BaseVersionKind.JPA_VERSION,
+                        value)));
+        ChangeProposal proposal = ChangeProposal.propose(data, T0);
+        assertThat(proposal.confirm(alice.principalId(), proposal.getContentHash(), T0.plusSeconds(30))).isTrue();
+        proposals.put(proposal.getId(), proposal);
+        return proposal;
+    }
+
     private ChangeProposal confirmed() {
         return confirmed("{\"status\":\"SHIPPED\"}", "{\"status\":\"SHIPPED\"}");
     }
+
+    private VersionLookup currentVersion = new VersionLookup.Found(new VersionToken(VersionToken.Kind.JPA_VERSION, "7"));
+    private boolean versioned = true;
 
     private ProposalApplier applier(DaiProperties.Write settings) {
         ProposalApplier.Proposals fake = new ProposalApplier.Proposals() {
@@ -150,7 +172,18 @@ class ProposalApplierTest {
             executedArgs.add(args);
             return handler.run(op, args, p);
         }, (caller, permission, ws) -> permitted && permission == Permission.DATA_WRITE_CONFIRM, settings,
-                Clock.fixed(clock.instant(), ZoneOffset.UTC));
+                Clock.fixed(clock.instant(), ZoneOffset.UTC), () -> versioned ? new RecordVersions() {
+                    @Override
+                    public VersionLookup current(CatalogElementRef entity, String entityId) {
+                        return currentVersion;
+                    }
+
+                    @Override
+                    public Optional<Map<String, Object>> exposedValues(CatalogElementRef entity, String entityId,
+                                                                       Classification clearance) {
+                        return Optional.empty();
+                    }
+                } : null);
     }
 
     private ProposalApplier applier() {
@@ -207,7 +240,7 @@ class ProposalApplierTest {
     @Test
     void nothingRunsWhenWritesAreOffOrThePermissionIsGone() {
         ChangeProposal proposal = confirmed();
-        var off = new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofMinutes(15), false, 8);
+        var off = new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofMinutes(15), false, 8, false, false);
         assertThatThrownBy(() -> applier(off).apply(proposal.getId(), alice))
                 .isInstanceOfSatisfying(ProposalApplier.ApplyRefusedException.class,
                         e -> assertThat(e.code()).isEqualTo("writes_disabled"));
@@ -310,7 +343,7 @@ class ProposalApplierTest {
 
     @Test
     void onlyTheConfiguredNumberOfAppliesRunAtOnce() throws Exception {
-        var single = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), false, 1);
+        var single = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), false, 1, false, false);
         ChangeProposal first = confirmed();
         ChangeProposal second = confirmed();
         CountDownLatch entered = new CountDownLatch(1);
@@ -341,5 +374,74 @@ class ProposalApplierTest {
             release.countDown();
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void aRecordThatChangedSinceTheProposalIsAConflictAndTheHostNeverRuns() {
+        ChangeProposal proposal = confirmedWithVersion("6");
+
+        ChangeProposal result = applier().apply(proposal.getId(), alice).proposal();
+
+        assertThat(result.getState()).isEqualTo(ProposalState.CONFLICT);
+        assertThat(result.getFailureCode()).isEqualTo("version_conflict");
+        assertThat(executedAs).isEmpty();
+        assertThat(transitions).containsExactly("CONFLICT:version_conflict");
+    }
+
+    @Test
+    void aDeletedRecordIsAConflictToo() {
+        ChangeProposal proposal = confirmedWithVersion("7");
+        currentVersion = new VersionLookup.Missing();
+
+        assertThat(applier().apply(proposal.getId(), alice).proposal().getState()).isEqualTo(ProposalState.CONFLICT);
+        assertThat(executedAs).isEmpty();
+    }
+
+    @Test
+    void anUnchangedRecordIsAppliedAndTheNewVersionBecomesTheHostRevision() {
+        ChangeProposal proposal = confirmedWithVersion("7");
+        handler = (op, args, p) -> {
+            currentVersion = new VersionLookup.Found(new VersionToken(VersionToken.Kind.JPA_VERSION, "8"));
+            return "{}";
+        };
+
+        ChangeProposal result = applier().apply(proposal.getId(), alice).proposal();
+
+        assertThat(result.getState()).isEqualTo(ProposalState.APPLIED);
+        assertThat(result.getHostRevisionRef()).isEqualTo("JPA_VERSION:8");
+    }
+
+    @Test
+    void aVersionThatCanNoLongerBeReadFailsSafeInsteadOfApplyingBlind() {
+        ChangeProposal proposal = confirmedWithVersion("7");
+        versioned = false;
+        assertThat(applier().apply(proposal.getId(), alice).proposal().getFailureCode())
+                .isEqualTo("version_unavailable");
+
+        ChangeProposal other = confirmedWithVersion("7");
+        versioned = true;
+        currentVersion = new VersionLookup.Unsupported();
+        assertThat(applier().apply(other.getId(), alice).proposal().getFailureCode()).isEqualTo("version_unavailable");
+        assertThat(executedAs).isEmpty();
+    }
+
+    @Test
+    void aDeleteRecordsThatTheRecordIsGone() {
+        ChangeProposal proposal = confirmedWithVersion("7");
+        handler = (op, args, p) -> {
+            currentVersion = new VersionLookup.Missing();
+            return "{}";
+        };
+
+        assertThat(applier().apply(proposal.getId(), alice).proposal().getHostRevisionRef()).isEqualTo("DELETED");
+    }
+
+    @Test
+    void proposalsWithoutARecordVersionAreAppliedAsBefore() {
+        ChangeProposal proposal = confirmed();
+        currentVersion = new VersionLookup.Missing();
+
+        assertThat(applier().apply(proposal.getId(), alice).proposal().getState()).isEqualTo(ProposalState.APPLIED);
+        assertThat(proposal.getHostRevisionRef()).isNull();
     }
 }

@@ -3,7 +3,10 @@ package com.springaimcpservercommon.autoconfigure;
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
 import com.springaimcpservercommon.core.catalog.EffectiveOperation;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import com.springaimcpservercommon.core.versioning.RecordVersions;
+import com.springaimcpservercommon.core.versioning.VersionLookup;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposal;
+import com.springaimcpservercommon.persistence.proposal.ChangeProposalRecord;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
 import com.springaimcpservercommon.persistence.proposal.ProposalRuleViolationException;
 import com.springaimcpservercommon.persistence.proposal.ProposalState;
@@ -39,14 +42,15 @@ import java.util.function.Supplier;
  * <p>Before anything runs it re-checks, in this order: the proposal is the caller's and is {@code CONFIRMED} (all
  * approvals in); writes are still enabled; the caller still holds {@code data:write-confirm} in the workspace; the
  * proposal has not expired; the operation still exists, is enabled and is not read-only; the stored content still hashes
- * to what was confirmed. Then {@code CONFIRMED → APPLYING} is a compare-and-set, so a double click or a second node
+ * to what was confirmed; when a record version was captured with the proposal, the record must still have it
+ * ({@code CONFLICT/version_conflict} otherwise, before the host runs). Then {@code CONFIRMED → APPLYING} is a compare-and-set, so a double click or a second node
  * cannot run it twice. The outcome is {@code APPLIED}, {@code CONFLICT} (the host reported an optimistic-lock failure)
  * or {@code FAILED}; the host's exception message is never stored or returned (it can carry data), only a fixed text.
  *
  * <p>If the process dies after the host committed but before {@code APPLIED} is written, the proposal stays
  * {@code APPLYING} and the maintenance runner later marks it {@code FAILED/APPLY_TIMEOUT} for an operator to verify:
- * the outcome is unknown, never retried automatically. No host revision reference is recorded yet (no
- * {@code VersioningAdapter}, OQ-36). At most {@code write.max-concurrent-applies} run at once per node.
+ * the outcome is unknown, never retried automatically. The host revision reference (the record's version afterwards, {@code KIND:value}) is
+ * recorded when the entity is versioned. At most {@code write.max-concurrent-applies} run at once per node.
  */
 @NullMarked
 final class ProposalApplier {
@@ -135,10 +139,17 @@ final class ProposalApplier {
     private final DaiProperties.Write settings;
     private final Clock clock;
     private final Semaphore bulkhead;
+    private final Supplier<@Nullable RecordVersions> versions;
 
     ProposalApplier(Proposals store, Supplier<EffectiveCatalog> catalog,
                     Supplier<DispatchingBackingExecutor.OperationBackingHandler> handler, PermissionCheck permissions,
                     DaiProperties.Write settings, Clock clock) {
+        this(store, catalog, handler, permissions, settings, clock, () -> null);
+    }
+
+    ProposalApplier(Proposals store, Supplier<EffectiveCatalog> catalog,
+                    Supplier<DispatchingBackingExecutor.OperationBackingHandler> handler, PermissionCheck permissions,
+                    DaiProperties.Write settings, Clock clock, Supplier<@Nullable RecordVersions> versions) {
         this.store = Objects.requireNonNull(store, "store");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.handler = Objects.requireNonNull(handler, "handler");
@@ -146,6 +157,7 @@ final class ProposalApplier {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.bulkhead = new Semaphore(settings.maxConcurrentApplies());
+        this.versions = Objects.requireNonNull(versions, "versions");
     }
 
     /** Whether applying is switched on at all ({@code dynamic.ai.agent.write.enabled}). */
@@ -204,6 +216,16 @@ final class ProposalApplier {
         }
         Map<String, Object> arguments = StoreProposalService.arguments(
                 proposal.getTargetArgsJson() == null ? "{}" : proposal.getTargetArgsJson());
+        // the record must still be in the version the change was proposed against; checked before the host runs, the
+        // host's own optimistic lock stays the final guard
+        String stale = staleReason(proposal);
+        if (stale != null) {
+            return switch (stale) {
+                case "version_conflict" -> finished(store.markConflict(id, "version_conflict",
+                        "The record was changed by someone else since the proposal was made."), "CONFLICT");
+                default -> failed(id, stale, "The record's version cannot be checked, so the change was not applied.");
+            };
+        }
         // compare-and-set CONFIRMED -> APPLYING: exactly one caller proceeds
         store.markApplying(id);
         try {
@@ -224,9 +246,79 @@ final class ProposalApplier {
             return finished(store.markFailed(id, "execution_error", "The host could not apply the change."),
                     "FAILED");
         }
-        ChangeProposal applied = store.markApplied(id, null);
+        ChangeProposal applied = store.markApplied(id, hostRevision(proposal));
         LOG.info("Proposal {} applied for principal {}", id, caller.principalId());
         return finished(applied, "APPLIED");
+    }
+
+    /**
+     * Compares the version each record was proposed against with its current one.
+     *
+     * @return {@code null} when nothing is stale or nothing was recorded; {@code version_conflict} when a record
+     *         changed or is gone; {@code version_unavailable} when the version can no longer be read
+     */
+    private @Nullable String staleReason(ChangeProposal proposal) {
+        RecordVersions recordVersions = versions.get();
+        for (ChangeProposalRecord record : proposal.getRecords()) {
+            if (record.getBaseVersionKind() == null || record.getEntityId() == null) {
+                continue;
+            }
+            if (recordVersions == null) {
+                return "version_unavailable";
+            }
+            VersionLookup current;
+            try {
+                current = recordVersions.current(record.getEntityRef(), record.getEntityId());
+            } catch (RuntimeException e) {
+                LOG.warn("Reading the record version for proposal {} failed ({})", proposal.getId(),
+                        e.getClass().getSimpleName());
+                return "version_unavailable";
+            }
+            switch (current) {
+                case VersionLookup.Found found -> {
+                    boolean same = found.token().kind().name().equals(record.getBaseVersionKind().name())
+                            && found.token().value().equals(record.getBaseVersionValue());
+                    if (!same) {
+                        return "version_conflict";
+                    }
+                }
+                case VersionLookup.Missing missing -> {
+                    return "version_conflict";
+                }
+                case VersionLookup.Unsupported unsupported -> {
+                    return "version_unavailable";
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The host revision the change produced, read after it ran: the record's new version, or {@code DELETED}. Best
+     * effort: a failure to read it never turns a successful apply into a failure, the reference is just left empty.
+     */
+    private @Nullable String hostRevision(ChangeProposal proposal) {
+        RecordVersions recordVersions = versions.get();
+        if (recordVersions == null) {
+            return null;
+        }
+        for (ChangeProposalRecord record : proposal.getRecords()) {
+            if (record.getEntityId() == null) {
+                continue;
+            }
+            try {
+                return switch (recordVersions.current(record.getEntityRef(), record.getEntityId())) {
+                    case VersionLookup.Found found -> found.token().asReference();
+                    case VersionLookup.Missing missing -> "DELETED";
+                    case VersionLookup.Unsupported unsupported -> null;
+                };
+            } catch (RuntimeException e) {
+                LOG.debug("Reading the host revision for proposal {} failed ({})", proposal.getId(),
+                        e.getClass().getSimpleName());
+                return null;
+            }
+        }
+        return null;
     }
 
     /** @return {@code null} when the stored proposal is still valid to apply, else the failure code */

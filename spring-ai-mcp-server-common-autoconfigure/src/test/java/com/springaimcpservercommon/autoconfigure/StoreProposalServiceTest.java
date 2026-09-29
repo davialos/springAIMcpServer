@@ -18,7 +18,11 @@ import com.springaimcpservercommon.core.catalog.ResultBounding;
 import com.springaimcpservercommon.core.invocation.Channel;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.core.principal.SubjectType;
+import com.springaimcpservercommon.core.versioning.RecordVersions;
+import com.springaimcpservercommon.core.versioning.VersionLookup;
+import com.springaimcpservercommon.core.versioning.VersionToken;
 import com.springaimcpservercommon.persistence.proposal.ApprovalRequirement;
+import com.springaimcpservercommon.persistence.proposal.BaseVersionKind;
 import com.springaimcpservercommon.persistence.proposal.ChangeKind;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposal;
 import com.springaimcpservercommon.persistence.proposal.NewChangeProposal;
@@ -44,7 +48,7 @@ class StoreProposalServiceTest {
             "update", List.of());
     private static final UUID TURN = UUID.randomUUID();
     private static final DaiProperties.Write SETTINGS = new DaiProperties.Write(Duration.ofDays(7), true,
-            Duration.ofMinutes(15), false, 8);
+            Duration.ofMinutes(15), false, 8, false, false);
     private final DaiPrincipal alice = new DaiPrincipal(UUID.randomUUID(), SubjectType.USER, "local", "alice", "Alice",
             Set.of(), Set.of(), Map.of(), Map.of(), Classification.INTERNAL, null, Set.of());
 
@@ -162,7 +166,7 @@ class StoreProposalServiceTest {
         assertThat(delete.approvalRequirement()).isEqualTo(ApprovalRequirement.SELF_CONFIRM_PLUS_APPROVER);
         assertThat(delete.requiredApprovals()).isEqualTo(1);
 
-        var strict = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), true, 8);
+        var strict = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), true, 8, false, false);
         NewChangeProposal update = StoreProposalService.toNewProposal(request(Change.CREATE, "{}"), catalog, strict);
         assertThat(update.changeKind()).isEqualTo(ChangeKind.CREATE);
         assertThat(update.approvalRequirement()).isEqualTo(ApprovalRequirement.SELF_CONFIRM_PLUS_APPROVER);
@@ -200,9 +204,108 @@ class StoreProposalServiceTest {
 
     @Test
     void writeSettingsAreValidatedAndOffByDefault() {
-        assertThatThrownBy(() -> new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofSeconds(5), false, 8))
+        assertThatThrownBy(() -> new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofSeconds(5), false, 8, false, false))
                 .hasMessageContaining("proposal-ttl");
-        assertThat(new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofMinutes(15), false, 8).enabled())
+        assertThat(new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofMinutes(15), false, 8, false, false).enabled())
                 .isFalse();
+    }
+
+    // ---- versioning ----------------------------------------------------------------------------------------------
+
+    private static ToolBinding updateBinding(String idArgument) {
+        return new ToolBinding(UUID.randomUUID(), 1, UUID.randomUUID(), "update_order",
+                new ToolSource.OperationSource(UPDATE_OP), null, Map.of(), WriteMode.PROPOSE, false,
+                Duration.ofSeconds(5), 3, ResultPolicy.DEFAULT, false, Change.UPDATE, idArgument);
+    }
+
+    private ProposalRequest updateRequest(ToolBinding binding, String input) {
+        return request(binding, input, ToolCallScope.ofTurn(Channel.CHAT, TURN));
+    }
+
+    private static RecordVersions versions(VersionLookup lookup, Map<String, Object> values) {
+        return new RecordVersions() {
+            @Override
+            public VersionLookup current(CatalogElementRef entity, String entityId) {
+                return lookup;
+            }
+
+            @Override
+            public java.util.Optional<Map<String, Object>> exposedValues(CatalogElementRef entity, String entityId,
+                                                                          Classification clearance) {
+                return java.util.Optional.of(values);
+            }
+        };
+    }
+
+    @Test
+    void aProposalRemembersTheVersionOfTheRecordItChanges() {
+        var found = new VersionLookup.Found(new VersionToken(VersionToken.Kind.JPA_VERSION, "7"));
+
+        NewChangeProposal data = StoreProposalService.toNewProposal(
+                updateRequest(updateBinding("orderId"), "{\"orderId\":101,\"status\":\"SHIPPED\"}"),
+                catalog(false, ORDER), SETTINGS, versions(found, Map.of("status", "PAID")));
+
+        assertThat(data.records()).singleElement().satisfies(r -> {
+            assertThat(r.entityId()).isEqualTo("101");
+            assertThat(r.baseVersionKind()).isEqualTo(BaseVersionKind.JPA_VERSION);
+            assertThat(r.baseVersionValue()).isEqualTo("7");
+            assertThat(r.beforeValuesJson()).isNull();
+        });
+        ChangeProposal.propose(data, Instant.now());
+    }
+
+    @Test
+    void theBeforeValuesAreStoredOnlyWhenEnabled() {
+        var found = new VersionLookup.Found(new VersionToken(VersionToken.Kind.ROW_HASH, "sha256:" + "a".repeat(64)));
+        var capture = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), false, 8, false, true);
+
+        NewChangeProposal data = StoreProposalService.toNewProposal(
+                updateRequest(updateBinding("orderId"), "{\"orderId\":\"A-1\"}"), catalog(false, ORDER), capture,
+                versions(found, Map.of("status", "PAID")));
+
+        assertThat(data.records().getFirst().beforeValuesJson()).isEqualTo("{\"status\":\"PAID\"}");
+        assertThat(data.records().getFirst().entityId()).isEqualTo("A-1");
+        ChangeProposal.propose(data, Instant.now());
+    }
+
+    @Test
+    void aMissingRecordCannotBeChanged() {
+        assertRefused(() -> StoreProposalService.toNewProposal(updateRequest(updateBinding("orderId"),
+                "{\"orderId\":101}"), catalog(false, ORDER), SETTINGS, versions(new VersionLookup.Missing(), Map.of())),
+                "record_not_found");
+    }
+
+    @Test
+    void aCreateNeedsNoRecordAndAnInvalidIdIsRefused() {
+        var found = new VersionLookup.Found(new VersionToken(VersionToken.Kind.JPA_VERSION, "1"));
+        ToolBinding create = new ToolBinding(UUID.randomUUID(), 1, UUID.randomUUID(), "create_order",
+                new ToolSource.OperationSource(UPDATE_OP), null, Map.of(), WriteMode.PROPOSE, false,
+                Duration.ofSeconds(5), 3, ResultPolicy.DEFAULT, false, Change.CREATE, "orderId");
+        NewChangeProposal data = StoreProposalService.toNewProposal(updateRequest(create, "{}"), catalog(false, ORDER),
+                SETTINGS, versions(found, Map.of()));
+        assertThat(data.records().getFirst().entityId()).isNull();
+        assertThat(data.records().getFirst().baseVersionKind()).isNull();
+
+        assertRefused(() -> StoreProposalService.toNewProposal(updateRequest(updateBinding("orderId"), "{}"),
+                catalog(false, ORDER), SETTINGS, versions(found, Map.of())), "record_id_invalid");
+        assertRefused(() -> StoreProposalService.toNewProposal(updateRequest(updateBinding("orderId"),
+                "{\"orderId\":{\"x\":1}}"), catalog(false, ORDER), SETTINGS, versions(found, Map.of())),
+                "record_id_invalid");
+    }
+
+    @Test
+    void requiringABaseVersionRefusesWhatCannotBeChecked() {
+        var strict = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), false, 8, true, false);
+        assertRefused(() -> StoreProposalService.toNewProposal(request(Change.UPDATE, "{}"), catalog(false, ORDER),
+                strict), "version_unavailable");
+        assertRefused(() -> StoreProposalService.toNewProposal(updateRequest(updateBinding("orderId"),
+                "{\"orderId\":1}"), catalog(false, ORDER), strict, null), "version_unavailable");
+        assertRefused(() -> StoreProposalService.toNewProposal(updateRequest(updateBinding("orderId"),
+                "{\"orderId\":1}"), catalog(false, ORDER), strict, versions(new VersionLookup.Unsupported(), Map.of())),
+                "version_unavailable");
+        // without the switch an unversioned entity is still proposed, just without a version
+        NewChangeProposal lenient = StoreProposalService.toNewProposal(updateRequest(updateBinding("orderId"),
+                "{\"orderId\":1}"), catalog(false, ORDER), SETTINGS, versions(new VersionLookup.Unsupported(), Map.of()));
+        assertThat(lenient.records().getFirst().baseVersionKind()).isNull();
     }
 }

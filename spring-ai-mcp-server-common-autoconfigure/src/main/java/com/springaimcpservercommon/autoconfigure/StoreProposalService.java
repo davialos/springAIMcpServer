@@ -8,7 +8,11 @@ import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
 import com.springaimcpservercommon.core.catalog.EffectiveOperation;
 import com.springaimcpservercommon.core.hash.Sha256;
 import com.springaimcpservercommon.core.json.CanonicalJson;
+import com.springaimcpservercommon.core.versioning.RecordVersions;
+import com.springaimcpservercommon.core.versioning.VersionLookup;
+import com.springaimcpservercommon.core.versioning.VersionToken;
 import com.springaimcpservercommon.persistence.proposal.ApprovalRequirement;
+import com.springaimcpservercommon.persistence.proposal.BaseVersionKind;
 import com.springaimcpservercommon.persistence.proposal.ChangeKind;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposal;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
@@ -17,6 +21,7 @@ import com.springaimcpservercommon.persistence.proposal.NewProposalRecord;
 import com.springaimcpservercommon.persistence.proposal.ProposalOrigin;
 import com.springaimcpservercommon.persistence.proposal.ProposalTargetKind;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.json.JsonMapper;
@@ -44,8 +49,9 @@ import java.util.function.Supplier;
  * <p>Creating is idempotent per turn: the same tool with the same arguments in one turn (or one MCP request) returns
  * the same proposal, so a model that repeats a call does not fill the inbox. The proposal stores the arguments as
  * the record's after-values (they may contain personal data, hence the short retention); the summary, logs and
- * metrics never include them. No before-snapshot or base version is captured yet, so conflicts are only detected by
- * the host's own checks at apply time (OQ-36).
+ * metrics never include them. When the binding names the id argument, the record's current version is stored as its
+ * base version (and, if enabled, its exposed values as the before-snapshot), so {@link ProposalApplier} can detect a
+ * changed record before the host runs (LLD-11 §5).
  */
 @NullMarked
 final class StoreProposalService implements ProposalService {
@@ -56,11 +62,18 @@ final class StoreProposalService implements ProposalService {
     private final ChangeProposalStore store;
     private final Supplier<EffectiveCatalog> catalog;
     private final DaiProperties.Write settings;
+    private final Supplier<@Nullable RecordVersions> versions;
 
     StoreProposalService(ChangeProposalStore store, Supplier<EffectiveCatalog> catalog, DaiProperties.Write settings) {
+        this(store, catalog, settings, () -> null);
+    }
+
+    StoreProposalService(ChangeProposalStore store, Supplier<EffectiveCatalog> catalog, DaiProperties.Write settings,
+                         Supplier<@Nullable RecordVersions> versions) {
         this.store = Objects.requireNonNull(store, "store");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.settings = Objects.requireNonNull(settings, "settings");
+        this.versions = Objects.requireNonNull(versions, "versions");
     }
 
     @Override
@@ -68,7 +81,7 @@ final class StoreProposalService implements ProposalService {
         if (!settings.enabled()) {
             throw new ProposalRefusedException("writes_disabled", "Proposing changes is switched off on this system.");
         }
-        NewChangeProposal data = toNewProposal(request, catalog.get(), settings);
+        NewChangeProposal data = toNewProposal(request, catalog.get(), settings, versions.get());
         ChangeProposal proposal = store.create(data);
         SafeMetrics.count("dynamic.ai.agent.proposals", "state", proposal.getState().name(), "kind",
                 data.changeKind().name(), "origin", data.origin().name());
@@ -80,6 +93,15 @@ final class StoreProposalService implements ProposalService {
     /** Maps a tool call to the proposal to store; package-private so the mapping is testable without a store. */
     static NewChangeProposal toNewProposal(ProposalRequest request, EffectiveCatalog catalog,
                                            DaiProperties.Write settings) {
+        return toNewProposal(request, catalog, settings, null);
+    }
+
+    /**
+     * Maps a tool call to the proposal to store, remembering which version of the record it was proposed against when
+     * the binding names the id argument and the entity is versioned (LLD-11 §5).
+     */
+    static NewChangeProposal toNewProposal(ProposalRequest request, EffectiveCatalog catalog,
+                                           DaiProperties.Write settings, @Nullable RecordVersions versions) {
         ToolBinding binding = request.binding();
         if (!(binding.source() instanceof ToolSource.OperationSource(CatalogElementRef operationRef))) {
             throw new ProposalRefusedException("not_a_write_tool", "This tool cannot propose changes.");
@@ -119,7 +141,68 @@ final class StoreProposalService implements ProposalService {
                 approver ? 1 : 0, contentHash,
                 "Proposed by tool " + binding.toolName() + " to run " + operationRef, null, key,
                 settings.proposalTtl(), settings.retention(),
-                List.of(new NewProposalRecord(entity, null, null, argumentsJson, null, null)));
+                List.of(record(request, entity, kind, arguments, argumentsJson, settings, versions)));
+    }
+
+    /**
+     * The record the change touches: its id (from the argument the binding names), the version it was proposed against
+     * and, if enabled, the exposed values as they are now. A record that does not exist cannot be updated or deleted, so
+     * the proposal is refused. Messages are fixed text; the id is never echoed.
+     */
+    private static NewProposalRecord record(ProposalRequest request, CatalogElementRef entity, ChangeKind kind,
+                                            Map<String, Object> arguments, String argumentsJson,
+                                            DaiProperties.Write settings, @Nullable RecordVersions versions) {
+        String idArgument = request.binding().entityIdArgument();
+        if (kind == ChangeKind.CREATE) {
+            return new NewProposalRecord(entity, null, null, argumentsJson, null, null);
+        }
+        if (idArgument == null) {
+            if (settings.requireBaseVersion()) {
+                throw new ProposalRefusedException("version_unavailable",
+                        "This tool does not say which record it changes, so its version cannot be checked.");
+            }
+            return new NewProposalRecord(entity, null, null, argumentsJson, null, null);
+        }
+        String entityId = entityId(arguments.get(idArgument));
+        BaseVersionKind baseKind = null;
+        String baseValue = null;
+        String beforeJson = null;
+        if (versions != null) {
+            switch (versions.current(entity, entityId)) {
+                case VersionLookup.Found found -> {
+                    VersionToken token = found.token();
+                    baseKind = BaseVersionKind.valueOf(token.kind().name());
+                    baseValue = token.value();
+                }
+                case VersionLookup.Missing missing -> throw new ProposalRefusedException("record_not_found",
+                        "The record this tool call targets does not exist.");
+                case VersionLookup.Unsupported unsupported -> {
+                    if (settings.requireBaseVersion()) {
+                        throw new ProposalRefusedException("version_unavailable",
+                                "The version of this kind of record cannot be read, so the change cannot be checked.");
+                    }
+                }
+            }
+            if (settings.captureBeforeValues()) {
+                beforeJson = versions.exposedValues(entity, entityId, request.principal().clearance())
+                        .map(CanonicalJson::write).orElse(null);
+            }
+        } else if (settings.requireBaseVersion()) {
+            throw new ProposalRefusedException("version_unavailable",
+                    "The version of records cannot be read on this system, so the change cannot be checked.");
+        }
+        return new NewProposalRecord(entity, entityId, beforeJson, argumentsJson, baseKind, baseValue);
+    }
+
+    private static String entityId(@Nullable Object value) {
+        if (value instanceof String s && !s.isBlank() && s.length() <= VersionToken.MAX_VALUE_LENGTH) {
+            return s.strip();
+        }
+        if (value instanceof Integer || value instanceof Long || value instanceof java.math.BigInteger) {
+            return value.toString();
+        }
+        throw new ProposalRefusedException("record_id_invalid",
+                "The tool call does not carry a valid id of the record it changes.");
     }
 
     /**

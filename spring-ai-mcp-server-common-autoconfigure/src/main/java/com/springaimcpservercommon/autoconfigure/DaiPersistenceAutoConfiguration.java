@@ -255,14 +255,18 @@ public class DaiPersistenceAutoConfiguration {
      * @param store    proposal store
      * @param registry live catalog (resolves the operation and its record type)
      * @param props    framework properties
+     * @param versions the host record versions (base version and before-values), when the host has JPA entities
      * @return the service
      */
     @Bean
     @ConditionalOnMissingBean(ProposalService.class)
     @ConditionalOnBean({ChangeProposalStore.class, MetadataRegistry.class})
     public ProposalService storeProposalService(ChangeProposalStore store, MetadataRegistry registry,
-                                                DaiProperties props) {
-        return new StoreProposalService(store, registry::current, props.write());
+                                                DaiProperties props,
+                                                org.springframework.beans.factory.ObjectProvider<
+                                                        com.springaimcpservercommon.core.versioning.RecordVersions>
+                                                        versions) {
+        return new StoreProposalService(store, registry::current, props.write(), versions::getIfAvailable);
     }
 
     /**

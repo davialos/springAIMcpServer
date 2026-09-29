@@ -176,6 +176,7 @@ public class DaiAdminAutoConfiguration {
      * @param handlers the operation backing handler (runs the host operation through its Spring proxy)
      * @param api      permission checks
      * @param props    framework properties
+     * @param versions host record versions (pre-apply version check, host revision reference), when available
      * @return the applier
      */
     @Bean
@@ -183,10 +184,12 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean({ChangeProposalStore.class, AdminApi.class, MetadataRegistry.class})
     ProposalApplier proposalApplier(ChangeProposalStore store, MetadataRegistry registry,
                                     ObjectProvider<DispatchingBackingExecutor.OperationBackingHandler> handlers,
-                                    AdminApi api, DaiProperties props) {
+                                    AdminApi api, DaiProperties props,
+                                    ObjectProvider<com.springaimcpservercommon.core.versioning.RecordVersions>
+                                            versions) {
         return new ProposalApplier(ProposalApplier.Proposals.over(store), registry::current, handlers::getObject,
                 (caller, permission, workspaceId) -> api.permits(caller, permission, workspaceId), props.write(),
-                java.time.Clock.systemUTC());
+                java.time.Clock.systemUTC(), versions::getIfAvailable);
     }
 
     /**

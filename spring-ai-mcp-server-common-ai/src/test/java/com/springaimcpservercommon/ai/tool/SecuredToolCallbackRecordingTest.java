@@ -158,6 +158,35 @@ class SecuredToolCallbackRecordingTest {
     }
 
     @Test
+    void aConstraintViolationIsRecordedAndNeverReachesTheTool() {
+        ToolBinding constrained = new ToolBinding(UUID.randomUUID(), 1, UUID.randomUUID(), "find_orders",
+                new ToolSource.QuerySource(UUID.randomUUID()), null,
+                Map.of("limit", ArgConstraint.range(1, 5)), WriteMode.EXECUTE, false, Duration.ofSeconds(5), 3,
+                ResultPolicy.DEFAULT, false);
+        callback(constrained, delegate(in -> "ok"), true).call("{\"limit\":99}");
+
+        assertThat(delegateCalls).hasValue(0);
+        assertThat(recorded).singleElement().satisfies(c -> {
+            assertThat(c.status()).isEqualTo(ToolResultStatus.ERROR);
+            assertThat(c.errorCode()).isEqualTo("out_of_range");
+        });
+    }
+
+    @Test
+    void aProposalServiceFailureBecomesAnErrorNotAFakeProposal() {
+        SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), binding(WriteMode.PROPOSE, 0), principal,
+                new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> true,
+                (tool, input, bindingId, p) -> {
+                    throw new IllegalStateException("no store");
+                }, recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN), Clock.systemUTC());
+        String result = cb.call("{}");
+
+        assertThat(result).contains("proposal_unavailable").doesNotContain("proposed");
+        assertThat(recorded).singleElement().extracting(ToolCallRecorder.ToolCall::status)
+                .isEqualTo(ToolResultStatus.ERROR);
+    }
+
+    @Test
     void theCallLimitIsRecordedAsAnError() {
         SecuredToolCallback cb = callback(binding(WriteMode.EXECUTE, 0), delegate(in -> "ok"), true);
         for (int i = 0; i < 4; i++) {

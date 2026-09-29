@@ -33,8 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ol>
  *   <li>Reads the {@link InvocationContext} from {@link ToolContext} — never from the model's input JSON.</li>
  *   <li>Re-checks the principal's tool-invoke permission (grants may have changed mid-conversation).</li>
- *   <li>Applies {@link ArgConstraint}s: PRINCIPAL_ATTR values are overwritten server-side regardless
- *       of what the model put in its input.</li>
+ *   <li>Applies {@link ArgConstraint}s via {@link ArgConstraints}: PRINCIPAL_ATTR and LITERAL values are overwritten
+ *       server-side regardless of what the model put in its input, out-of-range values are refused.</li>
  *   <li>Enforces the per-turn call count cap ({@link ToolBinding#maxCallsPerTurn()}).</li>
  *   <li>If {@link WriteMode#PROPOSE}: does NOT invoke the delegate; returns a proposal envelope.</li>
  *   <li>Runs the delegate with the caller's {@link SecurityContext} set on the executing thread, inside the
@@ -183,18 +183,35 @@ public final class SecuredToolCallback implements ToolCallback {
                     "Tool call limit (" + binding.maxCallsPerTurn() + " per turn) exceeded."), "call_limit_exceeded");
         }
 
-        // 3. If PROPOSE → create proposal, do not run the delegate
+        // 3. Server-decided arguments: the model never chooses them
+        ArgConstraints.Result constrained = ArgConstraints.apply(binding.argConstraints(), principal, toolInput);
+        if (constrained instanceof ArgConstraints.Rejected rejected) {
+            LOG.info("Tool {} refused by argument constraint {} for principal {}", binding.toolName(),
+                    rejected.code(), principal.principalId());
+            return Handled.of(ToolResultEnvelope.error(binding.toolName(), rejected.code(), rejected.message()),
+                    rejected.code());
+        }
+        String effectiveInput = ((ArgConstraints.Applied) constrained).input();
+
+        // 4. If PROPOSE → create proposal, do not run the delegate
         if (binding.writeMode() == WriteMode.PROPOSE) {
-            return handleProposal(toolInput);
+            return handleProposal(effectiveInput);
         }
 
-        // 4. Run delegate as the caller with the correct SecurityContext
-        return runAsCallerWithEnvelope(toolInput, toolContext);
+        // 5. Run delegate as the caller with the correct SecurityContext
+        return runAsCallerWithEnvelope(effectiveInput, toolContext);
     }
 
     private Handled handleProposal(String toolInput) {
-        java.util.UUID proposalId = proposalService.createProposal(
-                binding.toolName(), toolInput, binding.id(), principal);
+        java.util.UUID proposalId;
+        try {
+            proposalId = proposalService.createProposal(binding.toolName(), toolInput, binding.id(), principal);
+        } catch (RuntimeException e) {
+            LOG.warn("Tool {} could not create a proposal for principal {} ({})", binding.toolName(),
+                    principal.principalId(), e.getClass().getSimpleName());
+            return Handled.of(ToolResultEnvelope.error(binding.toolName(), "proposal_unavailable",
+                    "The change could not be proposed. Try again later."), "proposal_unavailable");
+        }
         LOG.info("Tool {} created proposal {} for principal {}",
                 binding.toolName(), proposalId, principal.principalId());
         ToolResultEnvelope envelope = ToolResultEnvelope.proposed(binding.toolName(), proposalId.toString(),

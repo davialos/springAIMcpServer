@@ -1,7 +1,13 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
+import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
+import com.springaimcpservercommon.core.environment.EnvironmentSignals;
+import com.springaimcpservercommon.persistence.audit.AuditTrail;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
+import com.springaimcpservercommon.persistence.config.KillSwitchStore;
+import com.springaimcpservercommon.security.authz.AuthorizationEngine;
+import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import org.jspecify.annotations.NullMarked;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -19,6 +25,10 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *       {@code /dynamic-ai/admin/api/v1/catalog}</li>
  *   <li>{@link ResourceAdminController} — resource lifecycle endpoints under
  *       {@code /dynamic-ai/admin/api/v1/workspaces/{workspaceId}/resources}</li>
+ *   <li>{@link AuditAdminController}, {@link KillSwitchAdminController}, {@link ClusterAdminController},
+ *       {@link MeAdminController} — cross-cutting admin APIs for the UI (audit log viewer, kill switches,
+ *       cluster status, caller/environment bootstrap), gated by {@link AdminApi} and answered with
+ *       RFC 9457 problems by {@link AdminExceptionHandler}</li>
  * </ul>
  *
  * <p>Catalog endpoints are registered whenever a {@link MetadataRegistry} bean is present
@@ -28,7 +38,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  * <p>Both controllers are {@link ConditionalOnMissingBean} — host applications may replace either.
  */
 @AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiPersistenceAutoConfiguration.class,
-                             DaiWebMvcAutoConfiguration.class})
+                             DaiSecurityAutoConfiguration.class, DaiWebMvcAutoConfiguration.class})
 @ConditionalOnClass(RequestMappingHandlerMapping.class)
 @NullMarked
 public class DaiAdminAutoConfiguration {
@@ -58,5 +68,92 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean(ConfigStore.class)
     public ResourceAdminController resourceAdminController(ConfigStore configStore) {
         return new ResourceAdminController(configStore);
+    }
+
+    /**
+     * Shared authentication/authorization gate and problem builder for the cross-cutting admin controllers.
+     * Present only when both the principal resolver and the authorization engine are.
+     *
+     * @param principalResolver resolves the caller
+     * @param engine            authorizes permissions
+     * @return the gate
+     */
+    @Bean
+    @ConditionalOnMissingBean(AdminApi.class)
+    @ConditionalOnBean({GenericDynamicHandler.DaiPrincipalResolver.class, AuthorizationEngine.class})
+    AdminApi adminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine engine) {
+        return new AdminApi(principalResolver, engine);
+    }
+
+    /**
+     * RFC 9457 error mapping scoped to the cross-cutting admin controllers.
+     *
+     * @return the advice
+     */
+    @Bean
+    @ConditionalOnMissingBean(AdminExceptionHandler.class)
+    @ConditionalOnBean(AdminApi.class)
+    public AdminExceptionHandler adminExceptionHandler() {
+        return new AdminExceptionHandler();
+    }
+
+    /**
+     * Audit log viewer (F-66).
+     *
+     * @param auditTrail audit trail
+     * @param api        admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(AuditAdminController.class)
+    @ConditionalOnBean({AuditTrail.class, AdminApi.class})
+    public AuditAdminController auditAdminController(AuditTrail auditTrail, AdminApi api) {
+        return new AuditAdminController(auditTrail, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Kill switch admin API (F-73).
+     *
+     * @param store      kill switch store
+     * @param auditTrail audit trail
+     * @param api        admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(KillSwitchAdminController.class)
+    @ConditionalOnBean({KillSwitchStore.class, AuditTrail.class, AdminApi.class})
+    public KillSwitchAdminController killSwitchAdminController(KillSwitchStore store, AuditTrail auditTrail,
+                                                               AdminApi api) {
+        return new KillSwitchAdminController(store, auditTrail, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Cluster status API.
+     *
+     * @param configStore config store (node heartbeats and generations)
+     * @param api         admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ClusterAdminController.class)
+    @ConditionalOnBean({ConfigStore.class, AdminApi.class})
+    public ClusterAdminController clusterAdminController(ConfigStore configStore, AdminApi api) {
+        return new ClusterAdminController(configStore, api);
+    }
+
+    /**
+     * Caller and environment bootstrap API for the UI.
+     *
+     * @param api          admin gate
+     * @param safetyPolicy environment safety policy
+     * @param signals      environment signals
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(MeAdminController.class)
+    @ConditionalOnBean({AdminApi.class, EnvironmentSafetyPolicy.class, EnvironmentSignals.class})
+    public MeAdminController meAdminController(AdminApi api, EnvironmentSafetyPolicy safetyPolicy,
+                                               EnvironmentSignals signals) {
+        return new MeAdminController(api, safetyPolicy, signals);
     }
 }

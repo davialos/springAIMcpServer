@@ -10,7 +10,9 @@ import com.springaimcpservercommon.ai.agent.ToolBindingRef;
 import com.springaimcpservercommon.core.catalog.CatalogElementRef;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.json.CanonicalJson;
+import com.springaimcpservercommon.persistence.audit.AuditTrail;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
+import com.springaimcpservercommon.persistence.config.KillSwitchStore;
 import com.springaimcpservercommon.persistence.config.PublishedResource;
 import com.springaimcpservercommon.persistence.config.PublishedSnapshot;
 import com.springaimcpservercommon.persistence.config.ResourceKind;
@@ -101,9 +103,7 @@ public class DaiPersistenceAutoConfiguration {
     public DaiPersistenceUnit daiPersistenceUnit(DataSource dataSource, DaiProperties props) {
         DaiProperties.Environment env = props.environment();
         String tier = resolveTier(env.tier());
-        String envId = env.id() != null ? env.id()
-                : (env.applicationName() != null ? env.applicationName() + "-" + tier.toLowerCase(java.util.Locale.ROOT)
-                        : "default-" + tier.toLowerCase(java.util.Locale.ROOT));
+        String envId = environmentId(env, tier);
         DaiPersistenceSettings settings = DaiPersistenceSettings.defaults(envId, tier);
         LOG.info("Starting dynamic_ai persistence unit (schema {}, env {}/{})",
                 settings.schema(), envId, tier);
@@ -121,6 +121,43 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(DaiStore.class)
     public ConfigStore configStore(DaiStore store) {
         return new ConfigStore(store);
+    }
+
+    /**
+     * The tamper-evident audit trail (F-66). Needs the same environment id the persistence unit was started
+     * with, so events are chained per environment.
+     *
+     * @param store the framework's persistence unit
+     * @param props framework properties for environment identification
+     * @return the audit trail
+     */
+    @Bean
+    @ConditionalOnMissingBean(AuditTrail.class)
+    @ConditionalOnBean(DaiStore.class)
+    public AuditTrail auditTrail(DaiStore store, DaiProperties props) {
+        DaiProperties.Environment env = props.environment();
+        return new AuditTrail(store, environmentId(env, resolveTier(env.tier())), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Kill switch store (F-73).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(KillSwitchStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public KillSwitchStore killSwitchStore(DaiStore store) {
+        return new KillSwitchStore(store);
+    }
+
+    private static String environmentId(DaiProperties.Environment env, String tier) {
+        String lowerTier = tier.toLowerCase(java.util.Locale.ROOT);
+        if (env.id() != null) {
+            return env.id();
+        }
+        return (env.applicationName() != null ? env.applicationName() : "default") + "-" + lowerTier;
     }
 
     /**

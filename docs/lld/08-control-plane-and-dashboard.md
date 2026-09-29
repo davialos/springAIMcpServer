@@ -18,9 +18,9 @@ Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors (40
 
 | Resource | Endpoints | Key permission |
 |----------|-----------|----------------|
-| Catalog | `GET /catalog/entities`, `/catalog/operations`, `/catalog/graph`, `PATCH /catalog/overlays/{ref}` | `catalog:read`, `catalog:annotate` |
+| Catalog | `GET /catalog` (summary, all environments), `GET /catalog/entities?q=`, `/catalog/operations?q=` (paged, introspection: off in PROD) — implemented; `/catalog/graph`, `PATCH /catalog/overlays/{ref}` planned | `catalog:read`, `catalog:annotate` |
 | Workspaces | `GET/POST /workspaces`, `GET/PATCH(If-Match)/DELETE /workspaces/{ws}`, `GET/POST /workspaces/{ws}/members`, `DELETE .../members/{principal}/{role}` — implemented; workspace-scoped roles only, last owner protected | `workspace:admin` |
-| Endpoints | `/workspaces/{ws}/endpoints[/{id}[/revisions[/{rev}]]]` | `endpoint:author` |
+| Resources (endpoints, queries, agents, tool bindings, row policies, overlays) | Implemented under `/workspaces/{ws}/resources`: `GET/POST`, `GET /{id}`, `GET/POST /{id}/revisions`, `GET/PUT(If-Match) /{id}/revisions/{rev}`, `:submit`(If-Match) `:approve` `:reject` `:request-changes` `:publish`, `/{id}:suspend|:resume|:deprecate|:retire`; `POST /cluster/generations/{n}:rollback`. Authoring needs the kind's `*:author`, publishing its `*:publish`, reviewing `review:approve`; authoring is off in PROD (`capability-disabled` 403) | `endpoint:author` … |
 | Queries | `/workspaces/{ws}/queries...`, `POST .../{id}/preview` | `query:author`, `query:preview` |
 | Agents | `/workspaces/{ws}/agents...`, `POST .../{id}/playground` (SSE) | `agent:author`, `agent:playground` |
 | Tool bindings | `/workspaces/{ws}/tools...` | `tool:author` |
@@ -67,7 +67,7 @@ limit increases, prompt diff. Risk score drives whether approval is mandatory (p
 | Failure | Behavior |
 |---------|----------|
 | Concurrent edits | 412 Precondition Failed with current ETag |
-| Publish fails validation (drift, collision) | 422 with findings list; revision stays APPROVED |
+| Publish fails validation (drift, collision, dangling dependency) | 409 `conflict` with the findings in `detail`; revision stays APPROVED (implemented; a dedicated 422 type is still open) |
 | Config DB down | Admin API 503; data plane unaffected (last-good snapshot) |
 
 ## 6. Test strategy

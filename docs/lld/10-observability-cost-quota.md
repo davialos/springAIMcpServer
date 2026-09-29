@@ -79,6 +79,24 @@ estimated tokens via the same `RateLimiterBackend` port endpoints use (LLD-04 §
 turn. Default backend is PostgreSQL (no new infrastructure); a host at scale may supply a Redis/Hazelcast
 implementation of the port instead. Rate limits (requests/min) share the same backend.
 
+**Implemented (v1 slice):** the invocation path checks budgets *before* each turn, without a reservation.
+`LedgerBudgetChecker` loads the enabled budgets that apply to (workspace, agent, principal), compares the
+current-period usage of the hourly ledger with each limit and refuses the turn when a hard limit is
+reached: `429 budget-exhausted` from `AgentChatController` (before a stream opens) and from
+`DefaultAgentInvoker` (other channels; a stream reports a terminal non-retryable `budget-exhausted` error
+event). Soft limits and non-hard limits only raise `BUDGET_SOFT_LIMIT_REACHED` / `BUDGET_EXCEEDED` audit
+events (once per budget and period per node) and the counter `dynamic.ai.agent.budget.events`; refused turns
+count in `dynamic.ai.agent.budget.blocked`. `LedgerUsageSink` writes tokens and priced cost of every completed
+model call (sync and streamed) into the ledger. Accuracy: usage is recorded after the call, so concurrent turns
+can overshoot by the tokens in flight, plus up to the decision cache TTL (OQ-40). If the store cannot be read
+the check fails open by default (logged and counted in `dynamic.ai.agent.budget.check.errors`).
+
+| Property | Default |
+|----------|---------|
+| `dynamic.ai.agent.budget.enforce` | `true` (`false` = record and show usage, refuse nothing) |
+| `dynamic.ai.agent.budget.cache-ttl` | `10s` (`0` disables the per-(workspace, agent, principal) decision cache) |
+| `dynamic.ai.agent.budget.fail-open` | `true` |
+
 ## 7. Health & readiness
 `HealthContributor` `dynamicAi` with details: catalog state, snapshot generation & lag,
 config store reachability, model providers' breaker states. Configurable whether it

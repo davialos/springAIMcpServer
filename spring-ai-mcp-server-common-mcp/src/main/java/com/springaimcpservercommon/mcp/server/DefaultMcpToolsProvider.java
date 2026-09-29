@@ -2,6 +2,7 @@ package com.springaimcpservercommon.mcp.server;
 
 import com.springaimcpservercommon.ai.tool.ToolBinding;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.ai.tool.ToolCallScope;
 import com.springaimcpservercommon.ai.tool.ToolSource;
 import com.springaimcpservercommon.annotations.Classification;
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
@@ -60,7 +61,8 @@ public final class DefaultMcpToolsProvider implements McpToolsProvider {
                                                Authentication authentication,
                                                EffectiveCatalog catalog,
                                                UUID workspaceId,
-                                               McpScopeEvaluator scopeEvaluator) {
+                                               McpScopeEvaluator scopeEvaluator,
+                                               @org.jspecify.annotations.Nullable ToolCallScope scope) {
         List<ToolBinding> bindings = bindingSource.mcpExposedBindings(workspaceId);
         List<ToolCallback> result = new ArrayList<>(bindings.size());
 
@@ -78,7 +80,7 @@ public final class DefaultMcpToolsProvider implements McpToolsProvider {
                 continue;
             }
 
-            ToolCallback callback = toolBridge.buildCallback(binding, principal, authentication, catalog);
+            ToolCallback callback = toolBridge.buildCallback(binding, principal, authentication, catalog, scope);
             if (callback == null) {
                 LOG.warn("MCP: cannot resolve delegate for tool {}; skipping", binding.toolName());
                 continue;

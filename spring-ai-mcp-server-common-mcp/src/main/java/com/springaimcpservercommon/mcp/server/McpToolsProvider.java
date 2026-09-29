@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.mcp.server;
 
 import com.springaimcpservercommon.ai.tool.ToolBinding;
+import com.springaimcpservercommon.ai.tool.ToolCallScope;
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.security.mcp.McpScopeDecision;
@@ -34,11 +35,31 @@ public interface McpToolsProvider {
      * @param catalog        effective catalog snapshot for this workspace
      * @param workspaceId    workspace being served
      * @param scopeEvaluator MCP scope evaluator for per-tool access checks
+     * @param scope          channel and MCP request the tool calls are recorded under; {@code null} disables recording
      * @return immutable list of accessible, secured tool callbacks
      */
     List<ToolCallback> toolsForRequest(DaiPrincipal principal,
                                         Authentication authentication,
                                         EffectiveCatalog catalog,
                                         UUID workspaceId,
-                                        McpScopeEvaluator scopeEvaluator);
+                                        McpScopeEvaluator scopeEvaluator,
+                                        @org.jspecify.annotations.Nullable ToolCallScope scope);
+
+    /**
+     * Same as the scoped variant without tool-call recording.
+     *
+     * @param principal      the authenticated caller
+     * @param authentication the caller's authentication
+     * @param catalog        effective catalog
+     * @param workspaceId    workspace
+     * @param scopeEvaluator scope/grant evaluator
+     * @return callbacks the caller may see and call
+     */
+    default List<ToolCallback> toolsForRequest(DaiPrincipal principal,
+                                                Authentication authentication,
+                                                EffectiveCatalog catalog,
+                                                UUID workspaceId,
+                                                McpScopeEvaluator scopeEvaluator) {
+        return toolsForRequest(principal, authentication, catalog, workspaceId, scopeEvaluator, null);
+    }
 }

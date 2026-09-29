@@ -28,6 +28,12 @@ public enum ProblemCode {
     /** The caller's expected version (If-Match) is stale. */
     PRECONDITION_FAILED("precondition-failed", 412),
 
+    /** A mutation needs an {@code If-Match} header and none was sent. */
+    PRECONDITION_REQUIRED("precondition-required", 428),
+
+    /** The change proposal expired before it was decided. */
+    PROPOSAL_EXPIRED("proposal-expired", 410),
+
     /** One or more request parameters failed schema validation. */
     INVALID_ARGUMENT("invalid-argument", 400),
 

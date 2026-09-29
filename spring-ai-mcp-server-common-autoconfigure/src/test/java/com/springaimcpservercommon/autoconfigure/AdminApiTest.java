@@ -2,10 +2,13 @@ package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.persistence.support.PageRequest;
 import com.springaimcpservercommon.persistence.support.TimeRange;
+import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory.FieldViolation;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,5 +49,29 @@ class AdminApiTest {
         assertThatThrownBy(() -> AdminApi.window("yesterday", null, NOW))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("from must be an ISO-8601 instant");
+    }
+
+    @Test
+    void ifMatchAcceptsQuotedWeakAndBareVersions() {
+        assertThat(AdminApi.ifMatch(null)).isNull();
+        assertThat(AdminApi.ifMatch(" ")).isNull();
+        assertThat(AdminApi.ifMatch("\"7\"")).isEqualTo(7L);
+        assertThat(AdminApi.ifMatch("W/\"12\"")).isEqualTo(12L);
+        assertThat(AdminApi.ifMatch("0")).isEqualTo(0L);
+        assertThatThrownBy(() -> AdminApi.ifMatch("abc")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AdminApi.ifMatch("-1")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void textStripsAndValidates() {
+        List<FieldViolation> errors = new ArrayList<>();
+        assertThat(AdminApi.text(errors, "name", "  Sales  ", true, 10)).isEqualTo("Sales");
+        assertThat(AdminApi.text(errors, "description", null, false, 10)).isNull();
+        assertThat(errors).isEmpty();
+
+        assertThat(AdminApi.text(errors, "name", " ", true, 10)).isNull();
+        assertThat(AdminApi.text(errors, "name", "12345678901", true, 10)).isNull();
+        assertThat(AdminApi.text(errors, "name", "a\u0007b", true, 10)).isNull();
+        assertThat(errors).hasSize(3);
     }
 }

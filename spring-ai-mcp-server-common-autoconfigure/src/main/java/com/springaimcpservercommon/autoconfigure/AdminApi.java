@@ -10,6 +10,7 @@ import com.springaimcpservercommon.security.permission.Permission;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory;
+import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory.FieldViolation;
 import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -19,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -89,6 +91,21 @@ final class AdminApi {
             return new Gate(null, problem(ProblemCode.ACCESS_DENIED, "Access denied", null, request));
         }
         return new Gate(principal, null);
+    }
+
+    /**
+     * Checks a permission for an already authenticated caller without producing a response.
+     *
+     * @param principal   the caller
+     * @param permission  permission to check
+     * @param workspaceId workspace scope, or {@code null} for a global check
+     * @return {@code true} if permitted
+     */
+    boolean permits(DaiPrincipal principal, Permission permission, @Nullable UUID workspaceId) {
+        AuthorizationRequest authz = workspaceId == null
+                ? AuthorizationRequest.global(principal, permission)
+                : AuthorizationRequest.onWorkspace(principal, permission, workspaceId);
+        return authorizationEngine.decide(authz) instanceof AuthorizationOutcome.Permit;
     }
 
     /**
@@ -167,5 +184,71 @@ final class AdminApi {
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException(name + " must be an ISO-8601 instant, e.g. 2026-09-29T10:15:30Z");
         }
+    }
+
+    /** Parses {@code If-Match} as a row version; accepts {@code "7"}, {@code W/"7"} and {@code 7}. */
+    static @Nullable Long ifMatch(@Nullable String header) {
+        if (header == null || header.isBlank()) {
+            return null;
+        }
+        String v = header.strip();
+        if (v.startsWith("W/")) {
+            v = v.substring(2);
+        }
+        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
+            v = v.substring(1, v.length() - 1);
+        }
+        try {
+            long version = Long.parseLong(v);
+            if (version < 0) {
+                throw new NumberFormatException();
+            }
+            return version;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("If-Match must be a row version such as \"7\"");
+        }
+    }
+
+    /**
+     * Builds the 400 problem for a list of field violations.
+     *
+     * @param request    current request
+     * @param violations violations, at least one
+     * @return the response
+     */
+    static ResponseEntity<String> validation(HttpServletRequest request, List<FieldViolation> violations) {
+        return ResponseEntity.status(ProblemCode.INVALID_ARGUMENT.httpStatus())
+                .contentType(PROBLEM_JSON)
+                .body(ProblemDetailFactory.buildValidation(request.getRequestURI(), violations));
+    }
+
+    /**
+     * Validates a text field and returns its stripped value.
+     *
+     * @param errors   collector for violations
+     * @param field    field name
+     * @param value    raw value
+     * @param required whether a non-blank value is mandatory
+     * @param max      maximum length after stripping
+     * @return the stripped value, or {@code null} when absent or invalid
+     */
+    static @Nullable String text(List<FieldViolation> errors, String field, @Nullable String value, boolean required,
+                                 int max) {
+        String v = value == null ? "" : value.strip();
+        if (v.isEmpty()) {
+            if (required) {
+                errors.add(new FieldViolation(field, "is required"));
+            }
+            return null;
+        }
+        if (v.length() > max) {
+            errors.add(new FieldViolation(field, "must be at most " + max + " characters"));
+            return null;
+        }
+        if (v.chars().anyMatch(Character::isISOControl)) {
+            errors.add(new FieldViolation(field, "must not contain control characters"));
+            return null;
+        }
+        return v;
     }
 }

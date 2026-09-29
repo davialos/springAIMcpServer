@@ -22,6 +22,7 @@ import java.util.Map;
  * @param mcp             MCP server transport and origin configuration
  * @param query           dynamic query bulkhead settings
  * @param scan            {@code @Ai*} annotation scan settings
+ * @param write           reviewed change-proposal settings (LLD-11 §12)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -30,7 +31,15 @@ public record DaiProperties(
         @DefaultValue Security security,
         @DefaultValue Mcp mcp,
         @DefaultValue Query query,
-        @DefaultValue Scan scan) {
+        @DefaultValue Scan scan,
+        @DefaultValue Write write) {
+
+    /**
+     * Reviewed change-proposal settings (LLD-11 §12).
+     *
+     * @param retention how long proposals are kept after reaching a terminal state
+     */
+    public record Write(@DefaultValue("7d") Duration retention) {}
 
     /**
      * Environment identification settings.

@@ -1,13 +1,8 @@
 package com.springaimcpservercommon.autoconfigure;
 
-import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
-import com.springaimcpservercommon.persistence.audit.AuditActorType;
 import com.springaimcpservercommon.persistence.audit.AuditCategory;
-import com.springaimcpservercommon.persistence.audit.AuditDecision;
-import com.springaimcpservercommon.persistence.audit.AuditEventDraft;
 import com.springaimcpservercommon.persistence.audit.AuditPlane;
-import com.springaimcpservercommon.persistence.audit.AuditTrail;
 import com.springaimcpservercommon.persistence.config.KillSwitchStore;
 import com.springaimcpservercommon.persistence.config.KillSwitchTarget;
 import com.springaimcpservercommon.persistence.config.KillSwitchView;
@@ -18,8 +13,6 @@ import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory.FieldViol
 import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -51,8 +44,6 @@ import java.util.UUID;
 @NullMarked
 @RequestMapping("/dynamic-ai/admin/api/v1/kill-switches")
 public final class KillSwitchAdminController {
-
-    private static final Logger LOG = LoggerFactory.getLogger(KillSwitchAdminController.class);
 
     static final int MAX_REASON_LENGTH = 500;
     static final Duration MAX_EXPIRY = Duration.ofDays(365);
@@ -99,13 +90,13 @@ public final class KillSwitchAdminController {
                              boolean active) {}
 
     private final KillSwitchStore store;
-    private final AuditTrail auditTrail;
+    private final AdminAudit audit;
     private final AdminApi api;
     private final Clock clock;
 
-    KillSwitchAdminController(KillSwitchStore store, AuditTrail auditTrail, AdminApi api, Clock clock) {
+    KillSwitchAdminController(KillSwitchStore store, AdminAudit audit, AdminApi api, Clock clock) {
         this.store = Objects.requireNonNull(store, "store");
-        this.auditTrail = Objects.requireNonNull(auditTrail, "auditTrail");
+        this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -298,19 +289,12 @@ public final class KillSwitchAdminController {
     }
 
     private void audit(DaiPrincipal caller, String action, KillSwitchView sw, @Nullable String reason) {
-        try {
-            Map<String, Object> details = new LinkedHashMap<>();
-            details.put("scope", sw.target().scope().name());
-            if (sw.expiresAt() != null) {
-                details.put("expiresAt", sw.expiresAt().toString());
-            }
-            auditTrail.append(new AuditEventDraft(AuditCategory.ADMIN, action, AuditPlane.CONTROL,
-                    caller.principalId(), AuditActorType.valueOf(caller.type().name()), null,
-                    workspaceOf(sw.target()), "kill_switch", sw.id().toString(), AuditDecision.PERMIT, reason,
-                    null, null, null, null, null, CanonicalJson.write(details), null));
-        } catch (RuntimeException e) {
-            // The change is already committed; do not fail the operator's action, but make the gap visible.
-            LOG.error("Audit append failed for {} (kill switch {})", action, sw.id(), e);
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("scope", sw.target().scope().name());
+        if (sw.expiresAt() != null) {
+            details.put("expiresAt", sw.expiresAt().toString());
         }
+        audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, action, workspaceOf(sw.target()),
+                "kill_switch", sw.id().toString(), null, reason, details);
     }
 }

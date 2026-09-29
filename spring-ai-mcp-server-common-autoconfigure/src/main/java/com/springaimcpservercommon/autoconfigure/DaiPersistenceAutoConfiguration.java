@@ -12,7 +12,12 @@ import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.persistence.audit.AuditTrail;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
+import com.springaimcpservercommon.persistence.config.GrantStore;
 import com.springaimcpservercommon.persistence.config.KillSwitchStore;
+import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
+import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
+import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
+import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
 import com.springaimcpservercommon.persistence.config.PublishedResource;
 import com.springaimcpservercommon.persistence.config.PublishedSnapshot;
 import com.springaimcpservercommon.persistence.config.ResourceKind;
@@ -150,6 +155,72 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(DaiStore.class)
     public KillSwitchStore killSwitchStore(DaiStore store) {
         return new KillSwitchStore(store);
+    }
+
+    /**
+     * Workspace and membership store (F-62).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(WorkspaceStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public WorkspaceStore workspaceStore(DaiStore store) {
+        return new WorkspaceStore(store);
+    }
+
+    /**
+     * IdP group/claim to role mapping store (F-61).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(RoleMappingStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public RoleMappingStore roleMappingStore(DaiStore store) {
+        return new RoleMappingStore(store);
+    }
+
+    /**
+     * Fine-grained grant store (F-63).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(GrantStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public GrantStore grantStore(DaiStore store) {
+        return new GrantStore(store);
+    }
+
+    /**
+     * Service account and API key store (F-65).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ApiKeyStore apiKeyStore(DaiStore store) {
+        return new ApiKeyStore(store);
+    }
+
+    /**
+     * Change proposal store (F-45, LLD-11).
+     *
+     * @param store the framework's persistence unit
+     * @param props framework properties (terminal-state retention)
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChangeProposalStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ChangeProposalStore changeProposalStore(DaiStore store, DaiProperties props) {
+        return new ChangeProposalStore(store, java.time.Clock.systemUTC(), props.write().retention());
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {

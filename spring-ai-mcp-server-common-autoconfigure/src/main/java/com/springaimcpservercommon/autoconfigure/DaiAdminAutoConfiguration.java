@@ -5,7 +5,12 @@ import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
 import com.springaimcpservercommon.core.environment.EnvironmentSignals;
 import com.springaimcpservercommon.persistence.audit.AuditTrail;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
+import com.springaimcpservercommon.persistence.config.GrantStore;
 import com.springaimcpservercommon.persistence.config.KillSwitchStore;
+import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
+import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
+import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
+import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import org.jspecify.annotations.NullMarked;
@@ -29,6 +34,9 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *       {@link MeAdminController} — cross-cutting admin APIs for the UI (audit log viewer, kill switches,
  *       cluster status, caller/environment bootstrap), gated by {@link AdminApi} and answered with
  *       RFC 9457 problems by {@link AdminExceptionHandler}</li>
+ *   <li>{@link ProposalReviewController} (data plane, {@code /dynamic-ai/api/proposals}) and the access
+ *       management controllers {@link WorkspaceAdminController}, {@link RoleMappingAdminController},
+ *       {@link GrantAdminController}, {@link ServiceAccountAdminController}</li>
  * </ul>
  *
  * <p>Catalog endpoints are registered whenever a {@link MetadataRegistry} bean is present
@@ -86,6 +94,19 @@ public class DaiAdminAutoConfiguration {
     }
 
     /**
+     * Post-commit audit recorder shared by the admin controllers.
+     *
+     * @param auditTrail audit trail
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(AdminAudit.class)
+    @ConditionalOnBean(AuditTrail.class)
+    AdminAudit adminAudit(AuditTrail auditTrail) {
+        return new AdminAudit(auditTrail);
+    }
+
+    /**
      * RFC 9457 error mapping scoped to the cross-cutting admin controllers.
      *
      * @return the advice
@@ -114,17 +135,17 @@ public class DaiAdminAutoConfiguration {
     /**
      * Kill switch admin API (F-73).
      *
-     * @param store      kill switch store
-     * @param auditTrail audit trail
-     * @param api        admin gate
+     * @param store kill switch store
+     * @param audit audit recorder
+     * @param api   admin gate
      * @return the controller
      */
     @Bean
     @ConditionalOnMissingBean(KillSwitchAdminController.class)
-    @ConditionalOnBean({KillSwitchStore.class, AuditTrail.class, AdminApi.class})
-    public KillSwitchAdminController killSwitchAdminController(KillSwitchStore store, AuditTrail auditTrail,
+    @ConditionalOnBean({KillSwitchStore.class, AdminAudit.class, AdminApi.class})
+    public KillSwitchAdminController killSwitchAdminController(KillSwitchStore store, AdminAudit audit,
                                                                AdminApi api) {
-        return new KillSwitchAdminController(store, auditTrail, api, java.time.Clock.systemUTC());
+        return new KillSwitchAdminController(store, audit, api, java.time.Clock.systemUTC());
     }
 
     /**
@@ -155,5 +176,83 @@ public class DaiAdminAutoConfiguration {
     public MeAdminController meAdminController(AdminApi api, EnvironmentSafetyPolicy safetyPolicy,
                                                EnvironmentSignals signals) {
         return new MeAdminController(api, safetyPolicy, signals);
+    }
+
+    /**
+     * Proposal review API (LLD-11 §8).
+     *
+     * @param store proposal store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ProposalReviewController.class)
+    @ConditionalOnBean({ChangeProposalStore.class, AdminAudit.class, AdminApi.class})
+    public ProposalReviewController proposalReviewController(ChangeProposalStore store, AdminAudit audit,
+                                                              AdminApi api) {
+        return new ProposalReviewController(store, audit, api);
+    }
+
+    /**
+     * Workspace and membership admin API.
+     *
+     * @param store workspace store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(WorkspaceAdminController.class)
+    @ConditionalOnBean({WorkspaceStore.class, AdminAudit.class, AdminApi.class})
+    public WorkspaceAdminController workspaceAdminController(WorkspaceStore store, AdminAudit audit, AdminApi api) {
+        return new WorkspaceAdminController(store, audit, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Role mapping admin API.
+     *
+     * @param store role mapping store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(RoleMappingAdminController.class)
+    @ConditionalOnBean({RoleMappingStore.class, AdminAudit.class, AdminApi.class})
+    public RoleMappingAdminController roleMappingAdminController(RoleMappingStore store, AdminAudit audit,
+                                                                 AdminApi api) {
+        return new RoleMappingAdminController(store, audit, api);
+    }
+
+    /**
+     * Grant admin API.
+     *
+     * @param store grant store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(GrantAdminController.class)
+    @ConditionalOnBean({GrantStore.class, AdminAudit.class, AdminApi.class})
+    public GrantAdminController grantAdminController(GrantStore store, AdminAudit audit, AdminApi api) {
+        return new GrantAdminController(store, audit, api, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Service account and API key admin API.
+     *
+     * @param store API key store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ServiceAccountAdminController.class)
+    @ConditionalOnBean({ApiKeyStore.class, AdminAudit.class, AdminApi.class})
+    public ServiceAccountAdminController serviceAccountAdminController(ApiKeyStore store, AdminAudit audit,
+                                                                       AdminApi api) {
+        return new ServiceAccountAdminController(store, audit, api, java.time.Clock.systemUTC());
     }
 }

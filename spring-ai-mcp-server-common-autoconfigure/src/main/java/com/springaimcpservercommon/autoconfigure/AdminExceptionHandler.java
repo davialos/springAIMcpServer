@@ -1,5 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.persistence.config.ConfigLifecycleException;
+import com.springaimcpservercommon.persistence.config.SegregationOfDutiesException;
 import com.springaimcpservercommon.persistence.proposal.ProposalRuleViolationException;
 import com.springaimcpservercommon.persistence.support.SqlStates;
 import com.springaimcpservercommon.webmvc.problem.ProblemCode;
@@ -40,7 +42,9 @@ import java.util.NoSuchElementException;
         BudgetAdminController.class,
         UsageAdminController.class,
         TraceAdminController.class,
-        ConversationController.class})
+        ConversationController.class,
+        ResourceAdminController.class,
+        CatalogAdminController.class})
 public final class AdminExceptionHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(AdminExceptionHandler.class);
@@ -152,6 +156,33 @@ public final class AdminExceptionHandler {
     public ResponseEntity<String> staleVersion(OptimisticLockException e, HttpServletRequest request) {
         return AdminApi.problem(ProblemCode.PRECONDITION_FAILED, "Stale version",
                 "The resource was changed by someone else; reload it and retry.", request);
+    }
+
+    /**
+     * The reviewer is the author of the revision (separation of duties, F-64).
+     *
+     * @param e       the violation
+     * @param request current request
+     * @return 403 problem
+     */
+    @ExceptionHandler(SegregationOfDutiesException.class)
+    public ResponseEntity<String> segregationOfDuties(SegregationOfDutiesException e, HttpServletRequest request) {
+        return AdminApi.problem(ProblemCode.ACCESS_DENIED, "Access denied",
+                "Separation of duties: the author of a revision cannot review it.", request);
+    }
+
+    /**
+     * A configuration lifecycle rule refused the change (illegal state transition, live set not closed, dangling
+     * dependencies, unknown generation). The store's message names states, resources and generations only, so it
+     * is returned as the problem detail to give the author the findings (LLD-08 §5).
+     *
+     * @param e       the violation
+     * @param request current request
+     * @return 409 problem
+     */
+    @ExceptionHandler(ConfigLifecycleException.class)
+    public ResponseEntity<String> lifecycle(ConfigLifecycleException e, HttpServletRequest request) {
+        return AdminApi.problem(ProblemCode.CONFLICT, "Lifecycle rule violated", e.getMessage(), request);
     }
 
     /**

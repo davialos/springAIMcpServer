@@ -1,5 +1,9 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.core.environment.Capability;
+import com.springaimcpservercommon.core.environment.EnvironmentIdentity;
+import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
+import com.springaimcpservercommon.core.environment.EnvironmentSignals;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.persistence.support.PageRequest;
 import com.springaimcpservercommon.persistence.support.TimeRange;
@@ -45,6 +49,8 @@ final class AdminApi {
 
     private final GenericDynamicHandler.DaiPrincipalResolver principalResolver;
     private final AuthorizationEngine authorizationEngine;
+    private final EnvironmentSafetyPolicy safetyPolicy;
+    private final EnvironmentSignals environmentSignals;
 
     /**
      * Result of {@link #gate}: either the authenticated, authorized principal or a ready problem response.
@@ -64,9 +70,29 @@ final class AdminApi {
         }
     }
 
-    AdminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine authorizationEngine) {
+    AdminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine authorizationEngine,
+             EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals environmentSignals) {
         this.principalResolver = Objects.requireNonNull(principalResolver, "principalResolver");
         this.authorizationEngine = Objects.requireNonNull(authorizationEngine, "authorizationEngine");
+        this.safetyPolicy = Objects.requireNonNull(safetyPolicy, "safetyPolicy");
+        this.environmentSignals = Objects.requireNonNull(environmentSignals, "environmentSignals");
+    }
+
+    /**
+     * Checks that a capability is enabled in this environment (LLD-12 §2.2: authoring and introspection are off in
+     * production, and an unknown tier counts as production).
+     *
+     * @param capability the capability the endpoint needs
+     * @param request    current request
+     * @return {@code null} when enabled, otherwise a ready 403 {@code capability-disabled} problem
+     */
+    @Nullable ResponseEntity<String> capabilityDenied(Capability capability, HttpServletRequest request) {
+        EnvironmentIdentity identity = safetyPolicy.identify(environmentSignals);
+        if (safetyPolicy.isEnabled(capability, identity)) {
+            return null;
+        }
+        return problem(ProblemCode.CAPABILITY_DISABLED, "Capability disabled",
+                capability.name() + " is not available in the " + identity.tier().name() + " environment.", request);
     }
 
     /**

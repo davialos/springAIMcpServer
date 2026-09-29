@@ -58,45 +58,22 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 public class DaiAdminAutoConfiguration {
 
     /**
-     * Catalog read controller: exposes the live {@link com.springaimcpservercommon.core.catalog.EffectiveCatalog}
-     * over HTTP (LLD-08 §2.1).
-     *
-     * @param metadataRegistry live effective catalog
-     * @return the controller
-     */
-    @Bean
-    @ConditionalOnMissingBean(CatalogAdminController.class)
-    @ConditionalOnBean(MetadataRegistry.class)
-    public CatalogAdminController catalogAdminController(MetadataRegistry metadataRegistry) {
-        return new CatalogAdminController(metadataRegistry);
-    }
-
-    /**
-     * Resource lifecycle controller: create, read, draft, publish, suspend and resume (LLD-08 §2, LLD-09).
-     *
-     * @param configStore configuration lifecycle store
-     * @return the controller
-     */
-    @Bean
-    @ConditionalOnMissingBean(ResourceAdminController.class)
-    @ConditionalOnBean(ConfigStore.class)
-    public ResourceAdminController resourceAdminController(ConfigStore configStore) {
-        return new ResourceAdminController(configStore);
-    }
-
-    /**
      * Shared authentication/authorization gate and problem builder for the cross-cutting admin controllers.
      * Present only when both the principal resolver and the authorization engine are.
      *
      * @param principalResolver resolves the caller
      * @param engine            authorizes permissions
+     * @param safetyPolicy      environment safety policy (capability gating)
+     * @param signals           environment signals
      * @return the gate
      */
     @Bean
     @ConditionalOnMissingBean(AdminApi.class)
-    @ConditionalOnBean({GenericDynamicHandler.DaiPrincipalResolver.class, AuthorizationEngine.class})
-    AdminApi adminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine engine) {
-        return new AdminApi(principalResolver, engine);
+    @ConditionalOnBean({GenericDynamicHandler.DaiPrincipalResolver.class, AuthorizationEngine.class,
+                        EnvironmentSafetyPolicy.class, EnvironmentSignals.class})
+    AdminApi adminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine engine,
+                      EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals signals) {
+        return new AdminApi(principalResolver, engine, safetyPolicy, signals);
     }
 
     /**
@@ -157,15 +134,16 @@ public class DaiAdminAutoConfiguration {
     /**
      * Cluster status API.
      *
-     * @param configStore config store (node heartbeats and generations)
+     * @param configStore config store (node heartbeats, generations, rollback)
+     * @param audit       audit recorder
      * @param api         admin gate
      * @return the controller
      */
     @Bean
     @ConditionalOnMissingBean(ClusterAdminController.class)
-    @ConditionalOnBean({ConfigStore.class, AdminApi.class})
-    public ClusterAdminController clusterAdminController(ConfigStore configStore, AdminApi api) {
-        return new ClusterAdminController(configStore, api);
+    @ConditionalOnBean({ConfigStore.class, AdminAudit.class, AdminApi.class})
+    public ClusterAdminController clusterAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api) {
+        return new ClusterAdminController(configStore, audit, api);
     }
 
     /**
@@ -323,5 +301,38 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean({TelemetryStore.class, AdminAudit.class, AdminApi.class})
     public ConversationController conversationController(TelemetryStore store, AdminAudit audit, AdminApi api) {
         return new ConversationController(store, audit, api);
+    }
+
+    /**
+     * Catalog read controller: exposes the live {@link com.springaimcpservercommon.core.catalog.EffectiveCatalog}
+     * over HTTP (LLD-08 §2.1).
+     *
+     * @param metadataRegistry live effective catalog
+     * @param api              admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(CatalogAdminController.class)
+    @ConditionalOnBean({MetadataRegistry.class, AdminApi.class})
+    public CatalogAdminController catalogAdminController(MetadataRegistry metadataRegistry, AdminApi api) {
+        return new CatalogAdminController(metadataRegistry, api);
+    }
+
+    /**
+     * Resource lifecycle controller: create, edit, submit, review, publish, suspend, resume, deprecate and retire
+     * (LLD-08 §2, LLD-09).
+     *
+     * @param configStore configuration lifecycle store
+     * @param audit       audit recorder
+     * @param api         admin gate
+     * @param props       framework properties (required review approvals)
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ResourceAdminController.class)
+    @ConditionalOnBean({ConfigStore.class, AdminAudit.class, AdminApi.class})
+    public ResourceAdminController resourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api,
+                                                           DaiProperties props) {
+        return new ResourceAdminController(configStore, audit, api, props.review().requiredApprovals());
     }
 }

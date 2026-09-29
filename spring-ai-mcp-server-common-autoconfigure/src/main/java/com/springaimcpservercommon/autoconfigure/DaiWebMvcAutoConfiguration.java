@@ -356,6 +356,7 @@ public class DaiWebMvcAutoConfiguration {
      *
      * @param turnEventBufferProvider optional ring buffer for SSE stream replay
      * @param budgetCheckerProvider   optional budget check for an early {@code 429 budget-exhausted}
+     * @param props                   framework properties (chat limits)
      * @return the controller
      */
     @Bean
@@ -370,10 +371,13 @@ public class DaiWebMvcAutoConfiguration {
             GenericDynamicHandler.RateLimiter rateLimiter,
             GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
             ObjectProvider<TurnEventBuffer> turnEventBufferProvider,
-            ObjectProvider<InvocationGuardAdvisor.BudgetChecker> budgetCheckerProvider) {
+            ObjectProvider<InvocationGuardAdvisor.BudgetChecker> budgetCheckerProvider,
+            DaiProperties props) {
+        DaiProperties.Chat chat = props.chat();
         return new AgentChatController(agentResolver, agentInvoker, principalResolver,
                 authorizationEngine, rateLimiter, killSwitchChecker,
-                turnEventBufferProvider.getIfAvailable(), budgetCheckerProvider.getIfAvailable());
+                turnEventBufferProvider.getIfAvailable(), budgetCheckerProvider.getIfAvailable(),
+                new AgentChatController.Settings(chat.streamIdleTimeout(), chat.maxMessageChars()));
     }
 
     /**

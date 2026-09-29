@@ -24,6 +24,8 @@ import java.util.Map;
  * @param scan            {@code @Ai*} annotation scan settings
  * @param write           reviewed change-proposal settings (LLD-11 §12)
  * @param budget          budget enforcement in the invocation path (F-70, LLD-10 §6)
+ * @param review          approval policy for publishing configuration (F-64)
+ * @param chat            agent chat endpoint limits (LLD-13)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -34,7 +36,46 @@ public record DaiProperties(
         @DefaultValue Query query,
         @DefaultValue Scan scan,
         @DefaultValue Write write,
-        @DefaultValue Budget budget) {
+        @DefaultValue Budget budget,
+        @DefaultValue Review review,
+        @DefaultValue Chat chat) {
+
+    /**
+     * Approval policy for configuration revisions.
+     *
+     * @param requiredApprovals distinct reviewers who must approve a revision before it can be published
+     *                          (at least 1; the author can never review their own revision)
+     */
+    public record Review(@DefaultValue("1") int requiredApprovals) {
+        /** Validates the approval count. */
+        public Review {
+            if (requiredApprovals < 1 || requiredApprovals > 10) {
+                throw new IllegalArgumentException("dynamic.ai.agent.review.required-approvals must be 1..10");
+            }
+        }
+    }
+
+    /**
+     * Limits of the agent chat endpoints.
+     *
+     * @param streamIdleTimeout longest silence between two stream events before the stream ends with a
+     *                          {@code model-timeout} error event
+     * @param maxMessageChars   longest accepted user message, in characters (an agent's own
+     *                          {@code maxInputChars} guardrail applies too when it is smaller)
+     */
+    public record Chat(
+            @DefaultValue("20s") Duration streamIdleTimeout,
+            @DefaultValue("32000") int maxMessageChars) {
+        /** Validates the limits. */
+        public Chat {
+            if (streamIdleTimeout.isNegative() || streamIdleTimeout.isZero()) {
+                throw new IllegalArgumentException("dynamic.ai.agent.chat.stream-idle-timeout must be positive");
+            }
+            if (maxMessageChars < 1) {
+                throw new IllegalArgumentException("dynamic.ai.agent.chat.max-message-chars must be positive");
+            }
+        }
+    }
 
     /**
      * Budget enforcement settings.

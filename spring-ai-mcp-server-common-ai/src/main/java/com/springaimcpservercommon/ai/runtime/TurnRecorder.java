@@ -79,16 +79,20 @@ public interface TurnRecorder {
      * @param streaming          whether the turn was streamed
      * @param inputTokens        input tokens reported by the provider (0 when unknown)
      * @param outputTokens       output tokens reported by the provider (0 when unknown)
+     * @param modelCallId        id of the model call that covers this turn's tool loop; tool calls of the turn refer to
+     *                           it, so the recorder must store the model call under exactly this id (unless the turn
+     *                           was rejected before any model call)
      */
     record TurnRecord(UUID turnId, Instant startedAt, Instant endedAt, @Nullable UUID conversationId,
                       AgentDefinition agent, DaiPrincipal principal, Channel channel, @Nullable String traceId,
                       @Nullable String clientRequestId, Outcome outcome, Finish finish, @Nullable String errorCode,
                       @Nullable Integer timeToFirstTokenMs, boolean streaming, long inputTokens,
-                      long outputTokens) {
+                      long outputTokens, UUID modelCallId) {
 
         /** Validates the components. */
         public TurnRecord {
             Objects.requireNonNull(turnId, "turnId");
+            Objects.requireNonNull(modelCallId, "modelCallId");
             Objects.requireNonNull(startedAt, "startedAt");
             Objects.requireNonNull(endedAt, "endedAt");
             Objects.requireNonNull(agent, "agent");

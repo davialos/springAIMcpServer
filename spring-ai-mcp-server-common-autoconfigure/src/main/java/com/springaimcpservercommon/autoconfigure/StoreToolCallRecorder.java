@@ -68,7 +68,7 @@ final class StoreToolCallRecorder implements ToolCallRecorder, AutoCloseable {
         ToolAccessMode mode = c.binding().writeMode() == WriteMode.PROPOSE ? ToolAccessMode.PROPOSE
                 : ToolAccessMode.READ;
         return new NewToolInvocation(c.id(), c.startedAt(), c.endedAt(), c.scope().channel(), c.scope().turnId(),
-                null, null, c.scope().mcpRequestId(), c.binding().workspaceId(), c.principalId(),
+                c.scope().modelCallId(), null, c.scope().mcpRequestId(), c.binding().workspaceId(), c.principalId(),
                 c.binding().toolName(), c.elementRef(), null, mode, c.argsSha256(), null,
                 ToolInvocationStatus.valueOf(c.status().name()), null, c.resultSha256(), c.truncated(),
                 c.errorCode(), c.writeViolation(), c.proposalId());

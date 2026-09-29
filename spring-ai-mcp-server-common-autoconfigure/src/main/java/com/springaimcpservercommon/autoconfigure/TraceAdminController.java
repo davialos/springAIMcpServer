@@ -451,7 +451,7 @@ public final class TraceAdminController {
     }
 
     /**
-     * The call tree of a turn: the turn, its model calls and, under the model call that requested it (or directly
+     * The call tree of a turn: the turn, its model calls and, under the model call it refers to (or directly
      * under the turn), every tool call, with timings relative to the start of the turn and totals.
      *
      * @param workspaceId workspace

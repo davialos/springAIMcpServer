@@ -61,6 +61,19 @@ class StoreToolCallRecorderTest {
     }
 
     @Test
+    void theRowPointsAtTheModelCallOfTheTurn() {
+        UUID turn = UUID.randomUUID();
+        UUID modelCall = UUID.randomUUID();
+        var withCall = call(WriteMode.EXECUTE, ToolCallScope.ofTurn(Channel.CHAT, turn, modelCall),
+                ToolResultStatus.OK, null);
+        var withoutCall = call(WriteMode.EXECUTE, ToolCallScope.ofTurn(Channel.CHAT, turn), ToolResultStatus.OK, null);
+
+        assertThat(StoreToolCallRecorder.toRow(withCall).modelCallId()).isEqualTo(modelCall);
+        assertThat(ToolInvocation.of(StoreToolCallRecorder.toRow(withCall)).getModelCallId()).isEqualTo(modelCall);
+        assertThat(StoreToolCallRecorder.toRow(withoutCall).modelCallId()).isNull();
+    }
+
+    @Test
     void theAccessModeFollowsTheBindingsWriteMode() {
         UUID turn = UUID.randomUUID();
         assertThat(StoreToolCallRecorder.toRow(call(WriteMode.EXECUTE, ToolCallScope.ofTurn(Channel.CHAT, turn),

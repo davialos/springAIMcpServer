@@ -127,6 +127,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                   DaiPrincipal principal, Authentication authentication) {
         UUID conversationId = request.conversationId() != null ? request.conversationId() : Ids.newId();
         UUID turnId = request.turnId() != null ? request.turnId() : Ids.newId();
+        UUID modelCallId = Ids.newId();
         LOG.debug("Agent {} sync turn {} for principal {}", agent.slug(), turnId, principal.principalId());
         Instant startedAt = clock.instant();
         String traceId = currentTraceId();
@@ -139,7 +140,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         "The usage budget for this agent is exhausted for the current period.", false);
             }
             ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId);
+            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId);
             ChatClient client = buildChatClient(agent, principal, chatModel);
             String convKey = convKey(principal, agent, conversationId);
 
@@ -155,21 +156,21 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         "Agent returned no response.", true);
             }
             SyncChatResult result = mapSyncResult(response, conversationId, turnId);
-            recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, false,
+            recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, null,
                     result.usage().inputTokens(), result.usage().outputTokens());
             recordExchange(agent, request, principal, turnId, conversationId, startedAt, result.message());
             return result;
         } catch (AgentInvocationException e) {
             boolean budget = "budget-exhausted".equals(e.code());
-            recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, false,
+            recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, false,
                     budget ? TurnRecorder.Outcome.REJECTED : TurnRecorder.Outcome.FAILED,
                     budget ? TurnRecorder.Finish.BUDGET : TurnRecorder.Finish.ERROR, e.code(), null, 0, 0);
             throw e;
         } catch (Exception e) {
             LOG.error("Agent {} sync turn {} failed for principal {}",
                     agent.slug(), turnId, principal.principalId(), e);
-            recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, false,
+            recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, "execution-error", null, 0, 0);
             throw new AgentInvocationException("execution-error", "Agent invocation failed.", true);
         }
@@ -182,6 +183,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                      DaiPrincipal principal, Authentication authentication) {
         UUID conversationId = request.conversationId() != null ? request.conversationId() : Ids.newId();
         UUID turnId = request.turnId() != null ? request.turnId() : Ids.newId();
+        UUID modelCallId = Ids.newId();
 
         return Flux.defer(() -> {
             LOG.debug("Agent {} stream turn {} for principal {}",
@@ -192,7 +194,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 if (!budgetChecker.hasRemainingBudget(agent, principal)) {
                     LOG.warn("Agent {} budget exhausted for principal {}; stream turn {} rejected",
                             agent.slug(), principal.principalId(), turnId);
-                    recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, true,
+                    recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
                             TurnRecorder.Outcome.REJECTED, TurnRecorder.Finish.BUDGET, "budget-exhausted",
                             null, 0, 0);
                     return Flux.just(new StreamEvent.ErrorEvent(
@@ -200,7 +202,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             "budget-exhausted", false, turnId));
                 }
                 ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId);
+                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId);
                 ChatClient client = buildChatClient(agent, principal, chatModel);
                 String convKey = convKey(principal, agent, conversationId);
 
@@ -267,15 +269,15 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             Duration.between(startedAt, first).toMillis());
                     String code = failure.get();
                     if (signal == reactor.core.publisher.SignalType.CANCEL && code == null) {
-                        recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, true,
+                        recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.CANCELLED, TurnRecorder.Finish.CANCELLED, "client-cancelled",
                                 ttft, usage[0], usage[1]);
                     } else if (code != null) {
-                        recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, true,
+                        recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, code, ttft,
                                 usage[0], usage[1]);
                     } else {
-                        recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, true,
+                        recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, ttft,
                                 usage[0], usage[1]);
                         String text;
@@ -288,7 +290,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             } catch (Exception e) {
                 LOG.error("Agent {} stream setup failed for principal {}",
                         agent.slug(), principal.principalId(), e);
-                recordTurn(agent, request, principal, turnId, conversationId, startedAt, traceId, true,
+                recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
                         TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, "stream-error", null, 0, 0);
                 return Flux.just(new StreamEvent.ErrorEvent(
                         "/errors/agent/stream-error", "Stream setup failed",
@@ -301,13 +303,13 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     /** Hands a finished turn to the recorder; whatever the recorder does never affects the turn. */
     private void recordTurn(AgentDefinition agent, AgentChatRequest request, DaiPrincipal principal, UUID turnId,
-                            UUID conversationId, Instant startedAt, @Nullable String traceId, boolean streaming,
+                            UUID modelCallId, UUID conversationId, Instant startedAt, @Nullable String traceId, boolean streaming,
                             TurnRecorder.Outcome outcome, TurnRecorder.Finish finish, @Nullable String errorCode,
                             @Nullable Integer timeToFirstTokenMs, long inputTokens, long outputTokens) {
         try {
             turnRecorder.record(new TurnRecorder.TurnRecord(turnId, startedAt, clock.instant(), conversationId,
                     agent, principal, request.effectiveChannel(), traceId, request.clientRequestId(), outcome,
-                    finish, errorCode, timeToFirstTokenMs, streaming, inputTokens, outputTokens));
+                    finish, errorCode, timeToFirstTokenMs, streaming, inputTokens, outputTokens, modelCallId));
         } catch (RuntimeException e) {
             LOG.warn("Turn recording failed for agent {} turn {}; the turn is unaffected", agent.slug(), turnId, e);
         }
@@ -371,12 +373,12 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     private List<ToolCallback> buildToolCallbacks(AgentDefinition agent, DaiPrincipal principal,
                                                     Authentication authentication, AgentChatRequest request,
-                                                    UUID turnId) {
+                                                    UUID turnId, UUID modelCallId) {
         if (toolBridge == null || agent.tools().isEmpty()) {
             return List.of();
         }
         return toolBridge.buildCallbacks(agent, principal, authentication, metadataRegistry.current(),
-                ToolCallScope.ofTurn(request.effectiveChannel(), turnId));
+                ToolCallScope.ofTurn(request.effectiveChannel(), turnId, modelCallId));
     }
 
     // ─── Conversation key ─────────────────────────────────────────────────────

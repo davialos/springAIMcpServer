@@ -28,9 +28,12 @@ import java.util.Objects;
  * workspace is not in the store (foreign keys); that is logged once per hundred failures without any request
  * content.
  *
- * <p>A turn is recorded as a single model call: when a tool loop calls the model several times the provider
- * usage of the final response is what the invoker sees, so tokens are attributed to one call under the agent's
- * configured model. Tool invocations are not recorded here (OQ-43).
+ * <p>A turn is recorded as a single model call that covers its whole tool loop: when the loop calls the model several
+ * times the provider usage of the final response is what the invoker sees, so tokens are attributed to one call under
+ * the agent's configured model. The call's id is generated when the turn starts and shared with the turn's tool calls
+ * ({@code dai_tool_invocation.model_call_id}); the tool calls themselves are written by
+ * {@link StoreToolCallRecorder}. One row per model call inside the loop needs a hook on each model invocation
+ * (OQ-43).
  */
 @NullMarked
 final class StoreTurnRecorder implements TurnRecorder, AutoCloseable {
@@ -61,17 +64,28 @@ final class StoreTurnRecorder implements TurnRecorder, AutoCloseable {
                 t.agent().workspaceId(), t.agent().id(), null, t.principal().principalId(), t.channel(),
                 t.traceId(), t.clientRequestId(), TurnFinishReason.valueOf(t.finish().name()),
                 TurnOutcome.valueOf(t.outcome().name()), t.errorCode(), t.timeToFirstTokenMs()));
-        if (t.inputTokens() + t.outputTokens() > 0) {
+        if (recordsModelCall(t)) {
             String provider = t.agent().model().providerId();
             String model = t.agent().model().modelName();
             ModelCostCalculator.Cost cost = costs.cost(provider, model, t.inputTokens(), t.outputTokens(), 0L,
                     t.startedAt());
-            store.recordModelCall(new NewModelCall(Ids.newId(), t.startedAt(), t.endedAt(), t.turnId(), (short) 0,
+            // the id was handed to the turn's tool calls when the turn started, so their rows point at this row
+            store.recordModelCall(new NewModelCall(t.modelCallId(), t.startedAt(), t.endedAt(), t.turnId(), (short) 0,
                     t.agent().workspaceId(), ModelCallPurpose.AGENT_TURN, provider, model, t.streaming(),
                     t.timeToFirstTokenMs(), clamp(t.inputTokens()), clamp(t.outputTokens()), 0, cost.micros(),
                     cost.currency(), t.finish().name().toLowerCase(Locale.ROOT), modelOutcome(t), t.errorCode(),
                     null, null));
         }
+    }
+
+    /**
+     * Whether the turn is known to have made a model call: the provider reported tokens, or the turn succeeded (a
+     * success needs a model answer even when the provider reports no usage). A failed, cancelled or rejected turn
+     * without tokens may never have reached the model, so no call is invented for it; tool calls of such a turn keep
+     * a model call id that has no row, and the trace tree shows them directly under the turn.
+     */
+    static boolean recordsModelCall(TurnRecord t) {
+        return t.inputTokens() + t.outputTokens() > 0 || t.outcome() == Outcome.SUCCESS;
     }
 
     private static ModelCallOutcome modelOutcome(TurnRecord t) {

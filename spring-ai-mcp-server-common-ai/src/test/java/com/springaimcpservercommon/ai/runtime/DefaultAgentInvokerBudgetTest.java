@@ -114,6 +114,7 @@ class DefaultAgentInvokerBudgetTest {
             assertThat(t.agent()).isEqualTo(agent);
             assertThat(t.principal()).isEqualTo(principal);
             assertThat(t.endedAt()).isAfterOrEqualTo(t.startedAt());
+            assertThat(t.modelCallId()).isNotNull();
         });
     }
 

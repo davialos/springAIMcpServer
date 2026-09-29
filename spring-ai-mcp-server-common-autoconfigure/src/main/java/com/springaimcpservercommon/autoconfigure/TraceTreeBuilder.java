@@ -23,9 +23,10 @@ import java.util.UUID;
 
 /**
  * Turns the flat telemetry rows of one turn or MCP request into the call tree the trace viewer shows (F-72):
- * the request or turn at the root, model calls under a turn, and every tool call under the model call that asked for
- * it, or directly under the root when that call is unknown (the runtime does not record which model call asked for a
- * tool yet, OQ-43, so tool calls are root-level today). Children are ordered by start time.
+ * the request or turn at the root, model calls under a turn, and every tool call under the model call it refers to, or
+ * directly under the root when it refers to none or to a call without a row. The runtime records one model call per
+ * turn that covers the whole tool loop and its tool calls refer to it; a turn that failed before any tokens were
+ * reported has no model call row, so its tool calls sit under the turn (OQ-43). Children are ordered by start time.
  *
  * <p>Pure and store-free. Nodes carry timings relative to the root ({@code offsetMs}) and only what the telemetry
  * tables hold: hashes, counts and statuses, plus the redacted arguments when they were stored — never results or

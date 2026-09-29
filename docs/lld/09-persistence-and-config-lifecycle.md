@@ -46,7 +46,7 @@ Decisions that changed since this draft:
   validate → swap → update `dai_node_state`.
 - Optional push: `SnapshotChangeNotifier` SPI (Postgres `LISTEN/NOTIFY`, Redis pub/sub,
   Kafka, Spring Cloud Bus) triggers an immediate poll — push is a **hint**, polling is the guarantee.
-- Kill switches polled on a faster interval (default 2 s) and cached separately (F-73 ≤ 10 s).
+- Kill switches polled on a faster interval (default 2 s) and cached separately (F-73 ≤ 10 s). **Implemented:** `StoreSecurityPorts.KillSwitches` reloads the active set every 2 s and is used by the authorization engine, the dynamic-endpoint check and the agent runtime; the grant, role-mapping and resource-status ports use 5 to 10 s node-local caches. The snapshot watcher and `dai_node_state` heartbeat are not implemented yet (OQ-46).
 - Idempotent apply: applying generation g twice is a no-op; out-of-order hints ignored (monotonic).
 
 ## 5. Export / import & GitOps (F-74, F-75)

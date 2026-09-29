@@ -128,28 +128,7 @@ public final class UsageLedger {
                 + " sum(u.cachedInputTokens), sum(u.costMicros) from UsageHourly u"
                 + " where u.bucketStart >= :from and u.bucketStart < :to");
         Map<String, Object> params = new HashMap<>();
-        switch (target) {
-            case BudgetTarget.Global ignored -> {
-                // no filter
-            }
-            case BudgetTarget.Workspace w -> {
-                jpql.append(" and u.workspaceId = :ws");
-                params.put("ws", w.workspaceId());
-            }
-            case BudgetTarget.Agent a -> {
-                jpql.append(" and u.workspaceId = :ws and u.agentResourceId = :agent");
-                params.put("ws", a.workspaceId());
-                params.put("agent", a.agentResourceId());
-            }
-            case BudgetTarget.Principal p -> {
-                jpql.append(" and u.principalId = :principal");
-                params.put("principal", p.principalId());
-                if (p.workspaceId() != null) {
-                    jpql.append(" and u.workspaceId = :ws");
-                    params.put("ws", p.workspaceId());
-                }
-            }
-        }
+        appendTargetFilter(jpql, params, target);
         jpql.append(" group by u.currency");
         List<Object[]> rows = store.readOnlyTransactions().execute(status -> {
             TypedQuery<Object[]> query = store.entityManager().createQuery(jpql.toString(), Object[].class)
@@ -175,6 +154,55 @@ public final class UsageLedger {
         return new UsageTotals(calls, input, output, cached, cost);
     }
 
+    /** Largest window {@link #hourlySeries} accepts (32 days), to bound the rows read. */
+    public static final int MAX_SERIES_HOURS = 24 * 32;
+
+    /**
+     * Usage of a target per hourly bucket over a window, oldest first. Hours without usage are omitted.
+     *
+     * @param target whose usage (GLOBAL = all)
+     * @param window [from, to) — buckets whose start lies in it; at most {@value #MAX_SERIES_HOURS} hours
+     * @return one entry per hour that has usage
+     * @throws IllegalArgumentException if the window is wider than {@value #MAX_SERIES_HOURS} hours
+     */
+    public List<UsageBucket> hourlySeries(BudgetTarget target, UsageWindow window) {
+        Objects.requireNonNull(target, "target");
+        Objects.requireNonNull(window, "window");
+        if (java.time.Duration.between(window.from(), window.to()).toHours() > MAX_SERIES_HOURS) {
+            throw new IllegalArgumentException("series window must not exceed " + MAX_SERIES_HOURS + " hours");
+        }
+        StringBuilder jpql = new StringBuilder("select u.bucketStart, u.currency, sum(u.calls), sum(u.inputTokens),"
+                + " sum(u.outputTokens), sum(u.cachedInputTokens), sum(u.costMicros) from UsageHourly u"
+                + " where u.bucketStart >= :from and u.bucketStart < :to");
+        Map<String, Object> params = new HashMap<>();
+        appendTargetFilter(jpql, params, target);
+        jpql.append(" group by u.bucketStart, u.currency order by u.bucketStart");
+        List<Object[]> rows = store.readOnlyTransactions().execute(status -> {
+            TypedQuery<Object[]> query = store.entityManager().createQuery(jpql.toString(), Object[].class)
+                    .setParameter("from", window.from())
+                    .setParameter("to", window.to());
+            params.forEach(query::setParameter);
+            return query.getResultList();
+        });
+        Map<Instant, long[]> sums = new java.util.LinkedHashMap<>();
+        Map<Instant, Map<String, Long>> costs = new HashMap<>();
+        for (Object[] row : rows) {
+            Instant bucket = (Instant) row[0];
+            long[] acc = sums.computeIfAbsent(bucket, k -> new long[4]);
+            acc[0] += asLong(row[2]);
+            acc[1] += asLong(row[3]);
+            acc[2] += asLong(row[4]);
+            acc[3] += asLong(row[5]);
+            if (row[1] != null) {
+                costs.computeIfAbsent(bucket, k -> new HashMap<>()).merge(((String) row[1]).trim(), asLong(row[6]), Long::sum);
+            }
+        }
+        List<UsageBucket> out = new java.util.ArrayList<>(sums.size());
+        sums.forEach((bucket, acc) -> out.add(new UsageBucket(bucket,
+                new UsageTotals(acc[0], acc[1], acc[2], acc[3], costs.getOrDefault(bucket, Map.of())))));
+        return List.copyOf(out);
+    }
+
     /**
      * Usage of a budget's target in its current period (UTC day or month containing now).
      *
@@ -184,6 +212,31 @@ public final class UsageLedger {
     public UsageTotals currentPeriodTotals(BudgetView budget) {
         Objects.requireNonNull(budget, "budget");
         return totals(budget.target(), budget.period().windowContaining(clock.instant()));
+    }
+
+    private static void appendTargetFilter(StringBuilder jpql, Map<String, Object> params, BudgetTarget target) {
+        switch (target) {
+            case BudgetTarget.Global ignored -> {
+                // no filter
+            }
+            case BudgetTarget.Workspace w -> {
+                jpql.append(" and u.workspaceId = :ws");
+                params.put("ws", w.workspaceId());
+            }
+            case BudgetTarget.Agent a -> {
+                jpql.append(" and u.workspaceId = :ws and u.agentResourceId = :agent");
+                params.put("ws", a.workspaceId());
+                params.put("agent", a.agentResourceId());
+            }
+            case BudgetTarget.Principal p -> {
+                jpql.append(" and u.principalId = :principal");
+                params.put("principal", p.principalId());
+                if (p.workspaceId() != null) {
+                    jpql.append(" and u.workspaceId = :ws");
+                    params.put("ws", p.workspaceId());
+                }
+            }
+        }
     }
 
     private static long asLong(Object value) {

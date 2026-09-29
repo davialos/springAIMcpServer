@@ -227,6 +227,16 @@ public final class TelemetryStore {
     }
 
     /**
+     * Finds a conversation by id.
+     *
+     * @param conversationId conversation id
+     * @return the conversation, or empty
+     */
+    public Optional<Conversation> findConversationById(UUID conversationId) {
+        return db.read(em -> Optional.ofNullable(em.find(Conversation.class, conversationId)));
+    }
+
+    /**
      * Finds a conversation by key hash.
      *
      * @param conversationKeyHash {@code sha256:} key hash

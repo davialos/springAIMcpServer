@@ -13,6 +13,14 @@ import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
 import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
+import com.springaimcpservercommon.ai.tool.ToolSource;
+import com.springaimcpservercommon.ai.tool.WriteMode;
+import com.springaimcpservercommon.annotations.Classification;
+import com.springaimcpservercommon.security.authz.AuthorizationEngine;
+import com.springaimcpservercommon.security.authz.AuthorizationOutcome;
+import com.springaimcpservercommon.security.authz.AuthorizationRequest;
+import com.springaimcpservercommon.security.authz.ResourceRef;
+import com.springaimcpservercommon.security.permission.Permission;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
@@ -25,6 +33,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Auto-configuration for the Spring AI agent runtime integration.
@@ -133,28 +144,53 @@ public class DaiAiAutoConfiguration {
     }
 
     /**
-     * Default tool permission checker — permits all invocations.
-     * Replace with an {@link com.springaimcpservercommon.security.authz.AuthorizationEngine}-backed
-     * implementation for per-call security enforcement.
+     * Per-call tool permission check (LLD-07 §3): the caller must hold {@code tool:invoke} (or {@code agent:invoke}
+     * for an agent-backed tool) on the binding and, for a PROPOSE tool, also {@code data:write-propose}. Grants may
+     * change mid-conversation, so this runs on every call. Default deny: without an
+     * {@link AuthorizationEngine} nothing is permitted.
      *
+     * @param engines the authorization engine, when the security layer is present
      * @return the checker
      */
     @Bean
     @ConditionalOnMissingBean(SecuredToolCallback.ToolPermissionChecker.class)
-    public SecuredToolCallback.ToolPermissionChecker toolPermissionChecker() {
-        return (principal, binding) -> true;
+    public SecuredToolCallback.ToolPermissionChecker toolPermissionChecker(ObjectProvider<AuthorizationEngine> engines) {
+        return (principal, binding) -> {
+            AuthorizationEngine engine = engines.getIfAvailable();
+            if (engine == null) {
+                return false;
+            }
+            ResourceRef resource = ResourceRef.of(binding.workspaceId(), binding.id(), Classification.PUBLIC);
+            List<Permission> required = new ArrayList<>();
+            required.add(binding.source() instanceof ToolSource.AgentSource ? Permission.AGENT_INVOKE
+                    : Permission.TOOL_INVOKE);
+            if (binding.writeMode() == WriteMode.PROPOSE) {
+                required.add(Permission.DATA_WRITE_PROPOSE);
+            }
+            for (Permission permission : required) {
+                AuthorizationRequest request = AuthorizationRequest.onResource(principal, permission, resource)
+                        .withToolName(binding.toolName());
+                if (!(engine.decide(request) instanceof AuthorizationOutcome.Permit)) {
+                    return false;
+                }
+            }
+            return true;
+        };
     }
 
     /**
-     * Default no-op proposal service. Replaced by the persistence module when write-proposal
-     * persistence is enabled. Returns a synthetic UUID without persisting.
+     * Default proposal service: refuses. A proposal that was never stored must not be reported to the model or the
+     * user as created, so until the store-backed service exists (OQ-36) a PROPOSE tool answers
+     * {@code proposal_unavailable}.
      *
      * @return the service
      */
     @Bean
     @ConditionalOnMissingBean(ProposalService.class)
     public ProposalService proposalService() {
-        return (toolName, toolInput, bindingId, principal) -> com.springaimcpservercommon.core.id.Ids.newId();
+        return (toolName, toolInput, bindingId, principal) -> {
+            throw new UnsupportedOperationException("No proposal service is configured");
+        };
     }
 
     /**

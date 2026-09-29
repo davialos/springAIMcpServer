@@ -182,4 +182,44 @@ class DaiWiringTest {
                 assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ToolCallRecorder.class))
                         .containsExactly("toolCallRecorder"));
     }
+
+    @Test
+    void theToolPathIsWiredEndToEndWhenTheStoreExists() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context -> {
+            assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ToolBridge.class))
+                    .containsExactly("toolBridge");
+            assertThat(context.getBeanNamesForType(
+                    com.springaimcpservercommon.ai.tool.ToolBridge.ToolBindingLoader.class)).hasSize(1);
+            assertThat(context.getBeanNamesForType(
+                    com.springaimcpservercommon.mcp.server.McpToolBindingSource.class)).hasSize(1);
+        });
+    }
+
+    @Test
+    void theMcpEndpointIsOffUnlessEnabled() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(
+                        com.springaimcpservercommon.mcp.server.McpEndpointController.class)).isEmpty());
+        runner().withBean(DaiStore.class, () -> STUB_STORE)
+                .withPropertyValues("dynamic.ai.agent.mcp.enabled=true")
+                .run(context -> {
+                    assertThat(context.getBeanNamesForType(
+                            com.springaimcpservercommon.mcp.server.McpEndpointController.class))
+                            .containsExactly("mcpEndpointController");
+                    assertThat(context.getBeanNamesForType(
+                            com.springaimcpservercommon.security.mcp.McpClientApproval.class)).hasSize(1);
+                });
+        runner().withBean(DaiStore.class, () -> STUB_STORE)
+                .withPropertyValues("dynamic.ai.agent.mcp.enabled=true",
+                        "dynamic.ai.agent.mcp.require-approved-client=false")
+                .run(context -> assertThat(context.getBeanNamesForType(
+                        com.springaimcpservercommon.security.mcp.McpClientApproval.class)).isEmpty());
+    }
+
+    @Test
+    void mcpRequestsAreRecordedToTheStoreWhenItExists() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(com.springaimcpservercommon.mcp.server.McpRequestRecorder.class))
+                        .containsExactly("storeMcpRequestRecorder"));
+    }
 }

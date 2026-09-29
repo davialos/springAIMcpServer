@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
+import com.springaimcpservercommon.ai.tool.ToolBridge;
 import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
@@ -654,6 +655,70 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(QuerySnapshotCache.class)
     public DaiQueryAutoConfiguration.QueryDefinitionLoader queryDefinitionLoader(QuerySnapshotCache cache) {
         return cache::findById;
+    }
+
+    /**
+     * Published tool bindings of the current generation (LLD-07 §2); polled by the maintenance runner.
+     *
+     * @param configStore the config store
+     * @param props       framework properties (poll interval)
+     * @return the cache
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBindingSnapshotCache.class)
+    @ConditionalOnBean(ConfigStore.class)
+    ToolBindingSnapshotCache toolBindingSnapshotCache(ConfigStore configStore, DaiProperties props) {
+        return new ToolBindingSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+    }
+
+    /**
+     * Loads the tool bindings an agent references. Without this bean no {@code ToolBridge} exists and agents have no
+     * tools.
+     *
+     * @param cache published bindings
+     * @return the loader
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.ToolBindingLoader.class)
+    @ConditionalOnBean(ToolBindingSnapshotCache.class)
+    ToolBridge.ToolBindingLoader toolBindingLoader(ToolBindingSnapshotCache cache) {
+        return (bindingId, revision) -> cache.find(bindingId);
+    }
+
+    /**
+     * Delegates for operation-backed tools: the same host-operation invocation the dynamic endpoints use, resolved
+     * lazily so this bean does not depend on the web layer's declaration order.
+     *
+     * @param handlers the operation backing handler
+     * @return the factory
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.OperationCallbackFactory.class)
+    @ConditionalOnBean(ConfigStore.class)
+    ToolBridge.OperationCallbackFactory operationCallbackFactory(
+            org.springframework.beans.factory.ObjectProvider<DispatchingBackingExecutor.OperationBackingHandler> handlers) {
+        return (operation, binding, principal) ->
+                BackingToolCallback.forOperation(operation, binding, principal, handlers.getObject());
+    }
+
+    /**
+     * Delegates for query-backed tools: the same compiled dynamic query the query endpoints run.
+     *
+     * @param handlers the query backing handler
+     * @param loaders  loads the published query (for the tool's input schema)
+     * @return the factory
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.QueryCallbackFactory.class)
+    @ConditionalOnBean(ConfigStore.class)
+    ToolBridge.QueryCallbackFactory queryCallbackFactory(
+            org.springframework.beans.factory.ObjectProvider<DispatchingBackingExecutor.QueryBackingHandler> handlers,
+            org.springframework.beans.factory.ObjectProvider<DaiQueryAutoConfiguration.QueryDefinitionLoader> loaders) {
+        return (queryId, binding, principal) -> {
+            DaiQueryAutoConfiguration.QueryDefinitionLoader loader = loaders.getIfAvailable();
+            return BackingToolCallback.forQuery(queryId, loader == null ? null : loader.load(queryId), binding,
+                    principal, handlers.getObject());
+        };
     }
 
     /**

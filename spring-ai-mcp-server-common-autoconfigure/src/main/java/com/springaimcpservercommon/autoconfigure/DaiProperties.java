@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Top-level {@code @ConfigurationProperties} for the framework, bound under {@code dynamic.ai.agent}.
@@ -248,12 +249,30 @@ public record DaiProperties(
      * @param allowedOrigins     Origin header values allowed for browser-based MCP clients (empty = any server-to-server)
      * @param resourceUri        RFC 9728 resource URI advertised in the protected-resource metadata endpoint
      * @param authorizationServers authorization server URIs included in the protected-resource metadata
+     * @param enabled               serve the MCP endpoint (default off, LLD-07 §5); needs the store and at least one
+     *                              published tool binding with {@code mcpExposed}
+     * @param workspaceId           workspace served when a request names none ({@code X-DAI-Workspace}); unset requires
+     *                              the header
+     * @param maxRequestBytes       largest accepted request body (1 KiB..16 MiB)
+     * @param requireApprovedClient only tokens of MCP clients approved for the workspace are served (LLD-07 §5.3);
+     *                              API-key service accounts of the workspace are always allowed
      */
     public record Mcp(
             @DefaultValue("STATELESS") McpTransportMode transport,
             @DefaultValue List<String> allowedOrigins,
             @Nullable String resourceUri,
-            @DefaultValue List<String> authorizationServers) {}
+            @DefaultValue List<String> authorizationServers,
+            @DefaultValue("false") boolean enabled,
+            @Nullable UUID workspaceId,
+            @DefaultValue("1048576") int maxRequestBytes,
+            @DefaultValue("true") boolean requireApprovedClient) {
+        /** Validates the settings. */
+        public Mcp {
+            if (maxRequestBytes < 1024 || maxRequestBytes > 16 * 1024 * 1024) {
+                throw new IllegalArgumentException("dynamic.ai.agent.mcp.max-request-bytes must be 1 KiB..16 MiB");
+            }
+        }
+    }
 
     /**
      * Dynamic query engine settings.

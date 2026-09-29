@@ -29,7 +29,10 @@ Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors (40
 | Grants | `GET/POST /workspaces/{ws}/grants`, `DELETE .../grants/{id}` — implemented; grantable (invocation) permissions only, conditions validated | `grant:manage` |
 | Role mappings | `GET/POST /role-mappings`, `GET/PUT(If-Match)/DELETE /role-mappings/{id}`, `:enable`, `:disable` — implemented; mapping to a platform-wide role needs `PLATFORM_ADMIN` | `rolemapping:manage` |
 | Service accounts | `GET/POST /workspaces/{ws}/service-accounts`, `:enable`, `:disable`, `GET .../{id}/keys`, `DELETE .../{id}/keys/{key}` — implemented; key issuance pending (OQ-37) | `serviceaccount:manage` |
-| Budgets | `/workspaces/{ws}/budgets` | `budget:manage` |
+| Budgets | `GET/POST /workspaces/{ws}/budgets` and `/budgets` (global), `GET/DELETE .../{id}`, `PUT .../{id}/limits` (If-Match), `:enable`, `:disable` — implemented; detail shows current-period usage | `budget:manage` |
+| Usage | `GET /workspaces/{ws}/usage/summary`, `/usage/series` (and `/usage/...` global), `GET/POST /prices` — implemented; series limited to 32 days, HOUR or DAY buckets | `budget:manage` or `audit:read` |
+| Traces | `GET /workspaces/{ws}/traces/turns`, `/turns/{id}`, `/model-calls`, `/tool-invocations?violationsOnly=` — implemented; redacted args, counts and hashes only | `audit:read` |
+| Conversations | `GET /dynamic-ai/api/conversations`, `GET .../{id}/messages`, `POST .../{id}:close`, `DELETE .../{id}` (erase) — implemented, owner only, USER/ASSISTANT messages only | authenticated owner |
 | Kill switches | `GET /kill-switches[?workspaceId]`, `GET /kill-switches/history?since=`, `POST /kill-switches`, `DELETE /kill-switches/{id}` (implemented) | `ops:killswitch` |
 | Audit | Implemented: `GET /audit/workspaces/{ws}/events`, `/audit/actors/{id}/events`, `/audit/denials`, `/audit/proposals/{id}/events`, `/audit/turns/{id}/events`, `/audit/chains/{chain}/verify` (window `from`/`to`, `limit` ≤ 200, `offset`); `GET /audit/export` planned | `audit:read` |
 | Cluster | `GET /cluster/nodes?aliveWithinSeconds=` (applied generation per node, `converged`) — implemented | `ops:killswitch` until `ops:read` exists (OQ-34) |

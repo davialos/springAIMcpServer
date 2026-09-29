@@ -11,7 +11,6 @@ import com.springaimcpservercommon.persistence.usage.BudgetStore;
 import com.springaimcpservercommon.persistence.usage.BudgetView;
 import com.springaimcpservercommon.persistence.usage.UsageLedger;
 import com.springaimcpservercommon.persistence.usage.UsageTotals;
-import io.micrometer.core.instrument.Metrics;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -99,7 +98,7 @@ final class LedgerBudgetChecker implements InvocationGuardAdvisor.BudgetChecker 
             }
         }
         if (!allowed) {
-            count("dynamic.ai.agent.budget.blocked", "workspace", key.workspaceId().toString());
+            SafeMetrics.count("dynamic.ai.agent.budget.blocked", "workspace", key.workspaceId().toString());
         }
         return allowed;
     }
@@ -123,7 +122,7 @@ final class LedgerBudgetChecker implements InvocationGuardAdvisor.BudgetChecker 
             }
             return allowed;
         } catch (RuntimeException e) {
-            count("dynamic.ai.agent.budget.check.errors");
+            SafeMetrics.count("dynamic.ai.agent.budget.check.errors");
             LOG.warn("Budget check failed for workspace {} (failOpen={}); {} the turn", key.workspaceId(),
                     failOpen, failOpen ? "allowing" : "refusing", e);
             return failOpen;
@@ -139,7 +138,7 @@ final class LedgerBudgetChecker implements InvocationGuardAdvisor.BudgetChecker 
         if (!reported.add(dedupe)) {
             return;
         }
-        count("dynamic.ai.agent.budget.events", "kind", action, "scope", budget.target().scope().name());
+        SafeMetrics.count("dynamic.ai.agent.budget.events", "kind", action, "scope", budget.target().scope().name());
         if (auditTrail == null) {
             return;
         }
@@ -153,14 +152,6 @@ final class LedgerBudgetChecker implements InvocationGuardAdvisor.BudgetChecker 
                     CanonicalJson.write(details)));
         } catch (RuntimeException e) {
             LOG.warn("Audit append failed for {} (budget {})", action, budget.id(), e);
-        }
-    }
-
-    private static void count(String name, String... tags) {
-        try {
-            Metrics.counter(name, tags).increment();
-        } catch (LinkageError | RuntimeException e) {
-            // metrics are optional; never affect a turn
         }
     }
 }

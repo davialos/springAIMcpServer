@@ -2,6 +2,7 @@ package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
+import com.springaimcpservercommon.ai.runtime.TurnRecorder;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
 import com.springaimcpservercommon.ai.agent.LimitSpec;
@@ -305,18 +306,47 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * Prices model usage from the price history; shared by usage and turn recording.
+     *
+     * @param prices model price history
+     * @return the calculator
+     */
+    @Bean
+    @ConditionalOnMissingBean(ModelCostCalculator.class)
+    @ConditionalOnBean(PriceStore.class)
+    ModelCostCalculator modelCostCalculator(PriceStore prices) {
+        return new ModelCostCalculator(prices, Duration.ofSeconds(60));
+    }
+
+    /**
      * Ledger-backed usage recording: tokens and priced cost of every completed model call (F-70, F-71).
      * Supersedes the no-op default of {@link DaiAiAutoConfiguration}.
      *
      * @param ledger usage ledger
-     * @param prices model price history
+     * @param costs  cost calculator
      * @return the sink
      */
     @Bean
     @ConditionalOnMissingBean(UsageMeteringAdvisor.UsageSink.class)
-    @ConditionalOnBean({UsageLedger.class, PriceStore.class})
-    public UsageMeteringAdvisor.UsageSink ledgerUsageSink(UsageLedger ledger, PriceStore prices) {
-        return new LedgerUsageSink(ledger, prices, Duration.ofSeconds(60), java.time.Clock.systemUTC());
+    @ConditionalOnBean({UsageLedger.class, ModelCostCalculator.class})
+    public UsageMeteringAdvisor.UsageSink ledgerUsageSink(UsageLedger ledger, ModelCostCalculator costs) {
+        return new LedgerUsageSink(ledger, costs, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Store-backed turn recording for the trace viewer (F-72): one turn row and one priced model call row per
+     * finished agent turn, written off the request path. Supersedes the no-op default of
+     * {@link DaiAiAutoConfiguration}.
+     *
+     * @param store telemetry store
+     * @param costs cost calculator
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(TurnRecorder.class)
+    @ConditionalOnBean({TelemetryStore.class, ModelCostCalculator.class})
+    public TurnRecorder storeTurnRecorder(TelemetryStore store, ModelCostCalculator costs) {
+        return new StoreTurnRecorder(store, costs);
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {

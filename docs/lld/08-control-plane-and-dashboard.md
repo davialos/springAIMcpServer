@@ -13,7 +13,7 @@ agents, tool bindings, policies, grants, approvals, budgets and audit. The UI is
 client; the API is the contract (and is used by GitOps tooling).
 
 ## 2. Admin API (`{base}/admin/api/v1`)
-Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors, cursor pagination,
+Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors (401 unauthenticated vs 403 denied; implemented for the controllers above via `AdminExceptionHandler`), cursor pagination,
 `Idempotency-Key` on POSTs that create, CSRF protection for cookie sessions.
 
 | Resource | Endpoints | Key permission |
@@ -30,9 +30,10 @@ Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors, cu
 | Role mappings | `/role-mappings` (global) | `platform:admin` |
 | Service accounts | `/workspaces/{ws}/service-accounts[/{id}/keys]` | `serviceaccount:manage` |
 | Budgets | `/workspaces/{ws}/budgets` | `budget:manage` |
-| Kill switches | `POST /kill-switches` | `ops:killswitch` |
-| Audit | `GET /audit?filter=` , `GET /audit/export` | `audit:read` |
-| Cluster | `GET /cluster/nodes` (applied generation per node) | `ops:read` |
+| Kill switches | `GET /kill-switches[?workspaceId]`, `GET /kill-switches/history?since=`, `POST /kill-switches`, `DELETE /kill-switches/{id}` (implemented) | `ops:killswitch` |
+| Audit | Implemented: `GET /audit/workspaces/{ws}/events`, `/audit/actors/{id}/events`, `/audit/denials`, `/audit/proposals/{id}/events`, `/audit/turns/{id}/events`, `/audit/chains/{chain}/verify` (window `from`/`to`, `limit` ≤ 200, `offset`); `GET /audit/export` planned | `audit:read` |
+| Cluster | `GET /cluster/nodes?aliveWithinSeconds=` (applied generation per node, `converged`) — implemented | `ops:killswitch` until `ops:read` exists (OQ-34) |
+| Bootstrap | `GET /me` — caller, roles, environment tier and capability flags — implemented | authenticated |
 | Bundles | `POST /bundles:export`, `POST /bundles:import` (dry-run default) | `platform:admin` |
 
 ## 3. Dashboard screens

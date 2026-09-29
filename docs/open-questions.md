@@ -43,6 +43,9 @@ Deployment criticality:
 | OQ-24 | stdio→HTTP bridge CLI | v1.x if needed | user | ADR-0016 | LATER | OPEN |
 | OQ-25 | Default `tools.max-parallel-per-turn` | 4 | lld-chief-architect | LLD-14 §5 | LATER | OPEN |
 | OQ-26 | `UNBOUNDED_LIST_ACTION` exclude or warn | Warn; exclude in strict | user | LLD-14 §3.3 | LATER | OPEN |
+| OQ-33 | Application log tail for the admin UI: a Logback appender is a global side effect (LLD-12 §4) and risks leaking prompts/secrets/row data. Serve only audit + telemetry (done) or add an opt-in, redacting, bounded ring-buffer appender? | Audit/telemetry only; opt-in redacting appender later | user | docs/ui-api-gap-analysis.md | LATER | OPEN |
+| OQ-34 | Add `ops:read` to `Permission` (LLD-08 lists it; the enum has none). Until then `GET /cluster/nodes` requires `ops:killswitch` | Add `OPS_READ` role permission to OPERATOR/AUDITOR | access-management-architect | LLD-08 §2 | LATER | OPEN |
+| OQ-35 | Audit reads of the audit log itself (auditor access is itself sensitive, F-78) | Append `AUDIT_VIEWED` event per query window | user | LLD-08 §2 | LATER | OPEN |
 
 ## C. Resolved
 

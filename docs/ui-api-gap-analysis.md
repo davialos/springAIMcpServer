@@ -12,6 +12,10 @@ Sources: LLD-08, LLD-11, LLD-13, feature catalog, and the code in `webmvc`, `aut
 - The existing controllers **do not meet the LLD-08 conventions** the UI depends on: no RFC 9457 bodies on admin errors, no ETag/If-Match, no pagination, no bean validation.
 - Several **pre-existing defects** would surface as soon as a UI calls these endpoints (section 4).
 
+## 1a. Implementation status (2026-09-29)
+
+First cross-cutting slice implemented in `autoconfigure` (same place as the existing admin controllers): `GET /me`, audit log viewer (`/audit/**`), kill switches (`/kill-switches`), `GET /cluster/nodes`, shared 401/403/RFC 9457 handling (`AdminApi`, `AdminExceptionHandler`, new `ProblemCode`s `UNAUTHENTICATED`, `CONFLICT`, `PRECONDITION_FAILED`), and `AuditTrail` / `KillSwitchStore` beans. Not yet done: the section 4 defects in the existing resource and chat controllers, ETag/If-Match, proposals, access management, budgets, usage, trace viewer, conversation history, application log tail (OQ-33).
+
 ## 2. Existing API inventory
 
 | Area | Endpoint | Notes |

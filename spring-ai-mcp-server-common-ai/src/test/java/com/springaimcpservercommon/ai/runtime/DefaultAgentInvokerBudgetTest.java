@@ -28,6 +28,7 @@ class DefaultAgentInvokerBudgetTest {
 
     private final AtomicInteger modelResolutions = new AtomicInteger();
     private final AtomicInteger usageRecords = new AtomicInteger();
+    private final List<TurnRecorder.TurnRecord> recorded = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private final AgentDefinition agent = new AgentDefinition(UUID.randomUUID(), 1, UUID.randomUUID(), "support-bot",
             "Support", "You help.", new ModelSelection("openai", "gpt-4o-mini", null, null, null), List.of(),
@@ -37,6 +38,10 @@ class DefaultAgentInvokerBudgetTest {
             "Alice", Set.of(), Set.of(), Map.of(), Map.of(), Classification.INTERNAL, null, Set.of());
 
     private DefaultAgentInvoker invoker(boolean withinBudget) {
+        return invoker(withinBudget, recorded::add);
+    }
+
+    private DefaultAgentInvoker invoker(boolean withinBudget, TurnRecorder recorder) {
         return new DefaultAgentInvoker(
                 (selection, p) -> {
                     modelResolutions.incrementAndGet();
@@ -49,6 +54,7 @@ class DefaultAgentInvokerBudgetTest {
                 agentId -> true,
                 (a, p) -> withinBudget,
                 (a, p, prompt, completion) -> usageRecords.incrementAndGet(),
+                recorder,
                 ObservationRegistry.NOOP,
                 new InMemoryChatMemory(),
                 null);
@@ -89,5 +95,52 @@ class DefaultAgentInvokerBudgetTest {
 
         assertThat(events).singleElement().isInstanceOfSatisfying(StreamEvent.ErrorEvent.class,
                 e -> assertThat(e.turnId()).isNotNull().isNotEqualTo(turnId));
+    }
+
+    @Test
+    void aRefusedSyncTurnIsRecordedAsRejectedByBudgetWithTheClientTurnId() {
+        assertThatThrownBy(() -> invoker(false).invoke(agent, request, principal, null))
+                .isInstanceOf(AgentInvocationException.class);
+
+        assertThat(recorded).singleElement().satisfies(t -> {
+            assertThat(t.turnId()).isEqualTo(turnId);
+            assertThat(t.outcome()).isEqualTo(TurnRecorder.Outcome.REJECTED);
+            assertThat(t.finish()).isEqualTo(TurnRecorder.Finish.BUDGET);
+            assertThat(t.errorCode()).isEqualTo("budget-exhausted");
+            assertThat(t.streaming()).isFalse();
+            assertThat(t.channel()).isEqualTo(com.springaimcpservercommon.core.invocation.Channel.CHAT);
+            assertThat(t.agent()).isEqualTo(agent);
+            assertThat(t.principal()).isEqualTo(principal);
+            assertThat(t.endedAt()).isAfterOrEqualTo(t.startedAt());
+        });
+    }
+
+    @Test
+    void aRefusedStreamedTurnIsRecordedOnceWithTheRequestedChannel() {
+        AgentChatRequest viaEndpoint = new AgentChatRequest(null, "hello", "req-3", turnId,
+                com.springaimcpservercommon.core.invocation.Channel.ENDPOINT);
+
+        invoker(false).stream(agent, viaEndpoint, principal, null).collectList().block();
+
+        assertThat(recorded).singleElement().satisfies(t -> {
+            assertThat(t.turnId()).isEqualTo(turnId);
+            assertThat(t.outcome()).isEqualTo(TurnRecorder.Outcome.REJECTED);
+            assertThat(t.streaming()).isTrue();
+            assertThat(t.channel()).isEqualTo(com.springaimcpservercommon.core.invocation.Channel.ENDPOINT);
+        });
+    }
+
+    @Test
+    void aFailingRecorderNeverChangesTheOutcomeOfATurn() {
+        TurnRecorder broken = turn -> {
+            throw new IllegalStateException("store down");
+        };
+
+        assertThatThrownBy(() -> invoker(false, broken).invoke(agent, request, principal, null))
+                .isInstanceOfSatisfying(AgentInvocationException.class,
+                        e -> assertThat(e.code()).isEqualTo("budget-exhausted"));
+        List<StreamEvent> events = invoker(false, broken).stream(agent, request, principal, null)
+                .collectList().block();
+        assertThat(events).hasSize(1);
     }
 }

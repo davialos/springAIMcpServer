@@ -184,9 +184,27 @@ public record DaiProperties(
     /**
      * Reviewed change-proposal settings (LLD-11 §12).
      *
-     * @param retention how long proposals are kept after reaching a terminal state
+     * @param retention       how long proposals are kept after reaching a terminal state
+     * @param enabled         let tools in PROPOSE mode create proposals (default off: they answer
+     *                        {@code writes_disabled}); nothing is ever written to the host without a person's confirm
+     * @param proposalTtl     how long a proposal can be reviewed before it expires (1 minute to 30 days)
+     * @param requireApprover every proposal also needs a second person's approval (a delete always does)
      */
-    public record Write(@DefaultValue("7d") Duration retention) {}
+    public record Write(
+            @DefaultValue("7d") Duration retention,
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("15m") Duration proposalTtl,
+            @DefaultValue("false") boolean requireApprover) {
+        /** Validates the settings. */
+        public Write {
+            if (proposalTtl.compareTo(Duration.ofMinutes(1)) < 0 || proposalTtl.compareTo(Duration.ofDays(30)) > 0) {
+                throw new IllegalArgumentException("dynamic.ai.agent.write.proposal-ttl must be 1m..30d");
+            }
+            if (retention.isNegative()) {
+                throw new IllegalArgumentException("dynamic.ai.agent.write.retention must not be negative");
+            }
+        }
+    }
 
     /**
      * Environment identification settings.
@@ -240,7 +258,7 @@ public record DaiProperties(
             String matchValue,
             String role,
             @Nullable String claimName,
-            @Nullable java.util.UUID workspaceId) {}
+            java.util.@Nullable UUID workspaceId) {}
 
     /**
      * MCP server settings.

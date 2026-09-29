@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
+import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
 import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
@@ -244,6 +245,24 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(DaiStore.class)
     public ChangeProposalStore changeProposalStore(DaiStore store, DaiProperties props) {
         return new ChangeProposalStore(store, java.time.Clock.systemUTC(), props.write().retention());
+    }
+
+    /**
+     * Store-backed proposal creation for tools in PROPOSE mode (F-45, LLD-11): records the reviewable proposal, never
+     * writes to the host. Off until {@code dynamic.ai.agent.write.enabled=true} (the tools then answer
+     * {@code writes_disabled}). Supersedes the refusing default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param store    proposal store
+     * @param registry live catalog (resolves the operation and its record type)
+     * @param props    framework properties
+     * @return the service
+     */
+    @Bean
+    @ConditionalOnMissingBean(ProposalService.class)
+    @ConditionalOnBean({ChangeProposalStore.class, MetadataRegistry.class})
+    public ProposalService storeProposalService(ChangeProposalStore store, MetadataRegistry registry,
+                                                DaiProperties props) {
+        return new StoreProposalService(store, registry::current, props.write());
     }
 
     /**

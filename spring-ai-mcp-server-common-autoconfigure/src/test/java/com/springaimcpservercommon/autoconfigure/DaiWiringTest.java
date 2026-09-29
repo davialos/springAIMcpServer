@@ -234,4 +234,14 @@ class DaiWiringTest {
                 .run(context -> assertThat(
                         context.getBeanNamesForType(io.micrometer.observation.ObservationRegistry.class)).hasSize(1));
     }
+
+    @Test
+    void proposalsAreStoredWhenTheStoreExistsAndRefusedOtherwise() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ProposalService.class))
+                        .containsExactly("storeProposalService"));
+        runner().run(context ->
+                assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ProposalService.class))
+                        .containsExactly("proposalService"));
+    }
 }

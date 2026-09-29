@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.ai.tool.ArgConstraint;
+import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.ResultPolicy;
 import com.springaimcpservercommon.ai.tool.ToolBinding;
 import com.springaimcpservercommon.ai.tool.ToolSource;
@@ -29,6 +30,7 @@ import java.util.UUID;
  *          | {"kind": "agent", "ref": "<agent resource uuid>"}
  *          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"},
  *   "writeMode": "EXECUTE" | "PROPOSE",              // default EXECUTE (a read tool)
+ *   "change": "create" | "update" | "delete",        // what a PROPOSE tool does; default update, delete needs an approver
  *   "argConstraints": {"customerId": {"kind": "principalAttr", "attr": "customerId"},
  *                      "status": {"kind": "literal", "value": "OPEN"},
  *                      "limit": {"kind": "range", "min": 1, "max": 50}},
@@ -37,7 +39,8 @@ import java.util.UUID;
  *   "mcpExposed": false                              // default false: not offered over MCP
  * }
  * }</pre>
- * Anything invalid throws {@link IllegalArgumentException}; the snapshot cache skips that binding with a warning, so
+ * A PROPOSE tool must be backed by an operation: a proposal names the host operation to run once a person confirms
+ * it (queries only read, agents and remote MCP tools have no write path of ours). Anything invalid throws {@link IllegalArgumentException}; the snapshot cache skips that binding with a warning, so
  * one bad binding never takes the others down (LLD-12).
  */
 @NullMarked
@@ -61,8 +64,12 @@ final class ToolBindingSpecs {
                 : parseEnum(WriteMode.class, spec.get("writeMode"), "writeMode");
         Object description = spec.get("description");
         Map<String, Object> result = spec.get("result") == null ? Map.of() : object(spec.get("result"), "result");
+        ToolSource source = source(object(spec.get("source"), "source"));
+        if (mode == WriteMode.PROPOSE && !(source instanceof ToolSource.OperationSource)) {
+            throw new IllegalArgumentException("writeMode PROPOSE needs an operation source");
+        }
         return new ToolBinding(resource.resourceId(), resource.revisionNo(), resource.workspaceId(), toolName,
-                source(object(spec.get("source"), "source")),
+                source,
                 description == null ? null : string(description, "description"),
                 constraints(spec.get("argConstraints")), mode,
                 bool(spec.get("returnDirect"), false),
@@ -70,7 +77,8 @@ final class ToolBindingSpecs {
                 (int) bounded(spec.get("maxCallsPerTurn"), 5, 1, 50, "maxCallsPerTurn"),
                 new ResultPolicy((int) bounded(result.get("maxChars"), 0, 0, 10_000_000, "result.maxChars"),
                         bool(result.get("maskSensitive"), true)),
-                bool(spec.get("mcpExposed"), false));
+                bool(spec.get("mcpExposed"), false),
+                spec.get("change") == null ? null : parseEnum(ProposalService.Change.class, spec.get("change"), "change"));
     }
 
     private static ToolSource source(Map<String, Object> source) {

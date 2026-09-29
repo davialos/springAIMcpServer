@@ -180,16 +180,17 @@ public class DaiAiAutoConfiguration {
 
     /**
      * Default proposal service: refuses. A proposal that was never stored must not be reported to the model or the
-     * user as created, so until the store-backed service exists (OQ-36) a PROPOSE tool answers
-     * {@code proposal_unavailable}.
+     * user as created, so without the store-backed service (registered by {@link DaiPersistenceAutoConfiguration})
+     * a PROPOSE tool answers {@code proposal_unavailable}.
      *
      * @return the service
      */
     @Bean
     @ConditionalOnMissingBean(ProposalService.class)
     public ProposalService proposalService() {
-        return (toolName, toolInput, bindingId, principal) -> {
-            throw new UnsupportedOperationException("No proposal service is configured");
+        return request -> {
+            throw new ProposalService.ProposalRefusedException("proposal_unavailable",
+                    "Changes cannot be proposed here: no proposal store is configured.");
         };
     }
 

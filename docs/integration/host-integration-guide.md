@@ -499,8 +499,9 @@ with `WWW-Authenticate: Bearer resource_metadata="…"`.
 token has the scope and the caller holds the grant (`tool:invoke`, `agent:invoke`, plus `data:write-propose` for
 proposal tools). A tool the caller may not use looks exactly like an unknown tool. Every call runs as the caller,
 in the read-only scope, with the binding's argument constraints applied, and is recorded in `dai_tool_invocation`
-(hashes only) under a `dai_mcp_request` row. Writes never execute: a PROPOSE tool answers
-`proposal_unavailable` until the store-backed proposal service exists (OQ-48).
+(hashes only) under a `dai_mcp_request` row. Writes never execute: a PROPOSE tool records a reviewable proposal
+(owned by the caller, `dynamic.ai.agent.write.enabled=true` needed, otherwise it answers `writes_disabled`); the
+caller confirms it through the review API. Applying a confirmed proposal to your data is not implemented yet (OQ-36).
 
 **Not yet:** MCP resources and prompts, server-initiated notifications (`tools/list_changed`), per-client rate
 limits, `insufficient_scope` step-up challenges (a tool outside the token's scopes is simply not listed), and the

@@ -190,9 +190,10 @@ public final class SecuredToolCallback implements ToolCallback {
     @Override
     public String call(String toolInput, ToolContext toolContext) {
         Instant startedAt = clock.instant();
+        UUID invocationId = Ids.newId();
         Observation observation = startObservation();
         try (Observation.Scope ignored = observation.openScope()) {
-            Handled handled = handle(toolInput, toolContext);
+            Handled handled = handle(toolInput, toolContext, invocationId);
             observation.lowCardinalityKeyValue("dai.tool.status", handled.status().name());
             if (handled.errorCode() != null) {
                 observation.lowCardinalityKeyValue("dai.tool.error_code", handled.errorCode());
@@ -200,7 +201,7 @@ public final class SecuredToolCallback implements ToolCallback {
             if (handled.writeViolation()) {
                 observation.lowCardinalityKeyValue("dai.tool.write_violation", "true");
             }
-            report(startedAt, toolInput, handled);
+            report(invocationId, startedAt, toolInput, handled);
             return handled.json();
         } catch (RuntimeException e) {
             observation.error(e);
@@ -239,7 +240,7 @@ public final class SecuredToolCallback implements ToolCallback {
         return observation.start();
     }
 
-    private Handled handle(String toolInput, ToolContext toolContext) {
+    private Handled handle(String toolInput, ToolContext toolContext, UUID invocationId) {
         // 1. Re-check permission (grants may change mid-conversation)
         if (!permissionChecker.isPermitted(principal, binding)) {
             LOG.info("Tool {} denied for principal {}", binding.toolName(), principal.principalId());
@@ -268,17 +269,27 @@ public final class SecuredToolCallback implements ToolCallback {
 
         // 4. If PROPOSE → create proposal, do not run the delegate
         if (binding.writeMode() == WriteMode.PROPOSE) {
-            return handleProposal(effectiveInput);
+            return handleProposal(effectiveInput, invocationId);
         }
 
         // 5. Run delegate as the caller with the correct SecurityContext
         return runAsCallerWithEnvelope(effectiveInput, toolContext);
     }
 
-    private Handled handleProposal(String toolInput) {
+    private Handled handleProposal(String toolInput, UUID invocationId) {
+        if (scope == null) {
+            LOG.warn("Tool {} proposes a change without a call scope; refused", binding.toolName());
+            return Handled.of(ToolResultEnvelope.error(binding.toolName(), "proposal_unavailable",
+                    "The change could not be proposed. Try again later."), "proposal_unavailable");
+        }
         java.util.UUID proposalId;
         try {
-            proposalId = proposalService.createProposal(binding.toolName(), toolInput, binding.id(), principal);
+            proposalId = proposalService.createProposal(new ProposalService.ProposalRequest(binding, toolInput,
+                    principal, scope, invocationId));
+        } catch (ProposalService.ProposalRefusedException e) {
+            LOG.info("Tool {} proposal refused for principal {}: {}", binding.toolName(), principal.principalId(),
+                    e.code());
+            return Handled.of(ToolResultEnvelope.error(binding.toolName(), e.code(), e.getMessage()), e.code());
         } catch (RuntimeException e) {
             LOG.warn("Tool {} could not create a proposal for principal {} ({})", binding.toolName(),
                     principal.principalId(), e.getClass().getSimpleName());
@@ -354,13 +365,13 @@ public final class SecuredToolCallback implements ToolCallback {
     }
 
     /** Reports the call; never throws and never changes the result the model receives. */
-    private void report(Instant startedAt, @Nullable String toolInput, Handled handled) {
+    private void report(UUID invocationId, Instant startedAt, @Nullable String toolInput, Handled handled) {
         ToolCallScope callScope = scope;
         if (callScope == null) {
             return;
         }
         try {
-            recorder.record(new ToolCallRecorder.ToolCall(Ids.newId(), startedAt, clock.instant(), callScope,
+            recorder.record(new ToolCallRecorder.ToolCall(invocationId, startedAt, clock.instant(), callScope,
                     binding, principal.principalId(), elementRef(binding.source()),
                     Sha256.of(toolInput == null ? "" : toolInput), handled.status(),
                     handled.rawResult() == null ? null : Sha256.of(handled.rawResult()), handled.truncated(),

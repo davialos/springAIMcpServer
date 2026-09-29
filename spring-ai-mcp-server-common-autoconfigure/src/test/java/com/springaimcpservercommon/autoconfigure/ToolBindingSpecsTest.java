@@ -85,4 +85,25 @@ class ToolBindingSpecsTest {
                 "{\"toolName\":\"find_orders\",\"maxCallsPerTurn\":9999,\"source\":{\"kind\":\"query\",\"ref\":\""
                         + UUID.randomUUID() + "\"}}"))).hasMessageContaining("maxCallsPerTurn");
     }
+
+    @Test
+    void aProposingToolNeedsAnOperationAndMayNameItsChangeKind() {
+        ToolBinding delete = ToolBindingSpecs.parse(resource("""
+                {"toolName":"delete_order","writeMode":"PROPOSE","change":"delete",
+                 "source":{"kind":"operation","ref":"op:com.acme.Svc#delete(java.lang.Long)"}}
+                """));
+        assertThat(delete.writeMode()).isEqualTo(WriteMode.PROPOSE);
+        assertThat(delete.change()).isEqualTo(com.springaimcpservercommon.ai.tool.ProposalService.Change.DELETE);
+
+        assertThat(ToolBindingSpecs.parse(resource(
+                "{\"toolName\":\"find_orders\",\"source\":{\"kind\":\"query\",\"ref\":\"" + UUID.randomUUID()
+                        + "\"}}")).change()).isNull();
+        assertThatThrownBy(() -> ToolBindingSpecs.parse(resource(
+                "{\"toolName\":\"find_orders\",\"writeMode\":\"PROPOSE\",\"source\":{\"kind\":\"query\","
+                        + "\"ref\":\"" + UUID.randomUUID() + "\"}}"))).hasMessageContaining("operation source");
+        assertThatThrownBy(() -> ToolBindingSpecs.parse(resource("""
+                {"toolName":"delete_order","writeMode":"PROPOSE","change":"explode",
+                 "source":{"kind":"operation","ref":"op:com.acme.Svc#delete(java.lang.Long)"}}
+                """))).hasMessageContaining("change").hasMessageNotContaining("explode");
+    }
 }

@@ -68,7 +68,7 @@ class SecuredToolCallbackRecordingTest {
     private SecuredToolCallback callback(ToolBinding binding, ToolCallback delegate, boolean permitted,
                                          ToolCallRecorder recorder, ToolCallScope scope) {
         return new SecuredToolCallback(delegate, binding, principal, new TestingAuthenticationToken("alice", "x"),
-                new AtomicInteger(0), (p, b) -> permitted, (tool, input, bindingId, p) -> UUID.fromString(
+                new AtomicInteger(0), (p, b) -> permitted, request -> UUID.fromString(
                 "00000000-0000-7000-8000-000000000001"), recorder, scope, Clock.systemUTC());
     }
 
@@ -179,7 +179,7 @@ class SecuredToolCallbackRecordingTest {
     void aProposalServiceFailureBecomesAnErrorNotAFakeProposal() {
         SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), binding(WriteMode.PROPOSE, 0), principal,
                 new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> true,
-                (tool, input, bindingId, p) -> {
+                request -> {
                     throw new IllegalStateException("no store");
                 }, recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN), Clock.systemUTC());
         String result = cb.call("{}");
@@ -254,7 +254,7 @@ class SecuredToolCallbackRecordingTest {
         UUID modelCall = UUID.randomUUID();
         SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "{\"secret-result\":1}"),
                 binding(WriteMode.EXECUTE, 0), principal, new TestingAuthenticationToken("alice", "x"),
-                new AtomicInteger(0), (p, b) -> true, (t, i, id, p) -> UUID.randomUUID(), recorded::add,
+                new AtomicInteger(0), (p, b) -> true, request -> UUID.randomUUID(), recorded::add,
                 ToolCallScope.ofTurn(Channel.CHAT, TURN, modelCall, parent), Clock.systemUTC(), registry);
 
         cb.call("{\"q\":\"secret-arg\"}");
@@ -279,7 +279,7 @@ class SecuredToolCallbackRecordingTest {
         List<Observation.Context> stopped = new ArrayList<>();
         SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), binding(WriteMode.EXECUTE, 0),
                 principal, new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> false,
-                (t, i, id, p) -> UUID.randomUUID(), recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN),
+                request -> UUID.randomUUID(), recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN),
                 Clock.systemUTC(), tracing(stopped));
 
         cb.call("{}");
@@ -288,5 +288,62 @@ class SecuredToolCallbackRecordingTest {
             assertThat(c.getLowCardinalityKeyValue("dai.tool.status").getValue()).isEqualTo("NOT_PERMITTED");
             assertThat(c.getLowCardinalityKeyValue("dai.tool.error_code").getValue()).isEqualTo("not_permitted");
         });
+    }
+
+    @Test
+    void theProposalServiceGetsTheEffectiveArgumentsTheScopeAndTheInvocationId() {
+        List<ProposalService.ProposalRequest> requests = new ArrayList<>();
+        ToolBinding constrained = new ToolBinding(UUID.randomUUID(), 1, UUID.randomUUID(), "find_orders",
+                new ToolSource.QuerySource(UUID.randomUUID()), null,
+                Map.of("status", ArgConstraint.literal("OPEN")), WriteMode.PROPOSE, false, Duration.ofSeconds(5), 3,
+                ResultPolicy.DEFAULT, false);
+        UUID proposal = UUID.randomUUID();
+        UUID modelCall = UUID.randomUUID();
+        SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), constrained, principal,
+                new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> true, request -> {
+                    requests.add(request);
+                    return proposal;
+                }, recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN, modelCall), Clock.systemUTC());
+
+        String result = cb.call("{\"status\":\"CLOSED\",\"note\":\"x\"}");
+
+        assertThat(result).contains(proposal.toString());
+        assertThat(requests).singleElement().satisfies(r -> {
+            assertThat(r.binding()).isEqualTo(constrained);
+            assertThat(r.toolInput()).isEqualTo("{\"note\":\"x\",\"status\":\"OPEN\"}");
+            assertThat(r.principal()).isEqualTo(principal);
+            assertThat(r.scope().turnId()).isEqualTo(TURN);
+            assertThat(r.scope().modelCallId()).isEqualTo(modelCall);
+        });
+        assertThat(recorded).singleElement().satisfies(c -> {
+            assertThat(c.status()).isEqualTo(ToolResultStatus.PROPOSED);
+            assertThat(c.proposalId()).isEqualTo(proposal);
+            assertThat(c.id()).isEqualTo(requests.getFirst().toolInvocationId());
+        });
+    }
+
+    @Test
+    void aRefusalCarriesItsCodeAndMessageToTheModel() {
+        SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), binding(WriteMode.PROPOSE, 0), principal,
+                new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> true, request -> {
+                    throw new ProposalService.ProposalRefusedException("writes_disabled", "Writes are switched off.");
+                }, recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN), Clock.systemUTC());
+
+        String result = cb.call("{}");
+
+        assertThat(result).contains("writes_disabled").contains("Writes are switched off.");
+        assertThat(recorded).singleElement().satisfies(c -> {
+            assertThat(c.status()).isEqualTo(ToolResultStatus.ERROR);
+            assertThat(c.errorCode()).isEqualTo("writes_disabled");
+        });
+    }
+
+    @Test
+    void aProposingToolWithoutAScopeIsRefusedNotFaked() {
+        SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), binding(WriteMode.PROPOSE, 0), principal,
+                new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> true,
+                request -> UUID.randomUUID(), recorded::add, null, Clock.systemUTC());
+
+        assertThat(cb.call("{}")).contains("proposal_unavailable");
     }
 }

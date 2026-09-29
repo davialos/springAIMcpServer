@@ -9,6 +9,18 @@
 | Related ADRs | ADR-0008, ADR-0009 |
 | Decision source | OQ-12 resolved by product owner 2026-09-27 |
 
+> **Implemented (2026-09-29): creation.** A tool bound in PROPOSE mode creates the proposal (`StoreProposalService`
+> over `ChangeProposalStore`): target kind `HOST_OPERATION` (the tool's operation), the arguments after the binding's
+> constraints as the record's after-values (`dai_change_proposal_record.after_values`) and `target_args`, owner = the
+> caller, tied to the tool call, turn and channel (`AGENT_TOOL` or `MCP_TOOL`), `contentHash` over target, kind and
+> canonical arguments, TTL `write.proposal-ttl`. Idempotent per turn or MCP request. Gated by
+> `dynamic.ai.agent.write.enabled` (default **off**: PROPOSE tools answer `writes_disabled`); a delete, or every
+> proposal with `write.require-approver`, needs a second person. Refused with a stable code: an operation that is
+> unknown, read-only or not linked to a record type, arguments that are not a JSON object. **Not implemented yet:**
+> the write executor (applying a confirmed proposal through the host's own write path as the confirming user), the
+> before-snapshot and base version (`VersioningAdapter`), edit (`PATCH`), `ENTITY_WRITE`, bulk, and the `ui.component`
+> events. Confirmed proposals therefore stay `CONFIRMED` until the executor exists (OQ-36).
+
 ## 1. Purpose & responsibilities
 Let agents (and write endpoints) **propose** changes to host data, render those proposals
 to the user through UI components for review/edit, and apply them **only after explicit
@@ -222,13 +234,14 @@ After apply, the agent conversation receives a tool result `{status: APPLIED, ho
 ## 12. Configuration
 | Property | Default |
 |----------|---------|
-| `dynamic.ai.agent.write.enabled` | `false` |
-| `dynamic.ai.agent.write.proposal-ttl` | `15m` |
+| `dynamic.ai.agent.write.enabled` | `false` (implemented) |
+| `dynamic.ai.agent.write.proposal-ttl` | `15m` (implemented, 1m..30d) |
 | `dynamic.ai.agent.write.max-records-per-proposal` | `100` |
 | `dynamic.ai.agent.write.entity-write.enabled` | `false` (HOST_OPERATION only) |
 | `dynamic.ai.agent.write.require-recent-auth` | `PT0S` (off) |
 | `dynamic.ai.agent.write.versioning.tables.*` | — (history table mappings) |
-| `dynamic.ai.agent.write.retention` | `7d` |
+| `dynamic.ai.agent.write.retention` | `7d` (implemented) |
+| `dynamic.ai.agent.write.require-approver` | `false` (implemented; a delete always needs an approver) |
 
 ## 13. Observability
 Counter `dynamic.ai.agent.proposals{state,kind,origin}`, timer propose→confirm latency,

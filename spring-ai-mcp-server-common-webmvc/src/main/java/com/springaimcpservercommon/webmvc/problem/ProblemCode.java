@@ -19,6 +19,9 @@ public enum ProblemCode {
     /** The caller lacks permission to invoke this endpoint. */
     ACCESS_DENIED("access-denied", 403),
 
+    /** The capability is switched off in this environment (LLD-12 §2.2), for example authoring in production. */
+    CAPABILITY_DISABLED("capability-disabled", 403),
+
     /** No authenticated caller; clients should (re-)authenticate. */
     UNAUTHENTICATED("unauthenticated", 401),
 

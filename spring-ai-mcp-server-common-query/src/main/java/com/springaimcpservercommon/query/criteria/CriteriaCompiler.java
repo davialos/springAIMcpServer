@@ -23,6 +23,7 @@ import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Selection;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Compiles a {@link QueryDefinition} + row policies to a JPA {@link CriteriaQuery}{@code <Tuple>}
@@ -47,6 +49,10 @@ import java.util.Objects;
  *       the caller binds them via {@link TypedQuery#setParameter(String, Object)}.</li>
  *   <li>Row policy predicates are AND-ed to the final WHERE clause after all other predicates.</li>
  *   <li>The query is always {@code SELECT DISTINCT} when any join may produce duplicates (to-many joins present).</li>
+ *   <li>When a {@code keysetPosition} is supplied the compiler appends a row-value keyset predicate
+ *       (LLD-05 §5a) so that only rows <em>after</em> the cursor position are returned. Hidden
+ *       sort-key columns ({@code _ks_0}, {@code _ks_1}, …) are appended to SELECT so the executor
+ *       can extract last-row sort values for the next cursor without a second query.</li>
  * </ul>
  */
 public final class CriteriaCompiler {
@@ -56,18 +62,26 @@ public final class CriteriaCompiler {
     /**
      * Compiles the query definition and applicable row policies to a {@link TypedQuery}.
      *
-     * @param query          validated query definition
-     * @param principal      calling principal (for PrincipalAttr operand resolution)
-     * @param rowPolicies    row policies whose predicates must be AND-ed on
-     * @param effectiveLimit effective page limit (already computed as min of caps)
-     * @param params         caller-supplied parameter values by name (for ParamRef operands)
-     * @param em             entity manager to compile against
+     * <p>When {@code keysetPosition} is non-null it must have the same number of elements as
+     * {@code query.orderBy()}. Each element is the typed sort-key value from the last row of the
+     * previous page (as decoded by {@link CursorCodec}); a null element causes the keyset clause
+     * to be truncated at that position.
+     *
+     * @param query           validated query definition
+     * @param principal       calling principal (for PrincipalAttr operand resolution)
+     * @param rowPolicies     row policies whose predicates must be AND-ed on
+     * @param effectiveLimit  effective page limit (already computed as min of caps)
+     * @param params          caller-supplied parameter values by name (for ParamRef operands)
+     * @param em              entity manager to compile against
+     * @param keysetPosition  sort key values from the previous page's last row, or {@code null}
+     *                        for the first page
      * @return a ready-to-execute typed query with all predicates inlined
      * @throws CriteriaCompilationException if the entity class cannot be resolved or a path is invalid
      */
     public TypedQuery<Tuple> compile(QueryDefinition query, DaiPrincipal principal,
                                       List<RowPolicy> rowPolicies, int effectiveLimit,
-                                      Map<String, Object> params, EntityManager em) {
+                                      Map<String, Object> params, EntityManager em,
+                                      @Nullable List<@Nullable Object> keysetPosition) {
         Objects.requireNonNull(query, "query");
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(rowPolicies, "rowPolicies");
@@ -82,22 +96,39 @@ public final class CriteriaCompiler {
 
         JoinCache joinCache = new JoinCache(root);
 
-        // Build SELECT
+        // Build projected selection columns
         List<Selection<?>> selections = buildSelections(query.select(), root, joinCache, cb);
-        List<String> outputNames = query.select().stream().map(Projection::outputName).toList();
+
+        // Build sort paths once; reuse for ORDER BY, hidden SELECT columns and keyset predicate
+        List<SortSpec> sortSpecs = query.orderBy();
+        List<Path<?>> sortPaths = new ArrayList<>(sortSpecs.size());
+        for (SortSpec spec : sortSpecs) {
+            sortPaths.add(buildPath(spec.path(), root, joinCache, false));
+        }
+
+        // Append hidden sort-key columns (_ks_N) so the executor can read last-row sort values
+        for (int idx = 0; idx < sortSpecs.size(); idx++) {
+            selections.add(sortPaths.get(idx).alias("_ks_" + idx));
+        }
         cq.multiselect(selections);
 
         // Build WHERE predicates
         List<Predicate> predicates = new ArrayList<>();
         if (query.where() != null) {
-            Predicate whereP = compileFilter(query.where(), root, joinCache, cb, principal, params, query);
-            predicates.add(whereP);
+            predicates.add(compileFilter(query.where(), root, joinCache, cb, principal, params, query));
+        }
+        for (RowPolicy policy : rowPolicies) {
+            predicates.add(compileFilter(policy.predicate(), root, joinCache, cb, principal, params, query));
         }
 
-        // Row policies (always applied, not optional)
-        for (RowPolicy policy : rowPolicies) {
-            Predicate policyP = compileFilter(policy.predicate(), root, joinCache, cb, principal, params, query);
-            predicates.add(policyP);
+        // Keyset predicate — only when position is supplied and sizes match
+        if (keysetPosition != null
+                && !sortSpecs.isEmpty()
+                && keysetPosition.size() == sortSpecs.size()) {
+            Predicate keysetPred = buildKeysetPredicate(cb, sortSpecs, sortPaths, keysetPosition);
+            if (keysetPred != null) {
+                predicates.add(keysetPred);
+            }
         }
 
         if (!predicates.isEmpty()) {
@@ -109,29 +140,106 @@ public final class CriteriaCompiler {
             cq.distinct(true);
         }
 
-        // ORDER BY
-        if (!query.orderBy().isEmpty()) {
-            List<Order> orders = new ArrayList<>();
-            for (SortSpec spec : query.orderBy()) {
-                Path<?> p = buildPath(spec.path(), root, joinCache, false);
-                orders.add(spec.descending() ? cb.desc(p) : cb.asc(p));
+        // ORDER BY (using pre-built sort paths)
+        if (!sortSpecs.isEmpty()) {
+            List<Order> orders = new ArrayList<>(sortSpecs.size());
+            for (int idx = 0; idx < sortSpecs.size(); idx++) {
+                orders.add(sortSpecs.get(idx).descending()
+                        ? cb.desc(sortPaths.get(idx))
+                        : cb.asc(sortPaths.get(idx)));
             }
             cq.orderBy(orders);
         }
 
         TypedQuery<Tuple> typedQuery = em.createQuery(cq);
         typedQuery.setMaxResults(effectiveLimit + 1); // fetch +1 to detect hasMore
-        typedQuery.setHint("jakarta.persistence.query.timeout", 5000); // 5 s default; overridden by executor
+        typedQuery.setHint("jakarta.persistence.query.timeout", 5000); // overridden by executor
         typedQuery.setHint("org.hibernate.readOnly", true);
         typedQuery.setHint("org.hibernate.flushMode", "COMMIT");
-
-        // Store output names on the query as a hint so the executor can build the row maps
-        typedQuery.setHint(CompiledQueryHints.OUTPUT_NAMES, outputNames);
+        typedQuery.setHint(CompiledQueryHints.OUTPUT_NAMES,
+                query.select().stream().map(Projection::outputName).toList());
 
         return typedQuery;
     }
 
-    // ── private ────────────────────────────────────────────────────────────────
+    // ── keyset predicate ──────────────────────────────────────────────────────
+
+    /**
+     * Builds the row-value keyset predicate for keys {@code k0..kN} at position {@code v0..vN}:
+     * <pre>
+     * (k0 &gt; v0)
+     * OR (k0 = v0 AND k1 &lt; v1)   -- DESC → less-than
+     * OR (k0 = v0 AND k1 = v1 AND k2 &gt; v2)
+     * ...
+     * </pre>
+     *
+     * <p>Stops expanding at the first {@code null} position value (conservative: no row after a null
+     * sort key can be safely expressed as a single predicate without SQL {@code IS NULL} handling).
+     *
+     * @return the OR predicate, or {@code null} if no valid OR clause could be constructed
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private @Nullable Predicate buildKeysetPredicate(CriteriaBuilder cb,
+                                                      List<SortSpec> sortSpecs,
+                                                      List<Path<?>> sortPaths,
+                                                      List<@Nullable Object> position) {
+        List<Predicate> orClauses = new ArrayList<>(sortSpecs.size());
+        for (int i = 0; i < sortSpecs.size(); i++) {
+            @Nullable Object rawVal = position.get(i);
+            if (rawVal == null) break; // stop at first null — see Javadoc
+
+            Object val = coerceValue(rawVal, sortPaths.get(i).getJavaType());
+
+            // Equality predicates for k0..k(i-1)
+            List<Predicate> andPreds = new ArrayList<>(i + 1);
+            for (int j = 0; j < i; j++) {
+                Object prevVal = coerceValue(position.get(j), sortPaths.get(j).getJavaType());
+                andPreds.add(cb.equal(sortPaths.get(j), prevVal));
+            }
+
+            // Inequality predicate for ki: ASC → GT, DESC → LT
+            Expression<Comparable> expr = (Expression<Comparable>) sortPaths.get(i);
+            Comparable compVal = (Comparable) val;
+            andPreds.add(sortSpecs.get(i).descending()
+                    ? cb.lessThan(expr, compVal)
+                    : cb.greaterThan(expr, compVal));
+
+            orClauses.add(andPreds.size() == 1
+                    ? andPreds.get(0)
+                    : cb.and(andPreds.toArray(Predicate[]::new)));
+        }
+        if (orClauses.isEmpty()) return null;
+        return orClauses.size() == 1
+                ? orClauses.get(0)
+                : cb.or(orClauses.toArray(Predicate[]::new));
+    }
+
+    /**
+     * Coerces a cursor-decoded value to the Java type reported by the JPA path.
+     * Handles the common mismatch where {@link CursorCodec} stores all integers as {@code Long}
+     * but the path type may be {@code Integer} or {@code Short}.
+     */
+    @Nullable
+    private static Object coerceValue(@Nullable Object value, Class<?> targetType) {
+        if (value == null) return null;
+        if (targetType.isInstance(value)) return value;
+        if (value instanceof Long n) {
+            if (targetType == Integer.class) return n.intValue();
+            if (targetType == Short.class) return n.shortValue();
+            if (targetType == Byte.class) return n.byteValue();
+            if (targetType == Double.class) return n.doubleValue();
+            if (targetType == Float.class) return n.floatValue();
+        }
+        if (value instanceof Double d && targetType == Float.class) return d.floatValue();
+        if (value instanceof String s && targetType == UUID.class) {
+            try {
+                return UUID.fromString(s);
+            } catch (IllegalArgumentException ignored) {}
+        }
+        return value; // best-effort: let JPA handle remaining mismatches
+    }
+
+    // ── private helpers ────────────────────────────────────────────────────────
 
     private Class<?> resolveEntityClass(String className) {
         try {
@@ -227,13 +335,11 @@ public final class CriteriaCompiler {
                 yield val != null ? val : FAIL_CLOSED_SENTINEL;
             }
             case Operand.ParamRef(var name) -> {
-                // Resolve from caller-supplied params; fall back to declared default
                 Object val = params.get(name);
                 if (val == null) {
                     var declared = query.param(name);
                     val = declared != null ? declared.defaultValue() : null;
                 }
-                // A null value for a non-unary operator is handled as SQL NULL via cb.isNull fallback in caller
                 yield val != null ? val : FAIL_CLOSED_SENTINEL;
             }
         };
@@ -271,7 +377,6 @@ public final class CriteriaCompiler {
             String key = from.getAlias() != null ? from.getAlias() + "." + relation : relation;
             return joins.computeIfAbsent(key, k -> {
                 Join<?, ?> j = from.join(relation, type);
-                // heuristic: detect to-many from the JPA model
                 try {
                     jakarta.persistence.metamodel.Attribute<?, ?> attr =
                             from.getModel().getAttribute(relation);

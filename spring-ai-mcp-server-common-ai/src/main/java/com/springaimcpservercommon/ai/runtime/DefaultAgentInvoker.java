@@ -1,7 +1,9 @@
 package com.springaimcpservercommon.ai.runtime;
 
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
+import com.springaimcpservercommon.ai.advisor.JsonSchemaValidationPort;
 import com.springaimcpservercommon.ai.advisor.StructuredOutputValidationAdvisor;
+import com.springaimcpservercommon.ai.advisor.SummaryMemoryAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.MemorySpec;
@@ -42,7 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Advisor order (outside the Spring AI tool-calling loop at HIGHEST_PRECEDENCE + 300):
  * <ol>
  *   <li>{@link InvocationGuardAdvisor} at {@code HIGHEST_PRECEDENCE + 200} — kill-switch, guardrails.</li>
- *   <li>{@link MessageChatMemoryAdvisor} at {@code HIGHEST_PRECEDENCE + 201} — history injection.</li>
+ *   <li>{@link MessageChatMemoryAdvisor} / {@link SummaryMemoryAdvisor} at {@code HIGHEST_PRECEDENCE + 201} — history injection (WINDOW / SUMMARY strategy respectively).</li>
  *   <li>{@link StructuredOutputValidationAdvisor} at {@code LOWEST_PRECEDENCE - 100} — JSON validation.</li>
  *   <li>{@link UsageMeteringAdvisor} at {@code LOWEST_PRECEDENCE} — token usage accounting.</li>
  * </ol>
@@ -65,6 +67,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final UsageMeteringAdvisor.UsageSink usageSink;
     private final ObservationRegistry observationRegistry;
     private final ChatMemory chatMemory;
+    private final @Nullable JsonSchemaValidationPort schemaValidator;
 
     /**
      * Creates the invoker.
@@ -77,6 +80,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
      * @param usageSink            token usage accounting
      * @param observationRegistry  Micrometer observation registry
      * @param chatMemory           conversation history store
+     * @param schemaValidator      optional JSON Schema conformance validator (Level 2);
+     *                             when {@code null} only well-formedness is enforced
      */
     public DefaultAgentInvoker(ModelRouter modelRouter,
                                 @Nullable ToolBridge toolBridge,
@@ -85,7 +90,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 InvocationGuardAdvisor.BudgetChecker budgetChecker,
                                 UsageMeteringAdvisor.UsageSink usageSink,
                                 ObservationRegistry observationRegistry,
-                                ChatMemory chatMemory) {
+                                ChatMemory chatMemory,
+                                @Nullable JsonSchemaValidationPort schemaValidator) {
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter");
         this.toolBridge = toolBridge;
         this.metadataRegistry = Objects.requireNonNull(metadataRegistry, "metadataRegistry");
@@ -94,6 +100,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         this.usageSink = Objects.requireNonNull(usageSink, "usageSink");
         this.observationRegistry = Objects.requireNonNull(observationRegistry, "observationRegistry");
         this.chatMemory = Objects.requireNonNull(chatMemory, "chatMemory");
+        this.schemaValidator = schemaValidator;
     }
 
     // ─── Sync turn ────────────────────────────────────────────────────────────
@@ -106,6 +113,12 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         LOG.debug("Agent {} sync turn {} for principal {}", agent.slug(), turnId, principal.principalId());
 
         try {
+            if (!budgetChecker.hasRemainingBudget(agent, principal)) {
+                LOG.warn("Agent {} budget exhausted for principal {}; sync turn {} rejected",
+                        agent.slug(), principal.principalId(), turnId);
+                throw new AgentInvocationException("budget-exhausted",
+                        "The usage budget for this agent is exhausted for the current period.", false);
+            }
             ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
             List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
             ChatClient client = buildChatClient(agent, principal, chatModel);
@@ -144,6 +157,13 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             LOG.debug("Agent {} stream turn {} for principal {}",
                     agent.slug(), turnId, principal.principalId());
             try {
+                if (!budgetChecker.hasRemainingBudget(agent, principal)) {
+                    LOG.warn("Agent {} budget exhausted for principal {}; stream turn {} rejected",
+                            agent.slug(), principal.principalId(), turnId);
+                    return Flux.just(new StreamEvent.ErrorEvent(
+                            "/errors/agent/budget-exhausted", "Usage limit reached",
+                            "budget-exhausted", false, turnId));
+                }
                 ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
                 List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
                 ChatClient client = buildChatClient(agent, principal, chatModel);
@@ -162,8 +182,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         .doOnNext(lastResponse::set)
                         .flatMapIterable(r -> extractTextDeltas(r, seq));
 
-                Flux<StreamEvent> ending = Flux.defer(() ->
-                        Flux.fromIterable(buildEndingEvents(lastResponse.get(), agent, turnId)));
+                Flux<StreamEvent> ending = Flux.defer(() -> {
+                    ChatResponse last = lastResponse.get();
+                    recordStreamUsage(agent, principal, last);
+                    return Flux.fromIterable(buildEndingEvents(last, agent, turnId));
+                });
 
                 StreamEvent turnStart = new StreamEvent.TurnStart(
                         turnId, conversationId, agent.slug(), agent.revision(),
@@ -195,14 +218,16 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ChatModel chatModel) {
         List<Advisor> advisors = new ArrayList<>();
         advisors.add(new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker));
-        if (agent.memory().strategy() != MemorySpec.Strategy.NONE) {
-            // SUMMARY falls back to WINDOW until LLM-summary memory is implemented (OQ-pending)
+        if (agent.memory().strategy() == MemorySpec.Strategy.SUMMARY) {
+            advisors.add(new SummaryMemoryAdvisor(chatMemory, chatModel, MEMORY_ORDER));
+        } else if (agent.memory().strategy() == MemorySpec.Strategy.WINDOW) {
             advisors.add(MessageChatMemoryAdvisor.builder(chatMemory)
                     .order(MEMORY_ORDER)
                     .build());
         }
+        // NONE: no memory advisor
         if (agent.output().mode() == OutputSpec.Mode.JSON_SCHEMA) {
-            advisors.add(new StructuredOutputValidationAdvisor(agent.output()));
+            advisors.add(new StructuredOutputValidationAdvisor(agent.output(), schemaValidator));
         }
         advisors.add(new UsageMeteringAdvisor(agent, principal, usageSink, observationRegistry));
 
@@ -253,6 +278,25 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         String text = response.getResult().getOutput().getText();
         if (text == null || text.isEmpty()) return List.of();
         return List.of(new StreamEvent.TextDelta(seq.incrementAndGet(), text));
+    }
+
+    /** Streamed turns bypass the call advisor chain, so their usage is recorded here (failures never break the turn). */
+    private void recordStreamUsage(AgentDefinition agent, DaiPrincipal principal, @Nullable ChatResponse last) {
+        if (last == null || last.getMetadata() == null || last.getMetadata().getUsage() == null) {
+            return;
+        }
+        var u = last.getMetadata().getUsage();
+        long prompt = u.getPromptTokens() != null ? u.getPromptTokens() : 0L;
+        long completion = u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L;
+        if (prompt + completion == 0) {
+            return;
+        }
+        try {
+            usageSink.record(agent, principal, prompt, completion);
+        } catch (RuntimeException e) {
+            LOG.warn("Usage recording failed for streamed turn of agent {} principal {}; usage not recorded",
+                    agent.slug(), principal.principalId(), e);
+        }
     }
 
     private static List<StreamEvent> buildEndingEvents(@Nullable ChatResponse last,

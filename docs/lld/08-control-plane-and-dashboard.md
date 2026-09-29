@@ -13,26 +13,30 @@ agents, tool bindings, policies, grants, approvals, budgets and audit. The UI is
 client; the API is the contract (and is used by GitOps tooling).
 
 ## 2. Admin API (`{base}/admin/api/v1`)
-Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors, cursor pagination,
+Conventions: JSON, `ETag`/`If-Match` optimistic concurrency, RFC 9457 errors (401 unauthenticated vs 403 denied; implemented for the controllers above via `AdminExceptionHandler`), cursor pagination,
 `Idempotency-Key` on POSTs that create, CSRF protection for cookie sessions.
 
 | Resource | Endpoints | Key permission |
 |----------|-----------|----------------|
 | Catalog | `GET /catalog/entities`, `/catalog/operations`, `/catalog/graph`, `PATCH /catalog/overlays/{ref}` | `catalog:read`, `catalog:annotate` |
-| Workspaces | `GET/POST /workspaces`, `GET/PATCH /workspaces/{ws}`, `/workspaces/{ws}/members` | `workspace:admin` |
+| Workspaces | `GET/POST /workspaces`, `GET/PATCH(If-Match)/DELETE /workspaces/{ws}`, `GET/POST /workspaces/{ws}/members`, `DELETE .../members/{principal}/{role}` — implemented; workspace-scoped roles only, last owner protected | `workspace:admin` |
 | Endpoints | `/workspaces/{ws}/endpoints[/{id}[/revisions[/{rev}]]]` | `endpoint:author` |
 | Queries | `/workspaces/{ws}/queries...`, `POST .../{id}/preview` | `query:author`, `query:preview` |
 | Agents | `/workspaces/{ws}/agents...`, `POST .../{id}/playground` (SSE) | `agent:author`, `agent:playground` |
 | Tool bindings | `/workspaces/{ws}/tools...` | `tool:author` |
 | Row policies | `/workspaces/{ws}/row-policies...` | `policy:author` |
 | Lifecycle | `POST .../revisions/{rev}:submit`, `:approve`, `:reject`, `:publish`, `:rollback`, `:deprecate` | `*:submit`, `review:approve`, `*:publish` |
-| Grants | `/workspaces/{ws}/grants` | `grant:manage` |
-| Role mappings | `/role-mappings` (global) | `platform:admin` |
-| Service accounts | `/workspaces/{ws}/service-accounts[/{id}/keys]` | `serviceaccount:manage` |
-| Budgets | `/workspaces/{ws}/budgets` | `budget:manage` |
-| Kill switches | `POST /kill-switches` | `ops:killswitch` |
-| Audit | `GET /audit?filter=` , `GET /audit/export` | `audit:read` |
-| Cluster | `GET /cluster/nodes` (applied generation per node) | `ops:read` |
+| Grants | `GET/POST /workspaces/{ws}/grants`, `DELETE .../grants/{id}` — implemented; grantable (invocation) permissions only, conditions validated | `grant:manage` |
+| Role mappings | `GET/POST /role-mappings`, `GET/PUT(If-Match)/DELETE /role-mappings/{id}`, `:enable`, `:disable` — implemented; mapping to a platform-wide role needs `PLATFORM_ADMIN` | `rolemapping:manage` |
+| Service accounts | `GET/POST /workspaces/{ws}/service-accounts`, `:enable`, `:disable`, `GET .../{id}/keys`, `DELETE .../{id}/keys/{key}` — implemented; key issuance pending (OQ-37) | `serviceaccount:manage` |
+| Budgets | `GET/POST /workspaces/{ws}/budgets` and `/budgets` (global), `GET/DELETE .../{id}`, `PUT .../{id}/limits` (If-Match), `:enable`, `:disable` — implemented; detail shows current-period usage | `budget:manage` |
+| Usage | `GET /workspaces/{ws}/usage/summary`, `/usage/series` (and `/usage/...` global), `GET/POST /prices` — implemented; series limited to 32 days, HOUR or DAY buckets | `budget:manage` or `audit:read` |
+| Traces | `GET /workspaces/{ws}/traces/turns`, `/turns/{id}`, `/model-calls`, `/tool-invocations?violationsOnly=` — implemented; redacted args, counts and hashes only | `audit:read` |
+| Conversations | `GET /dynamic-ai/api/conversations`, `GET .../{id}/messages`, `POST .../{id}:close`, `DELETE .../{id}` (erase) — implemented, owner only, USER/ASSISTANT messages only | authenticated owner |
+| Kill switches | `GET /kill-switches[?workspaceId]`, `GET /kill-switches/history?since=`, `POST /kill-switches`, `DELETE /kill-switches/{id}` (implemented) | `ops:killswitch` |
+| Audit | Implemented: `GET /audit/workspaces/{ws}/events`, `/audit/actors/{id}/events`, `/audit/denials`, `/audit/proposals/{id}/events`, `/audit/turns/{id}/events`, `/audit/chains/{chain}/verify` (window `from`/`to`, `limit` ≤ 200, `offset`); `GET /audit/export` planned | `audit:read` |
+| Cluster | `GET /cluster/nodes?aliveWithinSeconds=` (applied generation per node, `converged`) — implemented | `ops:killswitch` until `ops:read` exists (OQ-34) |
+| Bootstrap | `GET /me` — caller, roles, environment tier and capability flags — implemented | authenticated |
 | Bundles | `POST /bundles:export`, `POST /bundles:import` (dry-run default) | `platform:admin` |
 
 ## 3. Dashboard screens

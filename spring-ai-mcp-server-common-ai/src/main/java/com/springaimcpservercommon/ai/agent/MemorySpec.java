@@ -11,7 +11,7 @@ import java.time.Duration;
  * <ul>
  *   <li>{@link Strategy#NONE} — stateless; no history sent to the model.</li>
  *   <li>{@link Strategy#WINDOW} — the last {@link #windowSize} full message pairs.</li>
- *   <li>{@link Strategy#SUMMARY} — a running LLM-generated summary (v1.x, not yet implemented).</li>
+ *   <li>{@link Strategy#SUMMARY} — a running LLM-generated summary compressed by {@link com.springaimcpservercommon.ai.advisor.SummaryMemoryAdvisor}.</li>
  * </ul>
  *
  * @param strategy   memory strategy
@@ -29,7 +29,7 @@ public record MemorySpec(Strategy strategy, int windowSize, @Nullable Duration r
     public enum Strategy {
         NONE,
         WINDOW,
-        /** LLM-generated summary; not yet implemented (v1.x). */
+        /** LLM-generated running summary via {@link com.springaimcpservercommon.ai.advisor.SummaryMemoryAdvisor}. */
         SUMMARY
     }
 

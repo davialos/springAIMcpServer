@@ -1,0 +1,47 @@
+# Build artefacts
+**/target/
+**/build/
+**/.gradle/
+**/out/
+
+# IDE
+.idea/
+**/*.iml
+.vscode/
+**/.project
+**/.classpath
+**/.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitattributes
+
+# Secrets — never bake these into the image
+.env
+*.local.yml
+*.local.yaml
+.claude/settings.local.json
+
+# Docker itself
+Dockerfile
+docker-compose*.yml
+# Exclude infra-only docker subdirs — the build only needs demo-app and maven
+docker/neo4j/
+docker/postgres/
+docker/scripts/
+# docker/demo-app/ and docker/maven/ are NEEDED by the Dockerfile — do not exclude
+
+# Docs (not needed at runtime)
+docs/
+scripts/
+
+# Agent worktrees
+.claude/worktrees/
+
+# Dependency bundle — large, not needed in the Docker build context
+dist/
+

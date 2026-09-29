@@ -184,7 +184,7 @@ ChangeProposal**, not by the model:
 ## 8. Review API (`{base}/api/proposals`)
 | Endpoint | Purpose | AuthZ |
 |----------|---------|-------|
-| `GET /proposals/{id}` | Review payload (re-masked for caller) | owner or approver |
+| `GET /proposals/{id}` | Review payload (re-masked for caller) — implemented at `/dynamic-ai/api/proposals` (list `?scope=mine\|inbox`, get, `:confirm`, `:approve`, `:reject`, `:decline`; edit pending, OQ-36) | owner or approver |
 | `PATCH /proposals/{id}` (`If-Match`) | Edit editable fields → re-validate → new contentHash | owner |
 | `POST /proposals/{id}:confirm` (`Idempotency-Key`, body: `contentHash`) | Confirm | owner + `data:write-confirm` on target |
 | `POST /proposals/{id}:approve` / `:reject` | Second-person approval | `data:write-approve`, ≠ owner |

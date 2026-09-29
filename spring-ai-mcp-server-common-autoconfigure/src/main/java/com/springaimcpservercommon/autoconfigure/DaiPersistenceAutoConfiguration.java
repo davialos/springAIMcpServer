@@ -1,5 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
+import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
 import com.springaimcpservercommon.ai.agent.LimitSpec;
@@ -10,7 +12,18 @@ import com.springaimcpservercommon.ai.agent.ToolBindingRef;
 import com.springaimcpservercommon.core.catalog.CatalogElementRef;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.json.CanonicalJson;
+import com.springaimcpservercommon.persistence.audit.AuditTrail;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
+import com.springaimcpservercommon.persistence.config.GrantStore;
+import com.springaimcpservercommon.persistence.config.KillSwitchStore;
+import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
+import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
+import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
+import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
+import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
+import com.springaimcpservercommon.persistence.usage.BudgetStore;
+import com.springaimcpservercommon.persistence.usage.PriceStore;
+import com.springaimcpservercommon.persistence.usage.UsageLedger;
 import com.springaimcpservercommon.persistence.config.PublishedResource;
 import com.springaimcpservercommon.persistence.config.PublishedSnapshot;
 import com.springaimcpservercommon.persistence.config.ResourceKind;
@@ -101,9 +114,7 @@ public class DaiPersistenceAutoConfiguration {
     public DaiPersistenceUnit daiPersistenceUnit(DataSource dataSource, DaiProperties props) {
         DaiProperties.Environment env = props.environment();
         String tier = resolveTier(env.tier());
-        String envId = env.id() != null ? env.id()
-                : (env.applicationName() != null ? env.applicationName() + "-" + tier.toLowerCase(java.util.Locale.ROOT)
-                        : "default-" + tier.toLowerCase(java.util.Locale.ROOT));
+        String envId = environmentId(env, tier);
         DaiPersistenceSettings settings = DaiPersistenceSettings.defaults(envId, tier);
         LOG.info("Starting dynamic_ai persistence unit (schema {}, env {}/{})",
                 settings.schema(), envId, tier);
@@ -121,6 +132,199 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(DaiStore.class)
     public ConfigStore configStore(DaiStore store) {
         return new ConfigStore(store);
+    }
+
+    /**
+     * The tamper-evident audit trail (F-66). Needs the same environment id the persistence unit was started
+     * with, so events are chained per environment.
+     *
+     * @param store the framework's persistence unit
+     * @param props framework properties for environment identification
+     * @return the audit trail
+     */
+    @Bean
+    @ConditionalOnMissingBean(AuditTrail.class)
+    @ConditionalOnBean(DaiStore.class)
+    public AuditTrail auditTrail(DaiStore store, DaiProperties props) {
+        DaiProperties.Environment env = props.environment();
+        return new AuditTrail(store, environmentId(env, resolveTier(env.tier())), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Kill switch store (F-73).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(KillSwitchStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public KillSwitchStore killSwitchStore(DaiStore store) {
+        return new KillSwitchStore(store);
+    }
+
+    /**
+     * Workspace and membership store (F-62).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(WorkspaceStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public WorkspaceStore workspaceStore(DaiStore store) {
+        return new WorkspaceStore(store);
+    }
+
+    /**
+     * IdP group/claim to role mapping store (F-61).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(RoleMappingStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public RoleMappingStore roleMappingStore(DaiStore store) {
+        return new RoleMappingStore(store);
+    }
+
+    /**
+     * Fine-grained grant store (F-63).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(GrantStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public GrantStore grantStore(DaiStore store) {
+        return new GrantStore(store);
+    }
+
+    /**
+     * Service account and API key store (F-65).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ApiKeyStore apiKeyStore(DaiStore store) {
+        return new ApiKeyStore(store);
+    }
+
+    /**
+     * Change proposal store (F-45, LLD-11).
+     *
+     * @param store the framework's persistence unit
+     * @param props framework properties (terminal-state retention)
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChangeProposalStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ChangeProposalStore changeProposalStore(DaiStore store, DaiProperties props) {
+        return new ChangeProposalStore(store, java.time.Clock.systemUTC(), props.write().retention());
+    }
+
+    /**
+     * Token/cost budget store (F-70).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(BudgetStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public BudgetStore budgetStore(DaiStore store) {
+        return new BudgetStore(store);
+    }
+
+    /**
+     * Hourly usage ledger (F-70, F-71).
+     *
+     * @param store the framework's persistence unit
+     * @return the ledger
+     */
+    @Bean
+    @ConditionalOnMissingBean(UsageLedger.class)
+    @ConditionalOnBean(DaiStore.class)
+    public UsageLedger usageLedger(DaiStore store) {
+        return new UsageLedger(store);
+    }
+
+    /**
+     * Model price history (F-71).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(PriceStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public PriceStore priceStore(DaiStore store) {
+        return new PriceStore(store);
+    }
+
+    /**
+     * Telemetry store: conversations, turns, model calls, tool invocations (F-44, F-72).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(TelemetryStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public TelemetryStore telemetryStore(DaiStore store) {
+        return new TelemetryStore(store, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Ledger-backed budget check for the invocation path (F-70). Supersedes the permit-all default of
+     * {@link DaiAiAutoConfiguration}; disable enforcement with {@code dynamic.ai.agent.budget.enforce=false}.
+     *
+     * @param budgets       budget store
+     * @param ledger        usage ledger
+     * @param auditTrailProvider optional audit trail for soft-limit and exceeded alerts
+     * @param props         framework properties
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(InvocationGuardAdvisor.BudgetChecker.class)
+    @ConditionalOnBean({BudgetStore.class, UsageLedger.class})
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.budget", name = "enforce", havingValue = "true", matchIfMissing = true)
+    public InvocationGuardAdvisor.BudgetChecker ledgerBudgetChecker(
+            BudgetStore budgets, UsageLedger ledger,
+            org.springframework.beans.factory.ObjectProvider<AuditTrail> auditTrailProvider, DaiProperties props) {
+        DaiProperties.Budget budget = props.budget();
+        return new LedgerBudgetChecker(budgets, ledger, auditTrailProvider.getIfAvailable(), budget.cacheTtl(),
+                budget.failOpen(), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Ledger-backed usage recording: tokens and priced cost of every completed model call (F-70, F-71).
+     * Supersedes the no-op default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param ledger usage ledger
+     * @param prices model price history
+     * @return the sink
+     */
+    @Bean
+    @ConditionalOnMissingBean(UsageMeteringAdvisor.UsageSink.class)
+    @ConditionalOnBean({UsageLedger.class, PriceStore.class})
+    public UsageMeteringAdvisor.UsageSink ledgerUsageSink(UsageLedger ledger, PriceStore prices) {
+        return new LedgerUsageSink(ledger, prices, Duration.ofSeconds(60), java.time.Clock.systemUTC());
+    }
+
+    private static String environmentId(DaiProperties.Environment env, String tier) {
+        String lowerTier = tier.toLowerCase(java.util.Locale.ROOT);
+        if (env.id() != null) {
+            return env.id();
+        }
+        return (env.applicationName() != null ? env.applicationName() : "default") + "-" + lowerTier;
     }
 
     /**

@@ -1,0 +1,440 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# springAIMcpServerCommon — local dev / demo stack
+#
+# Services
+#   postgres    – primary store for dynamic_ai schema (required)
+#   redis       – optional escape-hatch cache / rate-limit backend (ADR-0021)
+#   ollama      – local LLM for AI testing without cloud credentials
+#   neo4j       – graph DB: conversation history, rule-group context (profile: graph)
+#   neo4j-init  – one-shot: applies Cypher schema + seed (profile: graph)
+#   app         – demo app wired to Ollama          (profile: local, default)
+#   app-api     – demo app wired to cloud AI APIs   (profile: api)
+#   app-graph   – demo app wired to Ollama + Neo4j  (profile: graph)
+#
+# Quick start — local Ollama only
+#   1. cp .env.example .env
+#   2. docker compose up -d postgres redis ollama
+#   3. docker compose run --rm ollama-pull
+#   4. docker compose up -d app
+#   5. open http://localhost:8080/actuator/health
+#
+# Quick start — with graph history (Neo4j)
+#   1. cp .env.example .env
+#   2. docker compose --profile graph up -d postgres redis ollama neo4j
+#   3. docker compose --profile graph run --rm ollama-pull
+#   4. docker compose --profile graph run --rm neo4j-init    # schema + seed
+#   5. docker compose --profile graph up -d app-graph
+#   6. open http://localhost:8082/actuator/health
+#   7. open http://localhost:7474  (Neo4j Browser — neo4j / see NEO4J_PASSWORD)
+#
+# Quick start — cloud API (OpenAI / Anthropic)
+#   1. cp .env.example .env  # set OPENAI_API_KEY or ANTHROPIC_API_KEY + AI_PROVIDER
+#   2. docker compose up -d postgres redis
+#   3. docker compose --profile api up -d app-api
+#   4. open http://localhost:8081/actuator/health
+#
+# Test-only (H2 in-process — no containers needed)
+#   docker compose --profile test up -d h2-console
+#   OPENAI_API_KEY=sk-... mvn test -Dspring.profiles.active=api,graph
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: springaimcp
+
+services:
+
+  # ── PostgreSQL 16 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: springaimcp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-dai_store}
+      POSTGRES_USER:     ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres_secret}
+      # Passed to the init.sh script so role passwords come from .env, not SQL literals
+      DAI_MIGRATOR_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD:-dai_migrator_secret}
+      DAI_APP_PASSWORD:      ${POSTGRES_APP_PASSWORD:-dai_app_secret}
+    ports:
+      - "${POSTGRES_EXTERNAL_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init script creates roles/schema before Flyway runs.
+      # Shell script (not SQL) so role passwords are injected from env vars.
+      - ./docker/postgres/init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-postgres} -d ${POSTGRES_DB:-dai_store}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - springaimcp-net
+
+  # ── Redis 7 ───────────────────────────────────────────────────────────────
+  # Provides a faster shared-counter / rate-limit backend for the ADR-0021
+  # escape hatch.  The library defaults to PostgreSQL counters; Redis is used
+  # only when a host provides a Redis-backed SPI bean.
+  redis:
+    image: redis:7-alpine
+    container_name: springaimcp-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+        --requirepass ${REDIS_PASSWORD:-redis_secret}
+        --maxmemory   ${REDIS_MAX_MEMORY:-256mb}
+        --maxmemory-policy allkeys-lru
+        --save 60 1
+        --loglevel warning
+    ports:
+      - "${REDIS_EXTERNAL_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - springaimcp-net
+
+  # ── Ollama (local LLM) ────────────────────────────────────────────────────
+  # Runs a local model so you can test the agent runtime without an API key.
+  # On Apple Silicon Docker Desktop routes to the Mac's own metal; on x86
+  # it falls back to CPU (slower but functional for smoke tests).
+  ollama:
+    image: ollama/ollama:latest
+    container_name: springaimcp-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_EXTERNAL_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      # Keep memory footprint bounded on dev machines
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - springaimcp-net
+
+  # One-shot: pulls the chat model.  docker compose run --rm ollama-pull
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: springaimcp-ollama-pull
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:3b}"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    profiles:
+      - tools
+    networks:
+      - springaimcp-net
+
+  # One-shot: pulls the embedding model (needed for graph profile vector store).
+  # docker compose --profile graph run --rm ollama-pull-embed
+  ollama-pull-embed:
+    image: ollama/ollama:latest
+    container_name: springaimcp-ollama-pull-embed
+    entrypoint: ["ollama", "pull", "${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    profiles:
+      - graph
+    networks:
+      - springaimcp-net
+
+  # ── H2 web console (test profile only) ───────────────────────────────────
+  # Not a data store — just the H2 browser UI for inspecting the in-process
+  # H2 database that the test profile wires up via spring.datasource.url=
+  # jdbc:h2:mem:testdb.  Enable with: docker compose --profile test up h2-console
+  h2-console:
+    image: oscarfonts/h2:latest
+    container_name: springaimcp-h2-console
+    restart: "no"
+    ports:
+      - "${H2_CONSOLE_PORT:-8084}:81"
+    profiles:
+      - test
+    networks:
+      - springaimcp-net
+
+  # ── Demo application — local Ollama backend ──────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      cache_from:
+        - type=local,src=/tmp/.buildx-cache
+      cache_to:
+        - type=local,dest=/tmp/.buildx-cache,mode=max
+    image: springaimcp-demo:latest
+    container_name: springaimcp-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      <<: &common-app-env
+        # ── Spring / host datasource ──
+        POSTGRES_HOST:     postgres
+        POSTGRES_PORT:     5432
+        POSTGRES_DB:       ${POSTGRES_DB:-dai_store}
+        POSTGRES_USER:     ${POSTGRES_APP_USER:-dai_app}
+        POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:-dai_app_secret}
+        # ── dynamic_ai library datasource (Flyway runs as migrator) ──
+        DAI_DB:            ${POSTGRES_DB:-dai_store}
+        DAI_DB_USER:       ${POSTGRES_MIGRATOR_USER:-dai_migrator}
+        DAI_DB_PASSWORD:   ${POSTGRES_MIGRATOR_PASSWORD:-dai_migrator_secret}
+        DAI_MIGRATE:       "true"
+        DAI_ENV_TIER:      ${DAI_ENV_TIER:-dev}
+        # ── Redis ──
+        SPRING_DATA_REDIS_HOST:     redis
+        SPRING_DATA_REDIS_PORT:     6379
+        SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+        # ── Demo credentials (dev only) ──
+        DEMO_USER:     ${DEMO_USER:-admin}
+        DEMO_PASSWORD: ${DEMO_PASSWORD:-admin}
+        # ── Observability ──
+        OTEL_TRACING_ENABLED:          ${OTEL_TRACING_ENABLED:-false}
+        OTEL_EXPORTER_OTLP_ENDPOINT:   ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
+        OTEL_SAMPLING_PROBABILITY:     ${OTEL_SAMPLING_PROBABILITY:-0.1}
+        # ── JVM ──
+        JAVA_OPTS: >-
+          -XX:+UseContainerSupport
+          -XX:MaxRAMPercentage=75.0
+          -XX:+ExitOnOutOfMemoryError
+          -Djava.security.egd=file:/dev/./urandom
+      # ── Ollama (local only) ──
+      SPRING_AI_OLLAMA_BASE_URL:   http://ollama:11434
+      SPRING_AI_OLLAMA_CHAT_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+    deploy:
+      resources:
+        limits:
+          memory: ${APP_MEMORY_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks:
+      - springaimcp-net
+
+  # ── Demo application — cloud API backend ─────────────────────────────────
+  # Activates the 'api' Spring profile; no Ollama dependency.
+  # Requires OPENAI_API_KEY or ANTHROPIC_API_KEY in .env.
+  # Start with: docker compose --profile api up -d app-api
+  app-api:
+    image: springaimcp-demo:latest
+    container_name: springaimcp-app-api
+    restart: unless-stopped
+    profiles:
+      - api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${APP_API_PORT:-8081}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: api
+      <<: *common-app-env
+      # ── AI provider selection ──────────────────────────────────────────
+      # Set AI_PROVIDER=openai (default) or AI_PROVIDER=anthropic in .env.
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
+
+      # ── OpenAI ────────────────────────────────────────────────────────
+      OPENAI_API_KEY:     ${OPENAI_API_KEY:}
+      OPENAI_BASE_URL:    ${OPENAI_BASE_URL:https://api.openai.com}
+      OPENAI_CHAT_MODEL:  ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+
+      # ── Anthropic Claude ──────────────────────────────────────────────
+      ANTHROPIC_API_KEY:    ${ANTHROPIC_API_KEY:}
+      ANTHROPIC_CHAT_MODEL: ${ANTHROPIC_CHAT_MODEL:-claude-sonnet-5}
+
+      # ── Shared AI tuning ──────────────────────────────────────────────
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.2}
+      AI_MAX_TOKENS:  ${AI_MAX_TOKENS:-4096}
+    deploy:
+      resources:
+        limits:
+          memory: ${APP_MEMORY_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks:
+      - springaimcp-net
+
+  # ── Neo4j 5 — graph conversation history & rule-group context store ───────
+  # Neo4j Browser UI:  http://localhost:7474   (login: neo4j / see NEO4J_PASSWORD)
+  # Bolt endpoint:     bolt://localhost:7687
+  #
+  # Activate with: docker compose --profile graph up -d neo4j
+  #
+  # What it stores
+  #   (:User)-[:HAS_CONVERSATION]->(:Conversation)-[:HAS_TURN]->(:Turn)
+  #   (:Turn)-[:CONTAINS_MESSAGE]->(:Message {embedding})
+  #   (:RuleGroup)-[:HAS_REVISION]->(:RuleRevision)-[:INSPIRED_BY_TURN]->(:Turn)
+  #   (:Context {embedding})-[:CAPTURED_FROM]->(:Turn)
+  #   (:Context)-[:APPLIES_TO]->(:RuleGroup)
+  #
+  # Vector indexes on Message.embedding and Context.embedding (1536-dim cosine)
+  # enable semantic retrieval: "find all conversations that shaped rule group X"
+  # and "retrieve context relevant to this query for RAG".
+  neo4j:
+    image: neo4j:5-community
+    container_name: springaimcp-neo4j
+    restart: unless-stopped
+    profiles:
+      - graph
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"     # Browser UI + REST API
+      - "${NEO4J_BOLT_PORT:-7687}:7687"     # Bolt (Spring Data Neo4j / driver)
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-neo4j_secret}
+      NEO4J_PLUGINS: '["apoc"]'             # APOC procedures (graph utilities)
+      NEO4J_server_memory_heap_initial__size:  ${NEO4J_HEAP_INITIAL:-512m}
+      NEO4J_server_memory_heap_max__size:      ${NEO4J_HEAP_MAX:-1g}
+      NEO4J_server_memory_pagecache_size:      ${NEO4J_PAGECACHE:-512m}
+      # Allow APOC and GDS procedures
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*,gds.*
+      # Log slow queries (helps tune Cypher during development)
+      NEO4J_server_logs_query_enabled: INFO
+      NEO4J_server_logs_query_threshold: 500ms
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/import
+      # Custom neo4j.conf (heap, pagecache, APOC whitelist)
+      - ./docker/neo4j/conf/neo4j.conf:/conf/neo4j.conf:ro
+      # Init Cypher scripts — run once on first start via cypher-shell
+      - ./docker/neo4j/init:/init:ro
+    healthcheck:
+      test: ["CMD-SHELL",
+             "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+    networks:
+      - springaimcp-net
+
+  # One-shot: applies the init Cypher scripts (constraints, indexes, seed data)
+  # after Neo4j is healthy.  Run once per fresh volume:
+  #   docker compose --profile graph run --rm neo4j-init
+  neo4j-init:
+    image: neo4j:5-community
+    container_name: springaimcp-neo4j-init
+    profiles:
+      - graph
+    entrypoint: ["bash", "-c", "
+      echo 'Waiting for Bolt...' &&
+      until cypher-shell -a bolt://neo4j:7687 -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-neo4j_secret} 'RETURN 1' > /dev/null 2>&1; do sleep 2; done &&
+      echo 'Applying 01_schema.cypher...' &&
+      cypher-shell -a bolt://neo4j:7687 -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-neo4j_secret} -f /init/01_schema.cypher &&
+      echo 'Applying 02_seed_agents.cypher...' &&
+      cypher-shell -a bolt://neo4j:7687 -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-neo4j_secret} -f /init/02_seed_agents.cypher &&
+      echo 'Graph schema initialised.'
+    "]
+    environment:
+      NEO4J_USER:     ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4j_secret}
+    volumes:
+      - ./docker/neo4j/init:/init:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    networks:
+      - springaimcp-net
+
+  # ── Demo application — graph profile (Ollama + Neo4j) ────────────────────
+  # Activates the 'local,graph' Spring profiles.
+  # Start: docker compose --profile graph up -d app-graph
+  app-graph:
+    image: springaimcp-demo:latest
+    container_name: springaimcp-app-graph
+    restart: unless-stopped
+    profiles:
+      - graph
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "${APP_GRAPH_PORT:-8082}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: local,graph
+      <<: *common-app-env
+      # ── Ollama ──
+      SPRING_AI_OLLAMA_BASE_URL:            http://ollama:11434
+      SPRING_AI_OLLAMA_CHAT_MODEL:          ${OLLAMA_MODEL:-qwen2.5:3b}
+      # Embedding model for graph vector indexes (768-dim, matches 01_schema.cypher)
+      SPRING_AI_OLLAMA_EMBEDDING_MODEL:     ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      # ── Neo4j ──
+      NEO4J_URI:      bolt://neo4j:7687
+      NEO4J_USER:     ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4j_secret}
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+      NEO4J_EMBEDDING_DIMENSION: ${NEO4J_EMBEDDING_DIMENSION:-1536}
+      NEO4J_TOP_K:    ${NEO4J_TOP_K:-5}
+      NEO4J_MIN_SCORE: ${NEO4J_MIN_SCORE:-0.70}
+      NEO4J_TURN_RETENTION_DAYS: ${NEO4J_TURN_RETENTION_DAYS:-90}
+    deploy:
+      resources:
+        limits:
+          memory: ${APP_MEMORY_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    networks:
+      - springaimcp-net
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ollama_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  neo4j_import:
+    driver: local
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  springaimcp-net:
+    driver: bridge

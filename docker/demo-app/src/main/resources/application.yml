@@ -1,0 +1,134 @@
+spring:
+  application:
+    name: spring-ai-mcp-demo
+
+  # Host datasource — points at the compose-managed Postgres
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:postgres}:${POSTGRES_PORT:5432}/${POSTGRES_DB:dai_store}
+    username: ${POSTGRES_USER:dai_app}
+    password: ${POSTGRES_PASSWORD:dai_app_secret}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+  security:
+    # Dev convenience: permit everything so the demo works without an IdP.
+    # Replace with your OIDC / OAuth2 config in real use.
+    user:
+      name: ${DEMO_USER:admin}
+      password: ${DEMO_PASSWORD:admin}
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+      # Show Neo4j and Redis health contributors when their profiles are active
+      group:
+        readiness:
+          include: db,redis,neo4j
+  # Prometheus / Micrometer
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${DAI_ENV_TIER:dev}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  # OpenTelemetry tracing (active when micrometer-tracing-bridge-otel is on classpath)
+  tracing:
+    enabled: ${OTEL_TRACING_ENABLED:false}
+    sampling:
+      probability: ${OTEL_SAMPLING_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+# Redis connection (Spring Boot 4 property path)
+spring:
+  data:
+    redis:
+      host:     ${SPRING_DATA_REDIS_HOST:localhost}
+      port:     ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+
+# ── springAIMcpServerCommon library config ──────────────────────────────────
+dynamic:
+  ai:
+    agent:
+      enabled: true
+      environment:
+        tier: ${DAI_ENV_TIER:dev}
+        id: ${spring.application.name}-${DAI_ENV_TIER:dev}
+
+      store:
+        enabled: true
+        # The library's own Flyway migrations run on startup in dev mode.
+        migrate: ${DAI_MIGRATE:true}
+        schema: dynamic_ai
+        # Use a dedicated datasource for the dynamic_ai schema (recommended).
+        # Omit datasource.* to reuse the host DataSource above.
+        datasource:
+          url: jdbc:postgresql://${POSTGRES_HOST:postgres}:${POSTGRES_PORT:5432}/${DAI_DB:dai_store}
+          username: ${DAI_DB_USER:dai_migrator}
+          password: ${DAI_DB_PASSWORD:dai_migrator_secret}
+
+      endpoints:
+        enabled: true
+
+      agents:
+        enabled: true
+
+      admin:
+        enabled: true
+        ui:
+          enabled: true      # locked off automatically when tier=prod (LLD-12 §2.2)
+
+      mcp:
+        server:
+          enabled: true
+
+# ── Spring AI provider (overridden per profile) ──────────────────────────────
+# Default: local Ollama.  Switch to cloud APIs with SPRING_PROFILES_ACTIVE=api
+# (see application-api.yml) or SPRING_PROFILES_ACTIVE=local,api to merge.
+#
+# The active profile drives which ChatModel bean Spring AI registers; only one
+# provider starter should contribute an auto-configured ChatModel at a time.
+spring:
+  ai:
+    ollama:
+      base-url: ${SPRING_AI_OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${SPRING_AI_OLLAMA_CHAT_MODEL:qwen2.5:3b}
+          temperature: 0.2
+    # Disable cloud providers in the base config — enabled by the 'api' profile.
+    openai:
+      api-key: ${OPENAI_API_KEY:disabled}
+      chat:
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:disabled}
+      chat:
+        options:
+          model: ${ANTHROPIC_CHAT_MODEL:claude-sonnet-5}
+
+logging:
+  level:
+    root: INFO
+    com.springaimcpservercommon: DEBUG
+    org.springframework.security: WARN

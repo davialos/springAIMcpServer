@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.webmvc.endpoint;
 
+import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.StreamEvent;
@@ -23,6 +24,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -43,6 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>{@code POST /dynamic-ai/api/agents/{slug}/chat} → synchronous JSON turn result</li>
  *   <li>{@code POST /dynamic-ai/api/agents/{slug}/chat/stream} → SSE stream of {@link StreamEvent}</li>
+ *   <li>{@code GET /dynamic-ai/api/agents/{slug}/turns/{turnId}/events} → SSE replay from ring buffer (LLD-13 §5)</li>
  * </ul>
  *
  * <p>The streaming endpoint:
@@ -97,9 +100,11 @@ public class AgentChatController {
     private final AuthorizationEngine authorizationEngine;
     private final GenericDynamicHandler.RateLimiter rateLimiter;
     private final GenericDynamicHandler.KillSwitchChecker killSwitchChecker;
+    private final @Nullable TurnEventBuffer turnEventBuffer;
+    private final InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker;
 
     /**
-     * Creates the controller with all required ports.
+     * Creates the controller with all required ports, without SSE replay.
      *
      * @param agentResolver       looks up the published agent by slug
      * @param agentInvoker        executes agent turns (sync and stream)
@@ -114,12 +119,65 @@ public class AgentChatController {
                                 AuthorizationEngine authorizationEngine,
                                 GenericDynamicHandler.RateLimiter rateLimiter,
                                 GenericDynamicHandler.KillSwitchChecker killSwitchChecker) {
+        this(agentResolver, agentInvoker, principalResolver, authorizationEngine,
+             rateLimiter, killSwitchChecker, null);
+    }
+
+    /**
+     * Creates the controller with all required ports and optional SSE replay support.
+     *
+     * @param agentResolver       looks up the published agent by slug
+     * @param agentInvoker        executes agent turns (sync and stream)
+     * @param principalResolver   maps the HTTP request to a {@link DaiPrincipal}
+     * @param authorizationEngine authorizes the invocation
+     * @param rateLimiter         per-principal rate limit enforcement
+     * @param killSwitchChecker   checks the agent kill switch
+     * @param turnEventBuffer     optional ring buffer enabling SSE replay via
+     *                            {@code GET /turns/{turnId}/events}; {@code null} disables replay
+     */
+    public AgentChatController(AgentResolver agentResolver,
+                                AgentInvoker agentInvoker,
+                                GenericDynamicHandler.DaiPrincipalResolver principalResolver,
+                                AuthorizationEngine authorizationEngine,
+                                GenericDynamicHandler.RateLimiter rateLimiter,
+                                GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
+                                @Nullable TurnEventBuffer turnEventBuffer) {
+        this(agentResolver, agentInvoker, principalResolver, authorizationEngine,
+             rateLimiter, killSwitchChecker, turnEventBuffer, null);
+    }
+
+    /**
+     * Creates the controller with all ports, optional SSE replay and an optional budget pre-check.
+     *
+     * <p>The budget pre-check answers {@code 429 budget-exhausted} before any stream is opened (F-70). The
+     * agent invoker enforces the same budget again for other channels, so a {@code null} checker only
+     * removes the early HTTP-level rejection.
+     *
+     * @param agentResolver       looks up the published agent by slug
+     * @param agentInvoker        executes agent turns (sync and stream)
+     * @param principalResolver   maps the HTTP request to a {@link DaiPrincipal}
+     * @param authorizationEngine authorizes the invocation
+     * @param rateLimiter         per-principal rate limit enforcement
+     * @param killSwitchChecker   checks the agent kill switch
+     * @param turnEventBuffer     optional ring buffer enabling SSE replay; {@code null} disables replay
+     * @param budgetChecker       optional token/cost budget pre-check; {@code null} disables the early check
+     */
+    public AgentChatController(AgentResolver agentResolver,
+                                AgentInvoker agentInvoker,
+                                GenericDynamicHandler.DaiPrincipalResolver principalResolver,
+                                AuthorizationEngine authorizationEngine,
+                                GenericDynamicHandler.RateLimiter rateLimiter,
+                                GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
+                                @Nullable TurnEventBuffer turnEventBuffer,
+                                InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker) {
         this.agentResolver = Objects.requireNonNull(agentResolver, "agentResolver");
         this.agentInvoker = Objects.requireNonNull(agentInvoker, "agentInvoker");
         this.principalResolver = Objects.requireNonNull(principalResolver, "principalResolver");
         this.authorizationEngine = Objects.requireNonNull(authorizationEngine, "authorizationEngine");
         this.rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter");
         this.killSwitchChecker = Objects.requireNonNull(killSwitchChecker, "killSwitchChecker");
+        this.turnEventBuffer = turnEventBuffer;
+        this.budgetChecker = budgetChecker;
     }
 
     // ─── Sync endpoint ───────────────────────────────────────────────────────
@@ -218,10 +276,16 @@ public class AgentChatController {
         // Sequence counter for SSE event ids
         AtomicInteger seq = new AtomicInteger(0);
 
-        // Content stream: agent events mapped to SSE
+        // Content stream: agent events mapped to SSE (and optionally buffered for replay)
         Flux<ServerSentEvent<String>> content = agentInvoker
                 .stream(agent, chatRequest, principal, auth)
-                .map(event -> toSse(event, turnId, seq.getAndIncrement()))
+                .map(event -> {
+                    int currentSeq = seq.getAndIncrement();
+                    if (turnEventBuffer != null) {
+                        turnEventBuffer.append(turnId, currentSeq, event);
+                    }
+                    return toSse(event, turnId, currentSeq);
+                })
                 .timeout(
                         Duration.ofSeconds(20),   // first-token timeout
                         Flux.just(errorEvent(turnId, "model-timeout", "The model did not respond in time.", false, seq.get())))
@@ -232,6 +296,11 @@ public class AgentChatController {
                     LOG.error("Agent {} stream error for turn {}", agent.slug(), turnId, e);
                     return Flux.just(errorEvent(turnId, "stream-error",
                             "An error occurred while streaming the response.", false, seq.get()));
+                })
+                .doFinally(signal -> {
+                    if (turnEventBuffer != null) {
+                        turnEventBuffer.complete(turnId);
+                    }
                 });
 
         // Heartbeat stream: SSE comments, bounded by content lifecycle
@@ -253,6 +322,107 @@ public class AgentChatController {
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(stream);
+    }
+
+    // ─── SSE replay endpoint ─────────────────────────────────────────────────
+
+    /**
+     * SSE replay endpoint: replays buffered events for a completed or in-progress turn.
+     *
+     * <p>The client supplies the SSE {@code Last-Event-ID} header (format: {@code {turnId}:{seq}})
+     * to resume from the last received event. When absent, all buffered events are replayed.
+     *
+     * <p>Returns 404 when the turn is unknown or has expired beyond the replay window.
+     * Returns 503 when no {@link TurnEventBuffer} is configured.
+     *
+     * @return {@code 200 text/event-stream} with buffered events, or a problem response on failure
+     */
+    @GetMapping(
+            value = "/turns/{turnId}/events",
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Object replayTurnStream(
+            @PathVariable String slug,
+            @PathVariable UUID turnId,
+            HttpServletRequest httpRequest) {
+
+        // 1. Resolve agent
+        AgentDefinition agent = agentResolver.resolve(slug);
+        if (agent == null) {
+            return ResponseEntity.status(404)
+                    .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                    .body(ProblemDetailFactory.build(ProblemCode.NOT_FOUND,
+                            "Agent not found", "No published agent with slug: " + slug,
+                            httpRequest.getRequestURI()));
+        }
+
+        // 2. Principal
+        DaiPrincipal principal;
+        Authentication auth;
+        try {
+            principal = principalResolver.resolve(httpRequest);
+            auth = SecurityContextHolder.getContext().getAuthentication();
+        } catch (Exception e) {
+            return ResponseEntity.status(403)
+                    .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                    .body(ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
+                            "Authentication required", null, httpRequest.getRequestURI()));
+        }
+        if (auth == null) {
+            return ResponseEntity.status(403)
+                    .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                    .body(ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
+                            "Authentication required", null, httpRequest.getRequestURI()));
+        }
+
+        // 3. Authorization (same permission required as for the original stream)
+        var resource = com.springaimcpservercommon.security.authz.ResourceRef.of(
+                agent.workspaceId(), agent.id(),
+                com.springaimcpservercommon.annotations.Classification.PUBLIC);
+        var authReq = com.springaimcpservercommon.security.authz.AuthorizationRequest.onResource(
+                principal,
+                com.springaimcpservercommon.security.permission.Permission.ENDPOINT_INVOKE,
+                resource);
+        if (authorizationEngine.decide(authReq) instanceof AuthorizationOutcome.Deny) {
+            return ResponseEntity.status(403)
+                    .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                    .body(ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
+                            "Access denied", null, httpRequest.getRequestURI()));
+        }
+
+        // 4. Check replay capability
+        if (turnEventBuffer == null) {
+            return ResponseEntity.status(503)
+                    .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                    .body(ProblemDetailFactory.build(ProblemCode.ENDPOINT_DISABLED,
+                            "Stream replay not available",
+                            "No turn event buffer is configured for this deployment.",
+                            httpRequest.getRequestURI()));
+        }
+
+        // 5. Parse Last-Event-ID → afterSeq
+        String lastEventId = httpRequest.getHeader("Last-Event-ID");
+        int afterSeq = parseAfterSeq(lastEventId, turnId);
+
+        // 6. Look up buffered events
+        java.util.List<TurnEventBuffer.BufferedEvent> events = turnEventBuffer.since(turnId, afterSeq);
+        if (events == null) {
+            return ResponseEntity.status(404)
+                    .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                    .body(ProblemDetailFactory.build(ProblemCode.NOT_FOUND,
+                            "Turn not found",
+                            "Turn " + turnId + " is unknown or the replay window has expired.",
+                            httpRequest.getRequestURI()));
+        }
+
+        // 7. Build and return the replay stream
+        Flux<ServerSentEvent<String>> replay = Flux.fromIterable(events)
+                .map(e -> toSse(e.event(), turnId, e.seq()));
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("Cache-Control", "no-cache, no-transform");
+        headers.add("X-Accel-Buffering", "no");
+
+        return ResponseEntity.ok().headers(headers).body(replay);
     }
 
     // ─── Pre-check pipeline ──────────────────────────────────────────────────
@@ -318,6 +488,23 @@ public class AgentChatController {
                     429);
         }
 
+        // 5b. Budget (F-70: hard cap answers 429 before any work). A failing checker never blocks the turn.
+        if (budgetChecker != null) {
+            boolean withinBudget = true;
+            try {
+                withinBudget = budgetChecker.hasRemainingBudget(agent, principal);
+            } catch (RuntimeException e) {
+                LOG.warn("Budget check failed for agent {}; allowing the turn", slug, e);
+            }
+            if (!withinBudget) {
+                return PreCheckResult.problem(
+                        ProblemDetailFactory.build(ProblemCode.BUDGET_EXHAUSTED, "Usage limit reached",
+                                "The usage budget for this agent is exhausted for the current period.",
+                                httpRequest.getRequestURI()),
+                        ProblemCode.BUDGET_EXHAUSTED.httpStatus());
+            }
+        }
+
         // 6. Validate body
         if (body.message() == null || body.message().isBlank()) {
             return PreCheckResult.problem(
@@ -359,6 +546,22 @@ public class AgentChatController {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * Parses the {@code seq} from a {@code Last-Event-ID} header value of the form
+     * {@code {turnId}:{seq}}. Returns {@code -1} (replay all) when the header is absent,
+     * blank, or does not match the expected format for the given turnId.
+     */
+    private static int parseAfterSeq(@Nullable String lastEventId, UUID turnId) {
+        if (lastEventId == null || lastEventId.isBlank()) return -1;
+        String prefix = turnId + ":";
+        if (!lastEventId.startsWith(prefix)) return -1;
+        try {
+            return Integer.parseInt(lastEventId.substring(prefix.length()));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
 
     private static ServerSentEvent<String> toSse(StreamEvent event, UUID turnId, int seq) {
         return ServerSentEvent.<String>builder()

@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.agent.OutputSpec;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
@@ -29,9 +30,9 @@ import java.util.Objects;
  * The advisor validates two levels:
  * <ol>
  *   <li>Well-formedness: the output must parse as a valid JSON object or array.</li>
- *   <li>Schema conformance: if a JSON Schema string is provided, the output must conform to it.
- *       Full structural validation requires the {@code networknt/json-schema-validator} library on
- *       the classpath; without it, only well-formedness is enforced.</li>
+ *   <li>Schema conformance: if a JSON Schema string is present and a {@link JsonSchemaValidationPort}
+ *       was supplied, the output must conform to the schema. When no validator is available,
+ *       only well-formedness is enforced (graceful degradation, LLD-12 §4).</li>
  * </ol>
  *
  * <p>On failure the advisor returns a safe synthetic {@link ChatResponse} (no retry, no exception)
@@ -47,19 +48,34 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final OutputSpec outputSpec;
+    private final @Nullable JsonSchemaValidationPort schemaValidator;
 
     /**
-     * Creates the advisor for a specific agent turn.
+     * Creates the advisor for a specific agent turn (no schema validator — well-formedness only).
      *
      * @param outputSpec the agent's output specification; must be {@link OutputSpec.Mode#JSON_SCHEMA}
      * @throws IllegalArgumentException if the output mode is not JSON_SCHEMA
      */
     public StructuredOutputValidationAdvisor(OutputSpec outputSpec) {
+        this(outputSpec, null);
+    }
+
+    /**
+     * Creates the advisor for a specific agent turn with optional structural schema validation.
+     *
+     * @param outputSpec      the agent's output specification; must be {@link OutputSpec.Mode#JSON_SCHEMA}
+     * @param schemaValidator optional port for JSON Schema conformance checking;
+     *                        when {@code null} only Level 1 (well-formedness) is enforced
+     * @throws IllegalArgumentException if the output mode is not JSON_SCHEMA
+     */
+    public StructuredOutputValidationAdvisor(OutputSpec outputSpec,
+                                              @Nullable JsonSchemaValidationPort schemaValidator) {
         this.outputSpec = Objects.requireNonNull(outputSpec, "outputSpec");
         if (outputSpec.mode() != OutputSpec.Mode.JSON_SCHEMA) {
             throw new IllegalArgumentException(
                     "StructuredOutputValidationAdvisor requires JSON_SCHEMA mode, got: " + outputSpec.mode());
         }
+        this.schemaValidator = schemaValidator;
     }
 
     @Override
@@ -104,13 +120,24 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
         }
 
         // Level 2: schema conformance (structural)
-        // Full JSON Schema validation is available when the host adds
-        // com.networknt:json-schema-validator to their dependencies and provides a
-        // JsonSchemaValidator bean. Without it, well-formedness is the enforced guarantee.
         String schema = outputSpec.jsonSchema();
         if (schema != null && !schema.isBlank()) {
-            LOG.debug("JSON Schema validation passed (well-formedness only; full schema: {} chars)",
-                    schema.length());
+            if (schemaValidator != null) {
+                try {
+                    List<String> errors = schemaValidator.validate(schema, text);
+                    if (!errors.isEmpty()) {
+                        LOG.warn("Agent output failed JSON Schema validation: {}", errors);
+                        return blocked(response.adviseContext(), "output_schema_violation",
+                                "The agent response does not conform to the expected schema.");
+                    }
+                } catch (Exception e) {
+                    // Validator threw unexpectedly — degrade to well-formedness only (LLD-12 §4)
+                    LOG.warn("JSON Schema validation error (skipping schema check): {}", e.getMessage());
+                }
+            } else {
+                LOG.debug("JSON Schema validation skipped (no validator; well-formedness only; schema: {} chars)",
+                        schema.length());
+            }
         }
 
         return response;

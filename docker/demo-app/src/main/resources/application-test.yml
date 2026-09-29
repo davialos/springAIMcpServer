@@ -1,0 +1,65 @@
+# Test profile — in-process H2, no real Postgres/Redis/Ollama required.
+# Activate with: -Dspring.profiles.active=test
+# H2 console (if running the Docker service): http://localhost:8082
+#   JDBC URL: jdbc:h2:mem:testdb   user: sa   password: (blank)
+
+spring:
+  datasource:
+    url:            jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    username:       sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  h2:
+    console:
+      # H2 web console disabled by default in tests — enable only when running
+      # the h2-console Docker service and you need to inspect the in-memory DB.
+      # Never enable in any environment reachable over a network.
+      enabled: ${H2_CONSOLE_ENABLED:false}
+      path:    /h2-console
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    database-platform: org.hibernate.dialect.H2Dialect
+
+  # Disable Redis autoconfiguration in test
+  data:
+    redis:
+      repositories:
+        enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+
+dynamic:
+  ai:
+    agent:
+      environment:
+        tier: dev
+      store:
+        # H2 doesn't support the dynamic_ai Flyway migrations (PG-specific SQL);
+        # disable the library's own store in the test profile and mock the ports.
+        enabled: false
+      agents:
+        enabled: false
+      mcp:
+        server:
+          enabled: false
+
+# Point Spring AI at local Ollama when available; fall back to a no-op stub.
+spring:
+  ai:
+    ollama:
+      base-url: ${SPRING_AI_OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        model: ${SPRING_AI_OLLAMA_CHAT_MODEL:qwen2.5:3b}
+        options:
+          temperature: 0.2
+
+logging:
+  level:
+    root: WARN
+    com.springaimcpservercommon: DEBUG
+    com.example.demo: DEBUG

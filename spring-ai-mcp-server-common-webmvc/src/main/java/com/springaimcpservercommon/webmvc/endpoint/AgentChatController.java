@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.webmvc.endpoint;
 
+import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.StreamEvent;
@@ -100,6 +101,7 @@ public class AgentChatController {
     private final GenericDynamicHandler.RateLimiter rateLimiter;
     private final GenericDynamicHandler.KillSwitchChecker killSwitchChecker;
     private final @Nullable TurnEventBuffer turnEventBuffer;
+    private final InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker;
 
     /**
      * Creates the controller with all required ports, without SSE replay.
@@ -140,6 +142,34 @@ public class AgentChatController {
                                 GenericDynamicHandler.RateLimiter rateLimiter,
                                 GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
                                 @Nullable TurnEventBuffer turnEventBuffer) {
+        this(agentResolver, agentInvoker, principalResolver, authorizationEngine,
+             rateLimiter, killSwitchChecker, turnEventBuffer, null);
+    }
+
+    /**
+     * Creates the controller with all ports, optional SSE replay and an optional budget pre-check.
+     *
+     * <p>The budget pre-check answers {@code 429 budget-exhausted} before any stream is opened (F-70). The
+     * agent invoker enforces the same budget again for other channels, so a {@code null} checker only
+     * removes the early HTTP-level rejection.
+     *
+     * @param agentResolver       looks up the published agent by slug
+     * @param agentInvoker        executes agent turns (sync and stream)
+     * @param principalResolver   maps the HTTP request to a {@link DaiPrincipal}
+     * @param authorizationEngine authorizes the invocation
+     * @param rateLimiter         per-principal rate limit enforcement
+     * @param killSwitchChecker   checks the agent kill switch
+     * @param turnEventBuffer     optional ring buffer enabling SSE replay; {@code null} disables replay
+     * @param budgetChecker       optional token/cost budget pre-check; {@code null} disables the early check
+     */
+    public AgentChatController(AgentResolver agentResolver,
+                                AgentInvoker agentInvoker,
+                                GenericDynamicHandler.DaiPrincipalResolver principalResolver,
+                                AuthorizationEngine authorizationEngine,
+                                GenericDynamicHandler.RateLimiter rateLimiter,
+                                GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
+                                @Nullable TurnEventBuffer turnEventBuffer,
+                                InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker) {
         this.agentResolver = Objects.requireNonNull(agentResolver, "agentResolver");
         this.agentInvoker = Objects.requireNonNull(agentInvoker, "agentInvoker");
         this.principalResolver = Objects.requireNonNull(principalResolver, "principalResolver");
@@ -147,6 +177,7 @@ public class AgentChatController {
         this.rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter");
         this.killSwitchChecker = Objects.requireNonNull(killSwitchChecker, "killSwitchChecker");
         this.turnEventBuffer = turnEventBuffer;
+        this.budgetChecker = budgetChecker;
     }
 
     // ─── Sync endpoint ───────────────────────────────────────────────────────
@@ -455,6 +486,23 @@ public class AgentChatController {
             return PreCheckResult.problem(
                     ProblemDetailFactory.buildRateLimited(httpRequest.getRequestURI(), retryAfter),
                     429);
+        }
+
+        // 5b. Budget (F-70: hard cap answers 429 before any work). A failing checker never blocks the turn.
+        if (budgetChecker != null) {
+            boolean withinBudget = true;
+            try {
+                withinBudget = budgetChecker.hasRemainingBudget(agent, principal);
+            } catch (RuntimeException e) {
+                LOG.warn("Budget check failed for agent {}; allowing the turn", slug, e);
+            }
+            if (!withinBudget) {
+                return PreCheckResult.problem(
+                        ProblemDetailFactory.build(ProblemCode.BUDGET_EXHAUSTED, "Usage limit reached",
+                                "The usage budget for this agent is exhausted for the current period.",
+                                httpRequest.getRequestURI()),
+                        ProblemCode.BUDGET_EXHAUSTED.httpStatus());
+            }
         }
 
         // 6. Validate body

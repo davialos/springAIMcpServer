@@ -203,7 +203,8 @@ public final class DispatchingBackingExecutor implements GenericDynamicHandler.B
             AgentDefinitionResolver resolver) {
         return (agentId, renderedInput, principal, authentication) -> {
             AgentInvoker.AgentChatRequest request =
-                    new AgentInvoker.AgentChatRequest(null, renderedInput, UUID.randomUUID().toString());
+                    new AgentInvoker.AgentChatRequest(null, renderedInput, UUID.randomUUID().toString(), null,
+                            com.springaimcpservercommon.core.invocation.Channel.ENDPOINT);
             com.springaimcpservercommon.ai.agent.AgentDefinition def = resolver.resolve(agentId);
             if (def == null) {
                 throw new GenericDynamicHandler.BackingException(

@@ -89,11 +89,35 @@ public final class GenericDynamicHandler implements Controller {
     /**
      * Thrown by {@link BackingExecutor} when execution fails.
      *
-     * @param code    problem code for the failure
-     * @param message safe, displayable message
+     * Carries the problem code and a safe, displayable message. (A class, not a record: records cannot extend
+     * {@link Exception}.) The stack trace is not filled in: this is an expected control-flow failure.
      */
-    public record BackingException(ProblemCode code, String message) extends Exception {
-        public BackingException { Objects.requireNonNull(code, "code"); Objects.requireNonNull(message, "message"); }
+    public static final class BackingException extends Exception {
+
+        private static final long serialVersionUID = 1L;
+
+        private final ProblemCode code;
+
+        /**
+         * Creates the exception.
+         *
+         * @param code    problem code for the failure
+         * @param message safe, displayable message
+         */
+        public BackingException(ProblemCode code, String message) {
+            super(Objects.requireNonNull(message, "message"), null, false, false);
+            this.code = Objects.requireNonNull(code, "code");
+        }
+
+        /** @return problem code for the failure */
+        public ProblemCode code() {
+            return code;
+        }
+
+        /** @return safe, displayable message */
+        public String message() {
+            return getMessage();
+        }
     }
 
     /**

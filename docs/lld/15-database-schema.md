@@ -644,8 +644,9 @@ host's point of view; the application reconciles `dai_partitioned_table.retentio
 values at startup. A DBA should not hand-edit this table without also updating the host's configuration, or
 the next startup will silently overwrite the edit.
 
-**The maintenance job** (`dynamic.ai.agent.store.maintenance.cron`, default `0 17 3 * * *` — 03:17:00 daily)
-runs on every node but does its work on exactly one, coordinated with `pg_try_advisory_lock` keyed on a fixed
+**The maintenance job** (`dynamic.ai.agent.store.maintenance.cron`, default `0 17 3 * * *` — 03:17:00 UTC daily;
+scheduled by `MaintenanceRunner` on its own `dai-maintenance` thread, separate from the heartbeat thread)
+runs on every node but does its work on exactly one, coordinated with `pg_try_advisory_xact_lock` keyed on a fixed
 constant: a node that fails to acquire the lock records a `SKIPPED` `dai_job_run` and returns immediately.
 The node holding the lock:
 1. For each row in `dai_partitioned_table`, calls `dai_ensure_monthly_partitions(table_name, 1, months_ahead)`
@@ -763,7 +764,10 @@ current, implemented contract for version **0.1.0-SNAPSHOT**.
 | `dynamic.ai.agent.store.retention.audit-months` | `14` | Reconciled into `dai_partitioned_table.retention_months` for `dai_audit_event`/`dai_audit_evidence` |
 | `dynamic.ai.agent.store.retention.conversation-days` | `30` | Drives `dai_conversation.retention_until` at creation/update time |
 | `dynamic.ai.agent.store.retention.proposal-days` | `7` | Drives `dai_change_proposal.retention_until` at creation time |
-| `dynamic.ai.agent.store.maintenance.cron` | `0 17 3 * * *` | Partition creation, retention drop, and non-partitioned purge (§10) |
+| `dynamic.ai.agent.store.maintenance.enabled` | `true` | Runs the maintenance runner on this node; `false` leaves partitioning, retention, heartbeat and sweeps to the operator (OQ-31) |
+| `dynamic.ai.agent.store.maintenance.cron` | `0 17 3 * * *` | Partition creation, retention drop, and non-partitioned purge (§10); Spring six-field cron evaluated in UTC |
+| `dynamic.ai.agent.store.maintenance.{snapshot-poll-interval,heartbeat-interval,sweep-interval}` | `5s` / `15s` / `5m` | Generation poll, `dai_node_state` heartbeat, and the sweeps (silent nodes after `node-retention` 24h, approvals after `approval-ttl` 30d, proposals stuck in APPLYING after `apply-timeout` 10m) |
+| `dynamic.ai.agent.store.maintenance.node-id` | host name + random suffix | Id of this node in `dai_node_state` and `dai_job_run` |
 | `dynamic.ai.agent.audit.evidence.enabled` | `false` | Opt-in evidence tier (ADR-0018); gates whether `dai_audit_evidence`/`dai_evidence_subject_key` ever receive writes |
 | `dynamic.ai.agent.security.api-key.pepper-secret-ref` | unset | Reference (via `SecretResolver`) to the HMAC pepper used for `dai_api_key.key_hash` when `hash_algorithm = hmac-sha256` |
 
@@ -868,5 +872,5 @@ OQ-29 (minimum PostgreSQL version — resolved to 15 in this doc, recommendation
 (dedicated database vs. host database — both documented here and in the integration guide, still a
 per-deployment decision), OQ-31 (retention defaults and who runs partition maintenance — documented in §10/§12
 as "built-in job, advisory-locked, any node"; still open whether a deploying team may disable the built-in job
-entirely and run 100% DBA-driven maintenance — today the job is not configurable to "off" and this should be
-tracked as a follow-up, not assumed).
+entirely and run 100% DBA-driven maintenance — resolved: `store.maintenance.enabled=false` turns the runner off;
+the DBA then owns partitions, retention and the sweeps).

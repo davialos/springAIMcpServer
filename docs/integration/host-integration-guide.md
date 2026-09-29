@@ -168,7 +168,8 @@ dynamic:
           conversation-days: 30
           proposal-days: 7
         maintenance:
-          cron: "0 17 3 * * *"
+          enabled: true               # false = you run partitions, retention and node bookkeeping yourself
+          cron: "0 17 3 * * *"       # UTC
       audit:
         evidence:
           enabled: false              # opt in per workspace/regulatory need (ADR-0018, OQ-27) — off by default
@@ -508,7 +509,8 @@ that is still in-memory per node.
   `.agent.turns`, `.agent.tool.calls`, `.llm.tokens`, `.llm.cost`, `.budget.utilization`,
   `.ratelimit.rejections`, `.snapshot.generation`/`.snapshot.lag`, `.authz.decisions` (LLD-10 §2). Spans:
   `dai.endpoint`, `dai.query`, `dai.agent.turn`, `dai.tool`, `dai.snapshot.apply` (LLD-10 §3).
-- **Partition maintenance**: runs on `dynamic.ai.agent.store.maintenance.cron` (default `0 17 3 * * *`),
+- **Partition maintenance**: runs on `dynamic.ai.agent.store.maintenance.cron` (default `0 17 3 * * *`, UTC; disable
+  with `store.maintenance.enabled=false`),
   advisory-locked so exactly one cluster node does the work per run (`dai_job_run` records the outcome). Verify
   it is actually running with `scripts/db/postgresql/04_verify.sql` §3–4 (empty `DEFAULT` partitions, expected
   partitions present).

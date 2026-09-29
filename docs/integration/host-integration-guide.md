@@ -537,7 +537,10 @@ that is still in-memory per node.
   library never starts its own metrics server). Key meters: `.endpoint.requests`, `.query.executions`,
   `.agent.turns`, `.agent.tool.calls`, `.llm.tokens`, `.llm.cost`, `.budget.utilization`,
   `.ratelimit.rejections`, `.snapshot.generation`/`.snapshot.lag`, `.authz.decisions` (LLD-10 §2). Spans:
-  `dai.endpoint`, `dai.query`, `dai.agent.turn`, `dai.tool`, `dai.snapshot.apply` (LLD-10 §3).
+  `dai.endpoint`, `dai.query`, `dai.agent.turn`, `dai.tool`, `dai.snapshot.apply` (LLD-10 §3). Implemented so far:
+  `dai.agent.turn`, `dai.tool`, `dai.mcp` (meters `dynamic.ai.agent.turn|tool|mcp`), carrying the turn, model-call and
+  MCP-request ids so a trace in your tracing backend (Tempo, Jaeger, Langfuse via OTLP, …) can be matched to the rows
+  in the admin trace API; add `micrometer-tracing` with your OpenTelemetry or Brave bridge to get them as spans.
 - **Partition maintenance**: runs on `dynamic.ai.agent.store.maintenance.cron` (default `0 17 3 * * *`, UTC; disable
   with `store.maintenance.enabled=false`),
   advisory-locked so exactly one cluster node does the work per run (`dai_job_run` records the outcome). Verify

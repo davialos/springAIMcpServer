@@ -5,6 +5,9 @@ import com.springaimcpservercommon.annotations.Classification;
 import com.springaimcpservercommon.core.invocation.Channel;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.core.principal.SubjectType;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -191,5 +194,42 @@ class McpProtocolHandlerTest {
             throw new IllegalStateException("store down");
         }, Clock.systemUTC(), "s", "1");
         assertThat(handler.handle(request("ping", null), caller).httpStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void everyRequestIsASpanWhoseMethodTagIsBounded() {
+        List<Observation.Context> stopped = new ArrayList<>();
+        ObservationRegistry registry = ObservationRegistry.create();
+        registry.observationConfig().observationHandler(new ObservationHandler<>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+
+            @Override
+            public void onStop(Observation.Context context) {
+                stopped.add(context);
+            }
+        });
+        available = List.of(tool("find_orders", "{}", in -> "{\"status\":\"ok\"}"));
+        var traced = new McpProtocolHandler((c, s) -> available, recorded::add, Clock.systemUTC(), "s", "1", registry);
+
+        traced.handle(request("tools/call", "{\"name\":\"find_orders\",\"arguments\":{\"q\":\"secret-arg\"}}"),
+                caller);
+        traced.handle(request("attacker/controlled-" + UUID.randomUUID(), null), caller);
+        traced.handle("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", caller);
+
+        assertThat(stopped).hasSize(3);
+        assertThat(stopped.get(0).getName()).isEqualTo("dynamic.ai.agent.mcp");
+        assertThat(stopped.get(0).getContextualName()).isEqualTo("dai.mcp");
+        assertThat(stopped.get(0).getLowCardinalityKeyValue("dai.mcp.method").getValue()).isEqualTo("tools/call");
+        assertThat(stopped.get(0).getLowCardinalityKeyValue("dai.mcp.status").getValue()).isEqualTo("OK");
+        assertThat(stopped.get(0).getHighCardinalityKeyValue("dai.mcp.tool").getValue()).isEqualTo("find_orders");
+        assertThat(stopped.get(0).getHighCardinalityKeyValue("dai.mcp.request.id").getValue())
+                .isEqualTo(recorded.get(0).id().toString());
+        assertThat(stopped.get(0).getLowCardinalityKeyValues().toString()).doesNotContain("secret");
+        assertThat(stopped.get(0).getHighCardinalityKeyValues().toString()).doesNotContain("secret");
+        assertThat(stopped.get(1).getLowCardinalityKeyValue("dai.mcp.method").getValue()).isEqualTo("other");
+        assertThat(stopped.get(2).getLowCardinalityKeyValue("dai.mcp.method").getValue()).isEqualTo("notification");
     }
 }

@@ -249,6 +249,7 @@ public class DaiAiAutoConfiguration {
      * @param permissionChecker    runtime per-call permission check
      * @param proposalService      creates ChangeProposal records for PROPOSE-mode tools
      * @param toolCallRecorder     receives one record per tool call
+     * @param observationRegistry  the host's registry for the {@code dai.tool} spans, when it has one
      * @return the bridge
      */
     @Bean
@@ -262,21 +263,12 @@ public class DaiAiAutoConfiguration {
                                   ObjectProvider<ToolBridge.AgentCallbackFactory> agentFactoryProvider,
                                   SecuredToolCallback.ToolPermissionChecker permissionChecker,
                                   ProposalService proposalService,
-                                  ToolCallRecorder toolCallRecorder) {
+                                  ToolCallRecorder toolCallRecorder,
+                                  ObjectProvider<ObservationRegistry> observationRegistry) {
         return new ToolBridge(bindingLoader, operationFactory, queryFactory,
                 agentFactoryProvider.getIfAvailable(),
-                permissionChecker, proposalService, toolCallRecorder, java.time.Clock.systemUTC());
-    }
-
-    /**
-     * Observation registry fallback when Micrometer is not otherwise configured.
-     *
-     * @return a no-op registry
-     */
-    @Bean
-    @ConditionalOnMissingBean(ObservationRegistry.class)
-    public ObservationRegistry observationRegistry() {
-        return ObservationRegistry.NOOP;
+                permissionChecker, proposalService, toolCallRecorder, java.time.Clock.systemUTC(),
+                observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
 
     /**
@@ -359,7 +351,7 @@ public class DaiAiAutoConfiguration {
             UsageMeteringAdvisor.UsageSink usageSink,
             TurnRecorder turnRecorder,
             ConversationRecorder conversationRecorder,
-            ObservationRegistry observationRegistry,
+            ObjectProvider<ObservationRegistry> observationRegistry,
             ChatMemory chatMemory,
             ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider) {
         return new DefaultAgentInvoker(
@@ -371,7 +363,7 @@ public class DaiAiAutoConfiguration {
                 usageSink,
                 turnRecorder,
                 conversationRecorder,
-                observationRegistry,
+                observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP),
                 chatMemory,
                 schemaValidatorProvider.getIfAvailable());
     }

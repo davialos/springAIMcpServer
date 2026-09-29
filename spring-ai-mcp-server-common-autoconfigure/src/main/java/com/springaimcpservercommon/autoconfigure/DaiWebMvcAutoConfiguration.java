@@ -134,9 +134,10 @@ public class DaiWebMvcAutoConfiguration {
             GenericDynamicHandler.BackingExecutor backingExecutor,
             GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
             GenericDynamicHandler.RateLimiter rateLimiter,
-            ObservationRegistry observationRegistry) {
+            ObjectProvider<ObservationRegistry> observationRegistry) {
         return new GenericDynamicHandler(registrar, principalResolver, authorizationEngine,
-                backingExecutor, killSwitchChecker, rateLimiter, observationRegistry);
+                backingExecutor, killSwitchChecker, rateLimiter,
+                observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
 
     /**

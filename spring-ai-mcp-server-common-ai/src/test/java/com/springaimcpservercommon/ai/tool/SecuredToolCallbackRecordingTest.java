@@ -7,6 +7,9 @@ import com.springaimcpservercommon.core.hash.Sha256;
 import com.springaimcpservercommon.core.invocation.Channel;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.core.principal.SubjectType;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.context.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
@@ -225,5 +228,65 @@ class SecuredToolCallbackRecordingTest {
                 .isEqualTo("agent:" + id);
         assertThat(SecuredToolCallback.elementRef(new ToolSource.McpSource(id, "list files!")).toString())
                 .isEqualTo("mcp:" + id + "/list_files_");
+    }
+
+    private static ObservationRegistry tracing(List<Observation.Context> stopped) {
+        ObservationRegistry registry = ObservationRegistry.create();
+        registry.observationConfig().observationHandler(new ObservationHandler<>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+
+            @Override
+            public void onStop(Observation.Context context) {
+                stopped.add(context);
+            }
+        });
+        return registry;
+    }
+
+    @Test
+    void everyCallIsATraceableSpanWithoutArgumentsOrResults() {
+        List<Observation.Context> stopped = new ArrayList<>();
+        ObservationRegistry registry = tracing(stopped);
+        Observation parent = Observation.start("turn", registry);
+        UUID modelCall = UUID.randomUUID();
+        SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "{\"secret-result\":1}"),
+                binding(WriteMode.EXECUTE, 0), principal, new TestingAuthenticationToken("alice", "x"),
+                new AtomicInteger(0), (p, b) -> true, (t, i, id, p) -> UUID.randomUUID(), recorded::add,
+                ToolCallScope.ofTurn(Channel.CHAT, TURN, modelCall, parent), Clock.systemUTC(), registry);
+
+        cb.call("{\"q\":\"secret-arg\"}");
+
+        assertThat(stopped).singleElement().satisfies(c -> {
+            assertThat(c.getName()).isEqualTo("dynamic.ai.agent.tool");
+            assertThat(c.getContextualName()).isEqualTo("dai.tool");
+            assertThat(c.getLowCardinalityKeyValue("dai.tool.name").getValue()).isEqualTo("find_orders");
+            assertThat(c.getLowCardinalityKeyValue("dai.tool.access_mode").getValue()).isEqualTo("READ");
+            assertThat(c.getLowCardinalityKeyValue("dai.channel").getValue()).isEqualTo("CHAT");
+            assertThat(c.getLowCardinalityKeyValue("dai.tool.status").getValue()).isEqualTo("OK");
+            assertThat(c.getHighCardinalityKeyValue("dai.turn.id").getValue()).isEqualTo(TURN.toString());
+            assertThat(c.getHighCardinalityKeyValue("dai.model_call.id").getValue()).isEqualTo(modelCall.toString());
+            assertThat(c.getParentObservation()).isNotNull();
+            assertThat(c.getLowCardinalityKeyValues().toString()).doesNotContain("secret");
+            assertThat(c.getHighCardinalityKeyValues().toString()).doesNotContain("secret");
+        });
+    }
+
+    @Test
+    void aDeniedCallShowsItsStatusOnTheSpan() {
+        List<Observation.Context> stopped = new ArrayList<>();
+        SecuredToolCallback cb = new SecuredToolCallback(delegate(in -> "x"), binding(WriteMode.EXECUTE, 0),
+                principal, new TestingAuthenticationToken("alice", "x"), new AtomicInteger(0), (p, b) -> false,
+                (t, i, id, p) -> UUID.randomUUID(), recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN),
+                Clock.systemUTC(), tracing(stopped));
+
+        cb.call("{}");
+
+        assertThat(stopped).singleElement().satisfies(c -> {
+            assertThat(c.getLowCardinalityKeyValue("dai.tool.status").getValue()).isEqualTo("NOT_PERMITTED");
+            assertThat(c.getLowCardinalityKeyValue("dai.tool.error_code").getValue()).isEqualTo("not_permitted");
+        });
     }
 }

@@ -4,6 +4,8 @@ import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.ai.tool.ToolCallScope;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -105,6 +107,7 @@ public final class McpProtocolHandler {
     private final Clock clock;
     private final String serverName;
     private final String serverVersion;
+    private final ObservationRegistry observations;
 
     /**
      * Creates the handler.
@@ -117,11 +120,27 @@ public final class McpProtocolHandler {
      */
     public McpProtocolHandler(ToolLister tools, McpRequestRecorder recorder, Clock clock, String serverName,
                               String serverVersion) {
+        this(tools, recorder, clock, serverName, serverVersion, ObservationRegistry.NOOP);
+    }
+
+    /**
+     * Creates the handler with tracing.
+     *
+     * @param tools         source of the caller's tools
+     * @param recorder      receives one record per handled request
+     * @param clock         time source
+     * @param serverName    name reported in {@code serverInfo}
+     * @param serverVersion version reported in {@code serverInfo}
+     * @param observations  registry for the {@code dai.mcp} span (one per request)
+     */
+    public McpProtocolHandler(ToolLister tools, McpRequestRecorder recorder, Clock clock, String serverName,
+                              String serverVersion, ObservationRegistry observations) {
         this.tools = Objects.requireNonNull(tools, "tools");
         this.recorder = Objects.requireNonNull(recorder, "recorder");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.serverName = Objects.requireNonNull(serverName, "serverName");
         this.serverVersion = Objects.requireNonNull(serverVersion, "serverVersion");
+        this.observations = Objects.requireNonNull(observations, "observations");
     }
 
     /**
@@ -132,6 +151,23 @@ public final class McpProtocolHandler {
      * @return the reply to send
      */
     public Reply handle(String body, Caller caller) {
+        Observation observation = Observation.createNotStarted("dynamic.ai.agent.mcp", observations)
+                .contextualName("dai.mcp")
+                .highCardinalityKeyValue("dai.workspace.id", caller.workspaceId().toString())
+                .start();
+        // open while the request is handled: the trace id recorded with the request, the tool spans and the
+        // spans of what the tools call all belong to this span
+        try (Observation.Scope ignored = observation.openScope()) {
+            return handleMessage(body, caller);
+        } catch (RuntimeException e) {
+            observation.error(e);
+            throw e;
+        } finally {
+            observation.stop();
+        }
+    }
+
+    private Reply handleMessage(String body, Caller caller) {
         Instant received = clock.instant();
         UUID requestId = Ids.newId();
         Object root;
@@ -305,6 +341,35 @@ public final class McpProtocolHandler {
         return CanonicalJson.write(response);
     }
 
+    /**
+     * Adds the outcome to the current {@code dai.mcp} span. The method is a tag, so it is limited to the known
+     * methods (anything else is {@code other}); tool name and request id are span attributes only, never tags, and
+     * never carry arguments or results.
+     */
+    private void annotate(UUID requestId, String method, @Nullable String tool, McpRequestRecorder.Status status,
+                          @Nullable String errorCode) {
+        Observation current = observations.getCurrentObservation();
+        if (current == null) {
+            return;
+        }
+        current.lowCardinalityKeyValue("dai.mcp.method", spanMethod(method));
+        current.lowCardinalityKeyValue("dai.mcp.status", status.name());
+        if (errorCode != null) {
+            current.lowCardinalityKeyValue("dai.mcp.error_code", errorCode);
+        }
+        current.highCardinalityKeyValue("dai.mcp.request.id", requestId.toString());
+        if (tool != null) {
+            current.highCardinalityKeyValue("dai.mcp.tool", tool);
+        }
+    }
+
+    private static String spanMethod(String method) {
+        return switch (method) {
+            case "initialize", "ping", "tools/list", "tools/call" -> method;
+            default -> method.startsWith("notifications/") ? "notification" : "other";
+        };
+    }
+
     private static String truncate(String text) {
         return text.length() > MAX_ID_CHARS ? text.substring(0, MAX_ID_CHARS) : text;
     }
@@ -312,6 +377,7 @@ public final class McpProtocolHandler {
     private Reply finish(UUID requestId, Instant received, Caller caller, String method, @Nullable String idText,
                          @Nullable String tool, McpRequestRecorder.Status status, @Nullable String errorCode,
                          @Nullable String body, int httpStatus) {
+        annotate(requestId, method, tool, status, errorCode);
         try {
             recorder.record(new McpRequestRecorder.McpCall(requestId, received, clock.instant(),
                     caller.principal().principalId(), caller.workspaceId(), caller.mcpClientId(), method, idText, tool,

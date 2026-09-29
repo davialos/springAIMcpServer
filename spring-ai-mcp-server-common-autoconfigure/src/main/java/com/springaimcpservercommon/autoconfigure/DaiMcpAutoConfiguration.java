@@ -177,6 +177,7 @@ public class DaiMcpAutoConfiguration {
      * @param approvals      approved-client check, absent when disabled
      * @param metadata       RFC 9728 metadata
      * @param props          framework properties
+     * @param observations   the host's registry for the {@code dai.mcp} spans, when it has one
      * @return the controller
      */
     @Bean
@@ -189,7 +190,8 @@ public class DaiMcpAutoConfiguration {
                                                        GenericDynamicHandler.DaiPrincipalResolver resolver,
                                                        McpOriginValidator origins,
                                                        ObjectProvider<McpClientApproval> approvals,
-                                                       ProtectedResourceMetadata metadata, DaiProperties props) {
+                                                       ProtectedResourceMetadata metadata, DaiProperties props,
+                                                       ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
         DaiProperties.Mcp mcp = props.mcp();
         if (mcp.transport() == McpTransportMode.STATEFUL) {
             LOG.warn("dynamic.ai.agent.mcp.transport=STATEFUL is not implemented; serving STATELESS");
@@ -203,7 +205,8 @@ public class DaiMcpAutoConfiguration {
                 (caller, scope) -> provider.toolsForRequest(caller.principal(), caller.authentication(),
                         registry.current(), caller.workspaceId(), evaluator, scope),
                 recorder, java.time.Clock.systemUTC(), "spring-ai-mcp-server-common",
-                version == null ? "unknown" : version);
+                version == null ? "unknown" : version,
+                observations.getIfAvailable(() -> io.micrometer.observation.ObservationRegistry.NOOP));
         return new McpEndpointController(handler, resolver::resolve, origins, approval, metadata,
                 new McpEndpointController.Settings(mcp.workspaceId(), mcp.maxRequestBytes(), mcp.resourceUri()));
     }

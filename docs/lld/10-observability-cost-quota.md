@@ -36,6 +36,25 @@ Observation API → OTel. Spans: `dai.endpoint`, `dai.query`, `dai.agent.turn`, 
 `dai.snapshot.apply`, plus Spring AI chat/tool spans. Content recording off by default;
 when on, passes through the redaction pipeline.
 
+**Implemented (2026-09-29):** three spans, each also a meter (Micrometer `Observation`, so a host with a `MeterRegistry`
+gets timers and one with Micrometer Tracing gets spans; without either they cost nothing). The meter names follow the
+`dynamic.ai.agent.*` convention, the span names the `dai.*` one:
+
+| Span (`contextualName`) | Meter | Tags (low cardinality) | Attributes (high cardinality, spans only) |
+|---|---|---|---|
+| `dai.agent.turn` | `dynamic.ai.agent.turn` | `dai.agent.slug`, `dai.channel`, `dai.streaming`, `dai.turn.outcome`, `dai.turn.finish`, `dai.turn.error_code` | `dai.turn.id`, `dai.model_call.id`, `dai.agent.revision`, `dai.tokens.input/output` |
+| `dai.tool` | `dynamic.ai.agent.tool` | `dai.tool.name`, `dai.tool.access_mode`, `dai.channel`, `dai.tool.status`, `dai.tool.error_code`, `dai.tool.write_violation` | `dai.turn.id`, `dai.model_call.id`, `dai.mcp.request.id` |
+| `dai.mcp` | `dynamic.ai.agent.mcp` | `dai.mcp.method` (known methods only, else `other`), `dai.mcp.status`, `dai.mcp.error_code` | `dai.mcp.request.id`, `dai.mcp.tool`, `dai.workspace.id` |
+
+The ids are the primary keys of `dai_agent_turn`, `dai_model_call`, `dai_mcp_request`, so a trace can be followed to the
+store rows and, through `GET …/traces/by-trace-id/{traceId}`, back. The `traceId` recorded on turn and MCP request rows
+is read while the span is open, so it is that span's trace. Never attached: prompts, answers, tool arguments or results
+(content recording stays off, see above). A failed turn marks its span as an error. The tool span's parent is the turn
+span, set explicitly because a streamed turn may run its tools on another thread; a **synchronous** turn also keeps its
+span current, so Spring AI's own spans and the host's below it nest under it. A **streamed** turn does not (no reliable
+thread propagation), so Spring AI's chat spans of a streamed turn are siblings, not children (OQ-50). The library
+registers no `ObservationRegistry` of its own: it uses the host's when there is one and is silent otherwise.
+
 Every span joins the host's current trace (Micrometer Tracing with the host's OTel or Brave bridge), so one trace
 shows the split between LLM call, each tool call, and each dynamic query. The LLM segment is measured by the
 **client-side** span around the provider call; that needs no cooperation from the provider.

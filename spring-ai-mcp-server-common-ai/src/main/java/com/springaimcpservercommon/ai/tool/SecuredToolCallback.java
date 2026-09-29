@@ -6,6 +6,8 @@ import com.springaimcpservercommon.core.catalog.CatalogElementRef;
 import com.springaimcpservercommon.core.hash.Sha256;
 import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +64,7 @@ public final class SecuredToolCallback implements ToolCallback {
     private final ToolCallRecorder recorder;
     private final @Nullable ToolCallScope scope;
     private final Clock clock;
+    private final ObservationRegistry observations;
 
     /**
      * SPI: checks whether a principal may invoke a specific tool binding at call time.
@@ -102,6 +105,7 @@ public final class SecuredToolCallback implements ToolCallback {
         this.recorder = ToolCallRecorder.NOOP;
         this.scope = null;
         this.clock = Clock.systemUTC();
+        this.observations = ObservationRegistry.NOOP;
     }
 
     /**
@@ -122,6 +126,30 @@ public final class SecuredToolCallback implements ToolCallback {
                                 Authentication authentication, AtomicInteger sharedCallCount,
                                 ToolPermissionChecker permissionChecker, ProposalService proposalService,
                                 ToolCallRecorder recorder, @Nullable ToolCallScope scope, Clock clock) {
+        this(delegate, binding, principal, authentication, sharedCallCount, permissionChecker, proposalService,
+                recorder, scope, clock, ObservationRegistry.NOOP);
+    }
+
+    /**
+     * Creates the callback with tool-call recording and tracing.
+     *
+     * @param delegate          the wrapped Spring AI callback
+     * @param binding           the governing tool binding
+     * @param principal         calling principal
+     * @param authentication    Spring Security authentication for the caller
+     * @param sharedCallCount   shared counter of calls to this tool within the current turn
+     * @param permissionChecker permission checker
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tool calls
+     * @param recorder          receives one record per call
+     * @param scope             channel and turn or MCP request the calls belong to; {@code null} disables recording
+     * @param clock             time source for call timing
+     * @param observations      registry for the {@code dai.tool} span (the call is measured and traced through it)
+     */
+    public SecuredToolCallback(ToolCallback delegate, ToolBinding binding, DaiPrincipal principal,
+                                Authentication authentication, AtomicInteger sharedCallCount,
+                                ToolPermissionChecker permissionChecker, ProposalService proposalService,
+                                ToolCallRecorder recorder, @Nullable ToolCallScope scope, Clock clock,
+                                ObservationRegistry observations) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.binding = Objects.requireNonNull(binding, "binding");
         this.principal = Objects.requireNonNull(principal, "principal");
@@ -132,6 +160,7 @@ public final class SecuredToolCallback implements ToolCallback {
         this.recorder = Objects.requireNonNull(recorder, "recorder");
         this.scope = scope;
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.observations = Objects.requireNonNull(observations, "observations");
     }
 
     @Override
@@ -161,9 +190,53 @@ public final class SecuredToolCallback implements ToolCallback {
     @Override
     public String call(String toolInput, ToolContext toolContext) {
         Instant startedAt = clock.instant();
-        Handled handled = handle(toolInput, toolContext);
-        report(startedAt, toolInput, handled);
-        return handled.json();
+        Observation observation = startObservation();
+        try (Observation.Scope ignored = observation.openScope()) {
+            Handled handled = handle(toolInput, toolContext);
+            observation.lowCardinalityKeyValue("dai.tool.status", handled.status().name());
+            if (handled.errorCode() != null) {
+                observation.lowCardinalityKeyValue("dai.tool.error_code", handled.errorCode());
+            }
+            if (handled.writeViolation()) {
+                observation.lowCardinalityKeyValue("dai.tool.write_violation", "true");
+            }
+            report(startedAt, toolInput, handled);
+            return handled.json();
+        } catch (RuntimeException e) {
+            observation.error(e);
+            throw e;
+        } finally {
+            observation.stop();
+        }
+    }
+
+    /**
+     * The {@code dai.tool} span (meter {@code dynamic.ai.agent.tool}): tool name, access mode and channel as tags,
+     * ids as high-cardinality attributes so a trace can be followed to the store rows. Arguments, results and
+     * conversation content are never attached (LLD-10 §3).
+     */
+    private Observation startObservation() {
+        Observation observation = Observation.createNotStarted("dynamic.ai.agent.tool", observations)
+                .contextualName("dai.tool")
+                .lowCardinalityKeyValue("dai.tool.name", binding.toolName())
+                .lowCardinalityKeyValue("dai.tool.access_mode",
+                        binding.writeMode() == WriteMode.PROPOSE ? "PROPOSE" : "READ")
+                .lowCardinalityKeyValue("dai.channel", scope == null ? "UNKNOWN" : scope.channel().name());
+        if (scope != null) {
+            if (scope.turnId() != null) {
+                observation.highCardinalityKeyValue("dai.turn.id", scope.turnId().toString());
+            }
+            if (scope.modelCallId() != null) {
+                observation.highCardinalityKeyValue("dai.model_call.id", scope.modelCallId().toString());
+            }
+            if (scope.mcpRequestId() != null) {
+                observation.highCardinalityKeyValue("dai.mcp.request.id", scope.mcpRequestId().toString());
+            }
+            if (scope.parentObservation() != null) {
+                observation.parentObservation(scope.parentObservation());
+            }
+        }
+        return observation.start();
     }
 
     private Handled handle(String toolInput, ToolContext toolContext) {

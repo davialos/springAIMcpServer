@@ -87,6 +87,7 @@ public final class ToolBridge {
     private final ProposalService proposalService;
     private final ToolCallRecorder recorder;
     private final java.time.Clock clock;
+    private final io.micrometer.observation.ObservationRegistry observations;
 
     /**
      * Constructs the bridge with all required ports and no sub-agent delegation support.
@@ -145,6 +146,33 @@ public final class ToolBridge {
                        ProposalService proposalService,
                        ToolCallRecorder recorder,
                        java.time.Clock clock) {
+        this(bindingLoader, operationFactory, queryFactory, agentFactory, permissionChecker, proposalService,
+                recorder, clock, io.micrometer.observation.ObservationRegistry.NOOP);
+    }
+
+    /**
+     * Constructs the bridge with tool-call recording and tracing.
+     *
+     * @param bindingLoader     loads ToolBindings from the catalog store
+     * @param operationFactory  builds delegate callbacks for operation-backed tools
+     * @param queryFactory      builds delegate callbacks for query-backed tools
+     * @param agentFactory      builds delegate callbacks for agent-backed tools; {@code null} disables AgentSource routing
+     * @param permissionChecker runtime permission check per call
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
+     * @param recorder          receives one record per tool call made through callbacks built with a scope
+     * @param clock             time source for call timing
+     * @param observations      registry for the {@code dai.tool} spans
+     */
+    public ToolBridge(ToolBindingLoader bindingLoader,
+                       OperationCallbackFactory operationFactory,
+                       QueryCallbackFactory queryFactory,
+                       @Nullable AgentCallbackFactory agentFactory,
+                       SecuredToolCallback.ToolPermissionChecker permissionChecker,
+                       ProposalService proposalService,
+                       ToolCallRecorder recorder,
+                       java.time.Clock clock,
+                       io.micrometer.observation.ObservationRegistry observations) {
+        this.observations = Objects.requireNonNull(observations, "observations");
         this.bindingLoader = Objects.requireNonNull(bindingLoader, "bindingLoader");
         this.operationFactory = Objects.requireNonNull(operationFactory, "operationFactory");
         this.queryFactory = Objects.requireNonNull(queryFactory, "queryFactory");
@@ -206,7 +234,7 @@ public final class ToolBridge {
             }
             result.add(new SecuredToolCallback(
                     delegate, binding, principal, authentication,
-                    new AtomicInteger(0), permissionChecker, proposalService, recorder, scope, clock));
+                    new AtomicInteger(0), permissionChecker, proposalService, recorder, scope, clock, observations));
         }
         return List.copyOf(result);
     }
@@ -251,7 +279,7 @@ public final class ToolBridge {
         ToolCallback delegate = resolveDelegate(binding, principal, authentication, catalog);
         if (delegate == null) return null;
         return new SecuredToolCallback(delegate, binding, principal, authentication,
-                new AtomicInteger(0), permissionChecker, proposalService, recorder, scope, clock);
+                new AtomicInteger(0), permissionChecker, proposalService, recorder, scope, clock, observations);
     }
 
     /**

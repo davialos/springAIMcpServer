@@ -38,6 +38,8 @@ class DefaultAgentInvokerBudgetTest {
     private final DaiPrincipal principal = new DaiPrincipal(UUID.randomUUID(), SubjectType.USER, "local", "alice",
             "Alice", Set.of(), Set.of(), Map.of(), Map.of(), Classification.INTERNAL, null, Set.of());
 
+    private ObservationRegistry observations = ObservationRegistry.NOOP;
+
     private DefaultAgentInvoker invoker(boolean withinBudget) {
         return invoker(withinBudget, recorded::add);
     }
@@ -57,7 +59,7 @@ class DefaultAgentInvokerBudgetTest {
                 (a, p, prompt, completion) -> usageRecords.incrementAndGet(),
                 recorder,
                 exchanges::add,
-                ObservationRegistry.NOOP,
+                observations,
                 new InMemoryChatMemory(),
                 null);
     }
@@ -154,5 +156,39 @@ class DefaultAgentInvokerBudgetTest {
         invoker(false).stream(agent, request, principal, null).collectList().block();
 
         assertThat(exchanges).isEmpty();
+    }
+
+    @Test
+    void everyTurnIsTracedAsOneSpanWithItsOutcomeAndIds() {
+        java.util.List<io.micrometer.observation.Observation.Context> stopped =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        observations = ObservationRegistry.create();
+        observations.observationConfig().observationHandler(new io.micrometer.observation.ObservationHandler<>() {
+            @Override
+            public boolean supportsContext(io.micrometer.observation.Observation.Context context) {
+                return true;
+            }
+
+            @Override
+            public void onStop(io.micrometer.observation.Observation.Context context) {
+                stopped.add(context);
+            }
+        });
+
+        assertThatThrownBy(() -> invoker(false).invoke(agent, request, principal, null))
+                .isInstanceOf(AgentInvocationException.class);
+        invoker(false).stream(agent, request, principal, null).collectList().block();
+
+        assertThat(stopped).hasSize(2).allSatisfy(c -> {
+            assertThat(c.getName()).isEqualTo("dynamic.ai.agent.turn");
+            assertThat(c.getContextualName()).isEqualTo("dai.agent.turn");
+            assertThat(c.getLowCardinalityKeyValue("dai.agent.slug").getValue()).isEqualTo("support-bot");
+            assertThat(c.getLowCardinalityKeyValue("dai.turn.outcome").getValue()).isEqualTo("REJECTED");
+            assertThat(c.getLowCardinalityKeyValue("dai.turn.error_code").getValue()).isEqualTo("budget-exhausted");
+            assertThat(c.getHighCardinalityKeyValue("dai.turn.id").getValue()).isEqualTo(turnId.toString());
+            assertThat(c.getHighCardinalityKeyValue("dai.model_call.id")).isNotNull();
+        });
+        assertThat(stopped.stream().map(c -> c.getLowCardinalityKeyValue("dai.streaming").getValue()))
+                .containsExactlyInAnyOrder("false", "true");
     }
 }

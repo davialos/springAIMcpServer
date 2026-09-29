@@ -14,6 +14,7 @@ import com.springaimcpservercommon.ai.tool.ToolCallScope;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -130,6 +131,9 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         UUID modelCallId = Ids.newId();
         LOG.debug("Agent {} sync turn {} for principal {}", agent.slug(), turnId, principal.principalId());
         Instant startedAt = clock.instant();
+        Observation turnObservation = startTurnObservation(agent, request, turnId, modelCallId, false);
+        // open for the whole synchronous turn so spans below it (model call, tools, queries) nest under it
+        Observation.Scope turnScope = turnObservation.openScope();
         String traceId = currentTraceId();
 
         try {
@@ -140,7 +144,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         "The usage budget for this agent is exhausted for the current period.", false);
             }
             ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId);
+            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
             ChatClient client = buildChatClient(agent, principal, chatModel);
             String convKey = convKey(principal, agent, conversationId);
 
@@ -156,23 +160,25 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         "Agent returned no response.", true);
             }
             SyncChatResult result = mapSyncResult(response, conversationId, turnId);
-            recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, false,
+            recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, null,
                     result.usage().inputTokens(), result.usage().outputTokens());
             recordExchange(agent, request, principal, turnId, conversationId, startedAt, result.message());
             return result;
         } catch (AgentInvocationException e) {
             boolean budget = "budget-exhausted".equals(e.code());
-            recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, false,
+            recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
                     budget ? TurnRecorder.Outcome.REJECTED : TurnRecorder.Outcome.FAILED,
                     budget ? TurnRecorder.Finish.BUDGET : TurnRecorder.Finish.ERROR, e.code(), null, 0, 0);
             throw e;
         } catch (Exception e) {
             LOG.error("Agent {} sync turn {} failed for principal {}",
                     agent.slug(), turnId, principal.principalId(), e);
-            recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, false,
+            recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, "execution-error", null, 0, 0);
             throw new AgentInvocationException("execution-error", "Agent invocation failed.", true);
+        } finally {
+            turnScope.close();
         }
     }
 
@@ -189,12 +195,16 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             LOG.debug("Agent {} stream turn {} for principal {}",
                     agent.slug(), turnId, principal.principalId());
             Instant startedAt = clock.instant();
-            String traceId = currentTraceId();
+            Observation turnObservation = startTurnObservation(agent, request, turnId, modelCallId, true);
+            String traceId;
+            try (Observation.Scope ignored = turnObservation.openScope()) {
+                traceId = currentTraceId();
+            }
             try {
                 if (!budgetChecker.hasRemainingBudget(agent, principal)) {
                     LOG.warn("Agent {} budget exhausted for principal {}; stream turn {} rejected",
                             agent.slug(), principal.principalId(), turnId);
-                    recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
+                    recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
                             TurnRecorder.Outcome.REJECTED, TurnRecorder.Finish.BUDGET, "budget-exhausted",
                             null, 0, 0);
                     return Flux.just(new StreamEvent.ErrorEvent(
@@ -202,7 +212,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             "budget-exhausted", false, turnId));
                 }
                 ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId);
+                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
                 ChatClient client = buildChatClient(agent, principal, chatModel);
                 String convKey = convKey(principal, agent, conversationId);
 
@@ -269,15 +279,15 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             Duration.between(startedAt, first).toMillis());
                     String code = failure.get();
                     if (signal == reactor.core.publisher.SignalType.CANCEL && code == null) {
-                        recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
+                        recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.CANCELLED, TurnRecorder.Finish.CANCELLED, "client-cancelled",
                                 ttft, usage[0], usage[1]);
                     } else if (code != null) {
-                        recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
+                        recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, code, ttft,
                                 usage[0], usage[1]);
                     } else {
-                        recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
+                        recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
                                 TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, ttft,
                                 usage[0], usage[1]);
                         String text;
@@ -290,7 +300,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             } catch (Exception e) {
                 LOG.error("Agent {} stream setup failed for principal {}",
                         agent.slug(), principal.principalId(), e);
-                recordTurn(agent, request, principal, turnId, modelCallId, conversationId, startedAt, traceId, true,
+                recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
                         TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, "stream-error", null, 0, 0);
                 return Flux.just(new StreamEvent.ErrorEvent(
                         "/errors/agent/stream-error", "Stream setup failed",
@@ -299,13 +309,54 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         });
     }
 
+    // ─── Tracing ──────────────────────────────────────────────────────────────
+
+    /**
+     * Starts the {@code dai.agent.turn} span (meter {@code dynamic.ai.agent.turn}, LLD-10 §3): agent, channel and
+     * streaming as tags, turn and model call ids as high-cardinality attributes so a trace can be followed to the
+     * store rows. No prompt, answer or tool content is attached.
+     */
+    private Observation startTurnObservation(AgentDefinition agent, AgentChatRequest request, UUID turnId,
+                                             UUID modelCallId, boolean streaming) {
+        return Observation.createNotStarted("dynamic.ai.agent.turn", observationRegistry)
+                .contextualName("dai.agent.turn")
+                .lowCardinalityKeyValue("dai.agent.slug", agent.slug())
+                .lowCardinalityKeyValue("dai.channel", request.effectiveChannel().name())
+                .lowCardinalityKeyValue("dai.streaming", String.valueOf(streaming))
+                .highCardinalityKeyValue("dai.agent.revision", Integer.toString(agent.revision()))
+                .highCardinalityKeyValue("dai.turn.id", turnId.toString())
+                .highCardinalityKeyValue("dai.model_call.id", modelCallId.toString())
+                .start();
+    }
+
+    /** Ends the turn span with the outcome; failures mark it as an error so tracing backends flag it. */
+    private static void finishTurnObservation(@Nullable Observation observation, TurnRecorder.Outcome outcome,
+                                              TurnRecorder.Finish finish, @Nullable String errorCode,
+                                              long inputTokens, long outputTokens) {
+        if (observation == null) {
+            return;
+        }
+        observation.lowCardinalityKeyValue("dai.turn.outcome", outcome.name());
+        observation.lowCardinalityKeyValue("dai.turn.finish", finish.name());
+        if (errorCode != null) {
+            observation.lowCardinalityKeyValue("dai.turn.error_code", errorCode);
+        }
+        observation.highCardinalityKeyValue("dai.tokens.input", Long.toString(inputTokens));
+        observation.highCardinalityKeyValue("dai.tokens.output", Long.toString(outputTokens));
+        if (outcome == TurnRecorder.Outcome.FAILED) {
+            observation.error(new IllegalStateException(errorCode == null ? "turn failed" : errorCode));
+        }
+        observation.stop();
+    }
+
     // ─── Turn recording ───────────────────────────────────────────────────────
 
     /** Hands a finished turn to the recorder; whatever the recorder does never affects the turn. */
     private void recordTurn(AgentDefinition agent, AgentChatRequest request, DaiPrincipal principal, UUID turnId,
-                            UUID modelCallId, UUID conversationId, Instant startedAt, @Nullable String traceId, boolean streaming,
+                            UUID modelCallId, @Nullable Observation turnObservation, UUID conversationId, Instant startedAt, @Nullable String traceId, boolean streaming,
                             TurnRecorder.Outcome outcome, TurnRecorder.Finish finish, @Nullable String errorCode,
                             @Nullable Integer timeToFirstTokenMs, long inputTokens, long outputTokens) {
+        finishTurnObservation(turnObservation, outcome, finish, errorCode, inputTokens, outputTokens);
         try {
             turnRecorder.record(new TurnRecorder.TurnRecord(turnId, startedAt, clock.instant(), conversationId,
                     agent, principal, request.effectiveChannel(), traceId, request.clientRequestId(), outcome,
@@ -373,12 +424,13 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     private List<ToolCallback> buildToolCallbacks(AgentDefinition agent, DaiPrincipal principal,
                                                     Authentication authentication, AgentChatRequest request,
-                                                    UUID turnId, UUID modelCallId) {
+                                                    UUID turnId, UUID modelCallId,
+                                                    Observation turnObservation) {
         if (toolBridge == null || agent.tools().isEmpty()) {
             return List.of();
         }
         return toolBridge.buildCallbacks(agent, principal, authentication, metadataRegistry.current(),
-                ToolCallScope.ofTurn(request.effectiveChannel(), turnId, modelCallId));
+                ToolCallScope.ofTurn(request.effectiveChannel(), turnId, modelCallId, turnObservation));
     }
 
     // ─── Conversation key ─────────────────────────────────────────────────────

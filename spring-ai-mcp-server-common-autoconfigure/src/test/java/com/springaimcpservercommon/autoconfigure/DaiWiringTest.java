@@ -222,4 +222,16 @@ class DaiWiringTest {
                 assertThat(context.getBeanNamesForType(com.springaimcpservercommon.mcp.server.McpRequestRecorder.class))
                         .containsExactly("storeMcpRequestRecorder"));
     }
+
+    @Test
+    void weNeverRegisterAnObservationRegistryOfOurOwn() {
+        // a fallback registry could displace the host's (Spring Boot backs off when one exists)
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(io.micrometer.observation.ObservationRegistry.class)).isEmpty());
+        runner().withBean(DaiStore.class, () -> STUB_STORE)
+                .withBean(io.micrometer.observation.ObservationRegistry.class,
+                        io.micrometer.observation.ObservationRegistry::create)
+                .run(context -> assertThat(
+                        context.getBeanNamesForType(io.micrometer.observation.ObservationRegistry.class)).hasSize(1));
+    }
 }

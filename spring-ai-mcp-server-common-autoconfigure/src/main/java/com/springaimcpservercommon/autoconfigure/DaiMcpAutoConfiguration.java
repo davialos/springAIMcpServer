@@ -25,6 +25,8 @@ import java.util.List;
  * using the {@link McpToolsProvider} registered here and the transport mode from {@link DaiProperties}.
  */
 @AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiAiAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(McpOriginValidator.class)
 @NullMarked
 public class DaiMcpAutoConfiguration {

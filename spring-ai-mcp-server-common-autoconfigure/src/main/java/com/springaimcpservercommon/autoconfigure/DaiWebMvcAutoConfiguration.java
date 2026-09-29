@@ -44,8 +44,11 @@ import java.util.Map;
  *
  * <p>All beans are {@link ConditionalOnMissingBean}; hosts may replace any component.
  */
-@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiSecurityAutoConfiguration.class,
+@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiPersistenceAutoConfiguration.class,
+                             DaiSecurityAutoConfiguration.class, DaiAiAutoConfiguration.class,
                              WebMvcAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({GenericDynamicHandler.class, RequestMappingHandlerMapping.class})
 @NullMarked
 public class DaiWebMvcAutoConfiguration {

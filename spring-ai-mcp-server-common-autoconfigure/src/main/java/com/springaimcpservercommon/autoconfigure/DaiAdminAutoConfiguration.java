@@ -53,6 +53,8 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  */
 @AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiPersistenceAutoConfiguration.class,
                              DaiSecurityAutoConfiguration.class, DaiWebMvcAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(RequestMappingHandlerMapping.class)
 @NullMarked
 public class DaiAdminAutoConfiguration {

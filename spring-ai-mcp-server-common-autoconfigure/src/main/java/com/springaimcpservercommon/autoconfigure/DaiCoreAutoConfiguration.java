@@ -37,6 +37,8 @@ import java.util.Map;
  * {@link ConditionalOnMissingBean} — host applications and test configurations may replace any of them.
  */
 @AutoConfiguration
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(DaiProperties.class)
 @NullMarked
 public class DaiCoreAutoConfiguration {

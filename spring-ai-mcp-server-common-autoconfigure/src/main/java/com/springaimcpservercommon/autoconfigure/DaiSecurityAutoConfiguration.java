@@ -36,7 +36,9 @@ import java.util.Map;
  * {@link PrincipalDirectoryPort}, {@link MembershipSource}) must be provided by the persistence
  * module's auto-configuration or by the host application — this class does not supply them.
  */
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiPersistenceAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(AuthorizationEngine.class)
 @NullMarked
 public class DaiSecurityAutoConfiguration {

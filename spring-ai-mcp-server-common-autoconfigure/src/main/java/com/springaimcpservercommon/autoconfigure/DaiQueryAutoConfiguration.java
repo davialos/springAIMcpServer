@@ -25,6 +25,8 @@ import java.util.UUID;
  * JPA persistence unit, never the framework's isolated one.
  */
 @AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(CriteriaQueryExecutor.class)
 @NullMarked
 public class DaiQueryAutoConfiguration {

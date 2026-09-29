@@ -20,6 +20,17 @@ import com.springaimcpservercommon.persistence.config.GrantStore;
 import com.springaimcpservercommon.persistence.config.KillSwitchStore;
 import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
 import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
+import com.springaimcpservercommon.persistence.identity.McpClientStore;
+import com.springaimcpservercommon.persistence.identity.PrincipalDirectory;
+import com.springaimcpservercommon.security.port.ApiKeyLookup;
+import com.springaimcpservercommon.security.port.GrantSource;
+import com.springaimcpservercommon.security.port.KillSwitchView;
+import com.springaimcpservercommon.security.port.McpClientRegistryPort;
+import com.springaimcpservercommon.security.port.MembershipSource;
+import com.springaimcpservercommon.security.port.PrincipalDirectoryPort;
+import com.springaimcpservercommon.security.port.ResourceStatusView;
+import com.springaimcpservercommon.security.port.RoleMappingSource;
+import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
 import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
@@ -87,6 +98,8 @@ import java.util.stream.Collectors;
  * (via {@code @ConditionalOnMissingBean}), because this configuration runs before it.
  */
 @AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({ConfigStore.class, DaiPersistenceUnit.class})
 @NullMarked
 public class DaiPersistenceAutoConfiguration {
@@ -383,6 +396,169 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(TelemetryStore.class)
     ConversationRetentionJob conversationRetentionJob(TelemetryStore store, DaiProperties props) {
         return new ConversationRetentionJob(store, props.conversations().purgeInterval());
+    }
+
+    // ─── Security ports over the store (see StoreSecurityPorts) ────────────────
+    // Without these no AuthorizationEngine, AuthorityMapper or principal resolver exists, and the admin API, agent
+    // chat and dynamic endpoints are never registered.
+
+    /**
+     * Principal directory store ({@code dai_principal}).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(PrincipalDirectory.class)
+    @ConditionalOnBean(DaiStore.class)
+    public PrincipalDirectory principalDirectory(DaiStore store) {
+        return new PrincipalDirectory(store);
+    }
+
+    /**
+     * MCP client registry store ({@code dai_mcp_client}).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(McpClientStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public McpClientStore mcpClientStore(DaiStore store) {
+        return new McpClientStore(store);
+    }
+
+    /**
+     * Principal directory port over the store; a disabled subject can never be mapped.
+     *
+     * @param directory principal directory store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(PrincipalDirectoryPort.class)
+    @ConditionalOnBean(PrincipalDirectory.class)
+    public PrincipalDirectoryPort storePrincipalDirectoryPort(PrincipalDirectory directory) {
+        return new StoreSecurityPorts.Directory(directory);
+    }
+
+    /**
+     * Workspace membership port over the store.
+     *
+     * @param workspaces workspace store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(MembershipSource.class)
+    @ConditionalOnBean(WorkspaceStore.class)
+    public MembershipSource storeMembershipSource(WorkspaceStore workspaces) {
+        return new StoreSecurityPorts.Memberships(workspaces);
+    }
+
+    /**
+     * Role mapping port over the store (reloaded every 10 s).
+     *
+     * @param store role mapping store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(RoleMappingSource.class)
+    @ConditionalOnBean(RoleMappingStore.class)
+    public RoleMappingSource storeRoleMappingSource(RoleMappingStore store) {
+        return new StoreSecurityPorts.RoleMappings(store, Duration.ofSeconds(10), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Grant port over the store (cached 5 s).
+     *
+     * @param store grant store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(GrantSource.class)
+    @ConditionalOnBean(GrantStore.class)
+    public GrantSource storeGrantSource(GrantStore store) {
+        return new StoreSecurityPorts.Grants(store, Duration.ofSeconds(5), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Kill switch port over the store (reloaded every 2 s, so a switch is effective on every node within seconds).
+     *
+     * @param store kill switch store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(KillSwitchView.class)
+    @ConditionalOnBean(KillSwitchStore.class)
+    public KillSwitchView storeKillSwitchView(KillSwitchStore store) {
+        return new StoreSecurityPorts.KillSwitches(store, Duration.ofSeconds(2), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Resource publication status port over the config store (cached 5 s).
+     *
+     * @param configStore config store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(ResourceStatusView.class)
+    @ConditionalOnBean(ConfigStore.class)
+    public ResourceStatusView storeResourceStatusView(ConfigStore configStore) {
+        return new StoreSecurityPorts.ResourceStatuses(configStore, Duration.ofSeconds(5),
+                java.time.Clock.systemUTC());
+    }
+
+    /**
+     * API key lookup port over the store.
+     *
+     * @param store API key store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyLookup.class)
+    @ConditionalOnBean(ApiKeyStore.class)
+    public ApiKeyLookup storeApiKeyLookup(ApiKeyStore store) {
+        return new StoreSecurityPorts.ApiKeys(store);
+    }
+
+    /**
+     * MCP client registry port over the store.
+     *
+     * @param store MCP client store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(McpClientRegistryPort.class)
+    @ConditionalOnBean(McpClientStore.class)
+    public McpClientRegistryPort storeMcpClientRegistry(McpClientStore store) {
+        return new StoreSecurityPorts.McpClients(store);
+    }
+
+    /**
+     * Makes kill switches effective for dynamic endpoints: an endpoint or agent with an active switch answers
+     * {@code endpoint-disabled}. Supersedes the permit-all default of {@link DaiWebMvcAutoConfiguration}.
+     *
+     * @param killSwitches kill switch port
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(GenericDynamicHandler.KillSwitchChecker.class)
+    @ConditionalOnBean(KillSwitchView.class)
+    public GenericDynamicHandler.KillSwitchChecker storeWebKillSwitchChecker(KillSwitchView killSwitches) {
+        return resourceId -> killSwitches.findActive(null, resourceId, null, java.time.Instant.now()).isPresent();
+    }
+
+    /**
+     * Makes kill switches effective inside the agent runtime (a switched-off agent refuses the turn). Supersedes
+     * the all-enabled default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param killSwitches kill switch port
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(InvocationGuardAdvisor.KillSwitchChecker.class)
+    @ConditionalOnBean(KillSwitchView.class)
+    public InvocationGuardAdvisor.KillSwitchChecker storeAgentKillSwitchChecker(KillSwitchView killSwitches) {
+        return agentId -> killSwitches.findActive(null, agentId, null, java.time.Instant.now()).isEmpty();
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {

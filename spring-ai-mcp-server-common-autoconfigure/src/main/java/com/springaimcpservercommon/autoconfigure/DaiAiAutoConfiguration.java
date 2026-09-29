@@ -36,6 +36,8 @@ import org.springframework.context.annotation.Configuration;
  */
 @AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiSecurityAutoConfiguration.class,
                              DaiPersistenceAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(ToolBridge.class)
 @NullMarked
 public class DaiAiAutoConfiguration {
@@ -87,6 +89,21 @@ public class DaiAiAutoConfiguration {
     @ConditionalOnMissingBean(ConversationRecorder.class)
     public ConversationRecorder conversationRecorder() {
         return ConversationRecorder.NOOP;
+    }
+
+    /**
+     * Default {@link ModelRouter}: the host's {@code ChatModel} bean of the agent's provider. The models are
+     * looked up when the router is created, not through a bean condition, because Spring AI's provider
+     * auto-configurations sort after this one; a host without any {@code ChatModel} gets a router that answers
+     * every turn with {@code model-unavailable}, which is clearer than an agent endpoint that does not exist.
+     *
+     * @param beans the bean factory, to find every {@code ChatModel} by name
+     * @return the router
+     */
+    @Bean
+    @ConditionalOnMissingBean(ModelRouter.class)
+    public ModelRouter modelRouter(org.springframework.beans.factory.ListableBeanFactory beans) {
+        return new DefaultModelRouter(beans.getBeansOfType(org.springframework.ai.chat.model.ChatModel.class));
     }
 
     /**

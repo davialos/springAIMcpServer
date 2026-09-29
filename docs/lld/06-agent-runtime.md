@@ -107,6 +107,8 @@ Spring AI `ChatMemory` with our `ChatMemoryRepository` over `dai_conversation_me
 → a user can never read another's conversation even with a guessed ID. Retention TTL
 purge job; erase-on-request API. Tool results stored redacted.
 
+**Implemented slice (history, not model memory):** `ConversationRecorder` (no-op by default) receives the user message and answer of every successful turn; `StoreConversationRecorder` stores them redacted (`MessageRedactor`) when `dynamic.ai.agent.conversations.enabled=true` (default off), keyed by the hash of (principal, agent, conversation id) with the stored conversation taking the client's id, on virtual threads behind a bulkhead. `ConversationRetentionJob` deletes expired conversations. The model's `ChatMemory` is still `InMemoryChatMemory`, unchanged (OQ-45).
+
 ## 8. Guardrails (F-76)
 - Input: max length, blocked patterns, PII detectors (regex + pluggable `PiiDetector` SPI)
   → redact before sending to provider if workspace policy says so.

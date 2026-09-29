@@ -476,6 +476,27 @@ client records a consent entry (`dai_mcp_client_consent`), visible and revocable
 `dynamic.ai.agent.mcp.server.mode` (`stateful` default, or `stateless` for multi-replica hosts without sticky
 sessions — OQ-22) controls whether the server keeps per-session state or treats every request independently.
 
+### Conversation history (opt-in)
+
+Users can list, read, close and erase their own conversations through `/dynamic-ai/api/conversations`, but
+transcripts contain what users typed, so nothing is stored until you enable it:
+
+```yaml
+dynamic.ai.agent.conversations:
+  enabled: true          # default false
+  retention: 30d         # kept this long after the last activity; 1ms..3660d
+  max-stored-chars: 100000
+  purge-interval: 15m    # expired conversations are deleted (runs even while enabled=false)
+```
+
+Each successful turn stores the user message and the answer, after redaction: a message that contains a
+credential (private key, API or cloud token, JWT, URL with credentials, password assignment) is replaced by a
+placeholder, never stored in part. Refused, failed and cancelled turns store nothing. PII detectors are not
+implemented yet. The stored conversation uses the conversation id the client sends and is found again through a
+hash of (principal, agent, conversation id), so another user cannot read or append to it. A conversation the user
+erased or closed is not written to again. This is the history shown to users, not the memory the model reads;
+that is still in-memory per node.
+
 ## 10. Operations
 
 - **Health**: a `HealthContributor` named `dynamicAi` reports catalog state, snapshot generation/lag, config

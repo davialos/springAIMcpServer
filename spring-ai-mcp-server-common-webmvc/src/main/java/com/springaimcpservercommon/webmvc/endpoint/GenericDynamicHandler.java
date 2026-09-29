@@ -105,7 +105,19 @@ public final class GenericDynamicHandler implements Controller {
          * @param message safe, displayable message
          */
         public BackingException(ProblemCode code, String message) {
-            super(Objects.requireNonNull(message, "message"), null, false, false);
+            this(code, message, null);
+        }
+
+        /**
+         * Creates the exception with the failure that caused it (kept for classification, for example a host
+         * optimistic-lock failure; never shown to callers).
+         *
+         * @param code    problem code for the failure
+         * @param message safe, displayable message
+         * @param cause   underlying failure, if any
+         */
+        public BackingException(ProblemCode code, String message, @Nullable Throwable cause) {
+            super(Objects.requireNonNull(message, "message"), cause, false, false);
             this.code = Objects.requireNonNull(code, "code");
         }
 

@@ -501,7 +501,11 @@ proposal tools). A tool the caller may not use looks exactly like an unknown too
 in the read-only scope, with the binding's argument constraints applied, and is recorded in `dai_tool_invocation`
 (hashes only) under a `dai_mcp_request` row. Writes never execute: a PROPOSE tool records a reviewable proposal
 (owned by the caller, `dynamic.ai.agent.write.enabled=true` needed, otherwise it answers `writes_disabled`); the
-caller confirms it through the review API. Applying a confirmed proposal to your data is not implemented yet (OQ-36).
+caller confirms it through the review API, which then runs your operation **through your own Spring bean, as that
+user** (your `@PreAuthorize`, transactions, `@Version`, auditing and Envers see the real user). A host `OptimisticLock`
+failure is reported as a conflict. Applying is refused unless `write.enabled=true`, the capability `REVIEWED_WRITES`
+is on for the environment, and the user still holds `data:write-confirm`. Not yet: before-snapshots, a host revision
+reference on the proposal, editing (OQ-36).
 
 **Not yet:** MCP resources and prompts, server-initiated notifications (`tools/list_changed`), per-client rate
 limits, `insufficient_scope` step-up challenges (a tool outside the token's scopes is simply not listed), and the

@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.core.hash.Sha256;
+import com.springaimcpservercommon.core.environment.Capability;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.persistence.audit.AuditCategory;
 import com.springaimcpservercommon.persistence.audit.AuditPlane;
@@ -19,6 +20,8 @@ import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory.FieldViol
 import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,6 +58,8 @@ import java.util.stream.Collectors;
 @NullMarked
 @RequestMapping("/dynamic-ai/api/proposals")
 public final class ProposalReviewController {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ProposalReviewController.class);
 
     static final int MAX_COMMENT_LENGTH = 1000;
     static final int MAX_REASON_LENGTH = 200;
@@ -118,6 +123,7 @@ public final class ProposalReviewController {
      * @param events          state history
      * @param canConfirm      whether this caller may confirm now
      * @param canDecide       whether this caller may approve or reject now
+     * @param canApply        whether this caller may apply the confirmed proposal now (owner, confirmed, writes on)
      */
     public record DetailView(SummaryView summary, String contentHash, String approval,
                              @Nullable String targetArgsJson, @Nullable String validationJson,
@@ -125,7 +131,7 @@ public final class ProposalReviewController {
                              @Nullable Instant appliedAt, @Nullable String hostRevisionRef,
                              @Nullable String failureCode, @Nullable String failureMessage,
                              List<RecordView> records, List<ApprovalView> approvals, List<EventView> events,
-                             boolean canConfirm, boolean canDecide) {}
+                             boolean canConfirm, boolean canDecide, boolean canApply) {}
 
     /**
      * One record change.
@@ -181,11 +187,14 @@ public final class ProposalReviewController {
     private final ChangeProposalStore store;
     private final AdminAudit audit;
     private final AdminApi api;
+    private final @Nullable ProposalApplier applier;
 
-    ProposalReviewController(ChangeProposalStore store, AdminAudit audit, AdminApi api) {
+    ProposalReviewController(ChangeProposalStore store, AdminAudit audit, AdminApi api,
+                             @Nullable ProposalApplier applier) {
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
+        this.applier = applier;
     }
 
     /**
@@ -286,7 +295,72 @@ public final class ProposalReviewController {
         Long version = AdminApi.ifMatch(ifMatch);
         ChangeProposal confirmed = store.confirm(id, version, caller.principalId(), hash);
         audit(caller, "PROPOSAL_CONFIRMED", confirmed, null);
+        if (confirmed.getState() == com.springaimcpservercommon.persistence.proposal.ProposalState.CONFIRMED
+                && applier != null && applier.enabled()
+                && api.capabilityDenied(Capability.REVIEWED_WRITES, request) == null) {
+            // no approver needed: apply now, as this user, in this request. If applying is refused (busy, permission)
+            // the proposal stays CONFIRMED and the owner can call :apply.
+            try {
+                confirmed = applyAndAudit(id, caller);
+            } catch (ProposalApplier.ApplyRefusedException e) {
+                LOG.info("Proposal {} confirmed but not applied now: {}", id, e.code());
+            }
+        }
         return ok(confirmed, caller);
+    }
+
+    /**
+     * Applies a confirmed proposal as its owner: the host operation the proposal names runs through the host's own
+     * service in this request's security context, so host method security, transactions, validation and auditing see
+     * this user (ADR-0008). Needed for proposals that waited for an approver; a proposal that needed none is applied by
+     * {@code :confirm} already. Repeating the request on an applied proposal is harmless.
+     *
+     * @param id      proposal id
+     * @param request current request
+     * @return 200 with the proposal in its final state (APPLIED, FAILED or CONFLICT); 404 unless it is the caller's;
+     *         409 unless CONFIRMED; 410 when expired; 403 when writes are off or not permitted; 429 when busy
+     */
+    @PostMapping("/{id:[^:]+}:apply")
+    public ResponseEntity<?> apply(@PathVariable UUID id, HttpServletRequest request) {
+        var gate = api.authenticated(request);
+        if (!gate.open()) {
+            return gate.denied();
+        }
+        DaiPrincipal caller = gate.caller();
+        if (applier == null) {
+            return AdminApi.problem(ProblemCode.CAPABILITY_DISABLED, "Applying is not available",
+                    "This installation cannot apply proposals.", request);
+        }
+        ResponseEntity<String> disabled = api.capabilityDenied(Capability.REVIEWED_WRITES, request);
+        if (disabled != null) {
+            return disabled;
+        }
+        try {
+            return ok(applyAndAudit(id, caller), caller);
+        } catch (ProposalApplier.ApplyRefusedException e) {
+            return switch (e.code()) {
+                case "writes_disabled" -> AdminApi.problem(ProblemCode.CAPABILITY_DISABLED, "Applying is switched off",
+                        e.getMessage(), request);
+                case "access_denied" -> AdminApi.problem(ProblemCode.ACCESS_DENIED, "Access denied", e.getMessage(),
+                        request);
+                case "apply_busy" -> AdminApi.problem(ProblemCode.RATE_LIMITED, "Busy", e.getMessage(), request);
+                default -> AdminApi.problem(ProblemCode.CONFLICT, "Not applied", e.getMessage(), request);
+            };
+        }
+    }
+
+    private ChangeProposal applyAndAudit(UUID id, DaiPrincipal caller) {
+        ProposalApplier.Result result = Objects.requireNonNull(applier, "applier").apply(id, caller);
+        ChangeProposal proposal = result.proposal();
+        if (result.attempted()) {
+            String action = switch (proposal.getState()) {
+                case APPLIED -> "PROPOSAL_APPLIED";
+                case CONFLICT -> "PROPOSAL_CONFLICT";
+                default -> "PROPOSAL_FAILED";
+            };
+            audit(caller, action, proposal, proposal.getFailureCode());
+        }
+        return proposal;
     }
 
     /**
@@ -386,12 +460,14 @@ public final class ProposalReviewController {
         boolean canConfirm = owner && pending && api.permits(caller, Permission.DATA_WRITE_CONFIRM, p.getWorkspaceId());
         boolean canDecide = !owner && p.getState() == com.springaimcpservercommon.persistence.proposal.ProposalState.AWAITING_APPROVAL
                 && api.permits(caller, Permission.DATA_WRITE_APPROVE, p.getWorkspaceId());
+        boolean canApply = owner && p.getState() == com.springaimcpservercommon.persistence.proposal.ProposalState.CONFIRMED
+                && applier != null && applier.enabled();
         DetailView view = new DetailView(SummaryView.of(ProposalSummary.of(p)), p.getContentHash(),
                 p.getApprovalRequirement().name(), p.getTargetArgsJson(), p.getValidationJson(), p.getConfirmedAt(),
                 p.getConfirmedBy(), p.getAppliedAt(), p.getHostRevisionRef(), p.getFailureCode(),
                 p.getFailureMessage(), p.getRecords().stream().map(ProposalReviewController::recordView).toList(),
                 p.getApprovals().stream().map(ProposalReviewController::approval).toList(),
-                p.getEvents().stream().map(ProposalReviewController::event).toList(), canConfirm, canDecide);
+                p.getEvents().stream().map(ProposalReviewController::event).toList(), canConfirm, canDecide, canApply);
         return ResponseEntity.ok().eTag("\"" + p.getRowVersion() + "\"").body(view);
     }
 

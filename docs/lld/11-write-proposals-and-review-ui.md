@@ -16,10 +16,25 @@
 > canonical arguments, TTL `write.proposal-ttl`. Idempotent per turn or MCP request. Gated by
 > `dynamic.ai.agent.write.enabled` (default **off**: PROPOSE tools answer `writes_disabled`); a delete, or every
 > proposal with `write.require-approver`, needs a second person. Refused with a stable code: an operation that is
-> unknown, read-only or not linked to a record type, arguments that are not a JSON object. **Not implemented yet:**
-> the write executor (applying a confirmed proposal through the host's own write path as the confirming user), the
-> before-snapshot and base version (`VersioningAdapter`), edit (`PATCH`), `ENTITY_WRITE`, bulk, and the `ui.component`
-> events. Confirmed proposals therefore stay `CONFIRMED` until the executor exists (OQ-36).
+> unknown, read-only or not linked to a record type, arguments that are not a JSON object.
+>
+> **Implemented (2026-09-29): the write executor** (`ProposalApplier`, HOST_OPERATION only). It runs the host operation
+> through its Spring proxy **on the request thread of the owner, in their `SecurityContext`** (host method security,
+> transactions, validation, `@Version`, auditing and Envers see the real user, ADR-0008) and is reachable only from the
+> review API, never from a tool call. `POST /proposals/{id}:confirm` applies right away when no approver is needed;
+> a proposal that waited for approvers is applied by the owner with `POST /proposals/{id}:apply`. Checks, in order:
+> owner, state `CONFIRMED`, `write.enabled`, capability `REVIEWED_WRITES`, `data:write-confirm` still held, not expired
+> (`FAILED/expired`, 410), operation still present, enabled and not read-only, stored content still hashes to what was
+> confirmed (`FAILED/content_mismatch`), a per-node bulkhead (`write.max-concurrent-applies`, 429). Then
+> `CONFIRMED → APPLYING` is a compare-and-set (a double click or second node cannot run it twice) and the outcome is
+> `APPLIED`, `CONFLICT` (host optimistic-lock failure, `version_conflict`) or `FAILED` (`execution_error`,
+> `access_denied`); the host's exception message is never stored or returned. Audited as `PROPOSAL_APPLIED`,
+> `PROPOSAL_CONFLICT`, `PROPOSAL_FAILED`. A crash between the host commit and `APPLIED` leaves `APPLYING`; the
+> maintenance runner marks it `FAILED/APPLY_TIMEOUT` for an operator to verify (never retried, §10).
+>
+> **Not implemented yet:** the before-snapshot and base version (`VersioningAdapter`; so no conflict is detected before
+> the host runs, only the host's own optimistic lock), the host revision reference on `APPLIED`, edit (`PATCH`),
+> `ENTITY_WRITE`, bulk, step-up authentication, and the `ui.component` events.
 
 ## 1. Purpose & responsibilities
 Let agents (and write endpoints) **propose** changes to host data, render those proposals
@@ -200,6 +215,7 @@ ChangeProposal**, not by the model:
 | `PATCH /proposals/{id}` (`If-Match`) | Edit editable fields → re-validate → new contentHash | owner |
 | `POST /proposals/{id}:confirm` (`Idempotency-Key`, body: `contentHash`) | Confirm | owner + `data:write-confirm` on target |
 | `POST /proposals/{id}:approve` / `:reject` | Second-person approval | `data:write-approve`, ≠ owner |
+| `POST /proposals/{id}:apply` | Apply a confirmed proposal (owner; implemented) — needed only after approvers; `:confirm` applies directly otherwise | owner + `data:write-confirm` + capability `REVIEWED_WRITES` |
 | `GET /proposals?state=` | My pending proposals | owner |
 After apply, the agent conversation receives a tool result `{status: APPLIED, hostRevision}` and continues.
 
@@ -242,6 +258,7 @@ After apply, the agent conversation receives a tool result `{status: APPLIED, ho
 | `dynamic.ai.agent.write.versioning.tables.*` | — (history table mappings) |
 | `dynamic.ai.agent.write.retention` | `7d` (implemented) |
 | `dynamic.ai.agent.write.require-approver` | `false` (implemented; a delete always needs an approver) |
+| `dynamic.ai.agent.write.max-concurrent-applies` | `8` (implemented, 1..100; node-local bulkhead) |
 
 ## 13. Observability
 Counter `dynamic.ai.agent.proposals{state,kind,origin}`, timer propose→confirm latency,

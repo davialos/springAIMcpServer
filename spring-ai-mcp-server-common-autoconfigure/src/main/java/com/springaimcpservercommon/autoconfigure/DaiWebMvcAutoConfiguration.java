@@ -238,12 +238,12 @@ public class DaiWebMvcAutoConfiguration {
             if (cause instanceof AccessDeniedException) {
                 throw new GenericDynamicHandler.BackingException(
                         ProblemCode.ACCESS_DENIED,
-                        cause.getMessage() != null ? cause.getMessage() : "Access denied.");
+                        cause.getMessage() != null ? cause.getMessage() : "Access denied.", cause);
             }
             String msg = cause != null ? cause.getMessage() : null;
             throw new GenericDynamicHandler.BackingException(
                     ProblemCode.EXECUTION_ERROR,
-                    msg != null ? msg : "Operation invocation failed.");
+                    msg != null ? msg : "Operation invocation failed.", cause);
         } catch (IllegalAccessException e) {
             throw new GenericDynamicHandler.BackingException(
                     ProblemCode.EXECUTION_ERROR, "Method is not accessible.");

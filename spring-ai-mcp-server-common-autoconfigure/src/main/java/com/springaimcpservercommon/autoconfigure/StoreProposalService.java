@@ -108,8 +108,7 @@ final class StoreProposalService implements ProposalService {
         };
         boolean approver = kind == ChangeKind.DELETE || settings.requireApprover();
         String argumentsJson = CanonicalJson.write(arguments);
-        String contentHash = Sha256.of(CanonicalJson.write(Map.of("target", operationRef.toString(),
-                "kind", kind.name(), "args", arguments)));
+        String contentHash = contentHash(operationRef, kind, arguments);
         UUID anchor = request.scope().turnId() != null ? request.scope().turnId() : request.scope().mcpRequestId();
         // one proposal per (turn or MCP request, tool, arguments); a request without either is keyed by the call
         String key = (anchor != null ? anchor : request.toolInvocationId()) + ":" + binding.id() + ":" + contentHash;
@@ -123,7 +122,16 @@ final class StoreProposalService implements ProposalService {
                 List.of(new NewProposalRecord(entity, null, null, argumentsJson, null, null)));
     }
 
-    private static Map<String, Object> arguments(String toolInput) {
+    /**
+     * The hash a proposal is confirmed against: the target operation, the change kind and the canonical arguments.
+     * The applier recomputes it before running anything, so stored content that was altered after review is refused.
+     */
+    static String contentHash(CatalogElementRef target, ChangeKind kind, Map<String, Object> arguments) {
+        return Sha256.of(CanonicalJson.write(Map.of("target", target.toString(), "kind", kind.name(),
+                "args", arguments)));
+    }
+
+    static Map<String, Object> arguments(String toolInput) {
         Object parsed;
         try {
             parsed = toolInput.isBlank() ? Map.of() : MAPPER.readerFor(Object.class).readValue(toolInput);

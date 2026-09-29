@@ -44,7 +44,7 @@ class StoreProposalServiceTest {
             "update", List.of());
     private static final UUID TURN = UUID.randomUUID();
     private static final DaiProperties.Write SETTINGS = new DaiProperties.Write(Duration.ofDays(7), true,
-            Duration.ofMinutes(15), false);
+            Duration.ofMinutes(15), false, 8);
     private final DaiPrincipal alice = new DaiPrincipal(UUID.randomUUID(), SubjectType.USER, "local", "alice", "Alice",
             Set.of(), Set.of(), Map.of(), Map.of(), Classification.INTERNAL, null, Set.of());
 
@@ -162,7 +162,7 @@ class StoreProposalServiceTest {
         assertThat(delete.approvalRequirement()).isEqualTo(ApprovalRequirement.SELF_CONFIRM_PLUS_APPROVER);
         assertThat(delete.requiredApprovals()).isEqualTo(1);
 
-        var strict = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), true);
+        var strict = new DaiProperties.Write(Duration.ofDays(7), true, Duration.ofMinutes(15), true, 8);
         NewChangeProposal update = StoreProposalService.toNewProposal(request(Change.CREATE, "{}"), catalog, strict);
         assertThat(update.changeKind()).isEqualTo(ChangeKind.CREATE);
         assertThat(update.approvalRequirement()).isEqualTo(ApprovalRequirement.SELF_CONFIRM_PLUS_APPROVER);
@@ -200,9 +200,9 @@ class StoreProposalServiceTest {
 
     @Test
     void writeSettingsAreValidatedAndOffByDefault() {
-        assertThatThrownBy(() -> new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofSeconds(5), false))
+        assertThatThrownBy(() -> new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofSeconds(5), false, 8))
                 .hasMessageContaining("proposal-ttl");
-        assertThat(new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofMinutes(15), false).enabled())
+        assertThat(new DaiProperties.Write(Duration.ofDays(7), false, Duration.ofMinutes(15), false, 8).enabled())
                 .isFalse();
     }
 }

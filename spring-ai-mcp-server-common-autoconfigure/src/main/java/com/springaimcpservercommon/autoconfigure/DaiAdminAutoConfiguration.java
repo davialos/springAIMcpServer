@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
+import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
 import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
 import com.springaimcpservercommon.core.environment.EnvironmentSignals;
 import com.springaimcpservercommon.persistence.audit.AuditTrail;
@@ -18,6 +19,7 @@ import com.springaimcpservercommon.persistence.usage.UsageLedger;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import org.jspecify.annotations.NullMarked;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -165,6 +167,29 @@ public class DaiAdminAutoConfiguration {
     }
 
     /**
+     * The write executor: applies confirmed proposals through the host's own operation, as the confirming owner
+     * (F-45, ADR-0009). Only the review API can reach it. Needs the proposal store and the live catalog; the operation
+     * handler is resolved lazily.
+     *
+     * @param store    proposal store
+     * @param registry live catalog
+     * @param handlers the operation backing handler (runs the host operation through its Spring proxy)
+     * @param api      permission checks
+     * @param props    framework properties
+     * @return the applier
+     */
+    @Bean
+    @ConditionalOnMissingBean(ProposalApplier.class)
+    @ConditionalOnBean({ChangeProposalStore.class, AdminApi.class, MetadataRegistry.class})
+    ProposalApplier proposalApplier(ChangeProposalStore store, MetadataRegistry registry,
+                                    ObjectProvider<DispatchingBackingExecutor.OperationBackingHandler> handlers,
+                                    AdminApi api, DaiProperties props) {
+        return new ProposalApplier(ProposalApplier.Proposals.over(store), registry::current, handlers::getObject,
+                (caller, permission, workspaceId) -> api.permits(caller, permission, workspaceId), props.write(),
+                java.time.Clock.systemUTC());
+    }
+
+    /**
      * Proposal review API (LLD-11 §8).
      *
      * @param store proposal store
@@ -176,8 +201,9 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnMissingBean(ProposalReviewController.class)
     @ConditionalOnBean({ChangeProposalStore.class, AdminAudit.class, AdminApi.class})
     public ProposalReviewController proposalReviewController(ChangeProposalStore store, AdminAudit audit,
-                                                              AdminApi api) {
-        return new ProposalReviewController(store, audit, api);
+                                                              AdminApi api,
+                                                              ObjectProvider<ProposalApplier> applier) {
+        return new ProposalReviewController(store, audit, api, applier.getIfAvailable());
     }
 
     /**

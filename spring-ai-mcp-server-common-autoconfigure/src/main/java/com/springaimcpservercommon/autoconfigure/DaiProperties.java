@@ -189,14 +189,20 @@ public record DaiProperties(
      *                        {@code writes_disabled}); nothing is ever written to the host without a person's confirm
      * @param proposalTtl     how long a proposal can be reviewed before it expires (1 minute to 30 days)
      * @param requireApprover every proposal also needs a second person's approval (a delete always does)
+     * @param maxConcurrentApplies most confirmed proposals applied at the same time on this node (1..100); more get
+     *                        429 and can retry (bulkhead, LLD-12)
      */
     public record Write(
             @DefaultValue("7d") Duration retention,
             @DefaultValue("false") boolean enabled,
             @DefaultValue("15m") Duration proposalTtl,
-            @DefaultValue("false") boolean requireApprover) {
+            @DefaultValue("false") boolean requireApprover,
+            @DefaultValue("8") int maxConcurrentApplies) {
         /** Validates the settings. */
         public Write {
+            if (maxConcurrentApplies < 1 || maxConcurrentApplies > 100) {
+                throw new IllegalArgumentException("dynamic.ai.agent.write.max-concurrent-applies must be 1..100");
+            }
             if (proposalTtl.compareTo(Duration.ofMinutes(1)) < 0 || proposalTtl.compareTo(Duration.ofDays(30)) > 0) {
                 throw new IllegalArgumentException("dynamic.ai.agent.write.proposal-ttl must be 1m..30d");
             }

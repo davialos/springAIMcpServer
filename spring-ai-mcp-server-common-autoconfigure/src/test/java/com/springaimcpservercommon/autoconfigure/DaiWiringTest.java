@@ -244,4 +244,15 @@ class DaiWiringTest {
                 assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.tool.ProposalService.class))
                         .containsExactly("proposalService"));
     }
+
+    @Test
+    void theWriteExecutorExistsOnlyBehindTheReviewApi() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context -> {
+            assertThat(context.getBeanNamesForType(ProposalApplier.class)).containsExactly("proposalApplier");
+            assertThat(context.getBeanNamesForType(ProposalReviewController.class))
+                    .containsExactly("proposalReviewController");
+        });
+        runner().run(context ->
+                assertThat(context.getBeanNamesForType(ProposalApplier.class)).isEmpty());
+    }
 }

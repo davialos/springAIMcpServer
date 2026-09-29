@@ -516,6 +516,155 @@ is on for the environment, and the user still holds `data:write-confirm`. Option
 limits, `insufficient_scope` step-up challenges (a tool outside the token's scopes is simply not listed), and the
 STDIO bridge (OQ-49).
 
+### Walkthrough: expose an existing method as an MCP tool
+
+> **Status.** This describes the implemented design end to end. The code has not been compiled or run yet (see the
+> project status), so treat the exact responses as the intended shape; report any difference.
+
+The path is: **annotate the method → find it in the catalog → publish a tool binding → grant it → call it over MCP.**
+Nothing is reachable until every step is done (default deny), and the model can never call anything you did not publish.
+An existing REST endpoint is not exposed as such: expose the **service method behind it** (the endpoint's own
+`@PreAuthorize`, validation and transactions live there and are kept, because the method is called through its Spring
+proxy, as the calling user).
+
+**0. Prerequisites**
+
+- `dynamic.ai.agent.environment.tier: dev` (or `test`). Authoring and catalog browsing are **off in PROD, and an unset tier
+  counts as PROD** (§8); publishing needs the `CONFIG_CHANGES_UI` capability, browsing the catalog `INTROSPECTION`.
+- A workspace id (`{ws}` below) and **two** admin users: one with `tool:author` and `tool:publish`, one with
+  `review:approve`. The author can never approve their own revision (403); one approval is needed by default
+  (`dynamic.ai.agent.review.required-approvals`).
+- Your Spring Security chain authenticates the admin API (`/dynamic-ai/admin/**`) and the MCP endpoint (§5, §9).
+
+**1. Annotate the method** (a Spring bean; the method must be `public`):
+
+```java
+@Service
+public class OrderService {
+
+    @AiExposedAction(intent = "Find a customer's orders, optionally by status", keywords = {"orders", "status"})
+    @PreAuthorize("hasAuthority('orders:read')")                       // your own security still applies
+    public List<OrderDto> findOrders(@AiParam(description = "Customer id") UUID customerId,
+                                     @AiParam(description = "Order status", required = false) OrderStatus status) {
+        ...
+    }
+}
+```
+
+`readOnly` defaults to `true`. Use `@AiParam(sensitive = true)` for arguments that must never be echoed, and `name` to
+choose the tool name (`^[a-z][a-z0-9_]{2,63}$`; the default is derived from the method). Restart the host: the startup
+scan builds the catalog.
+
+**2. Find the operation reference**
+
+```bash
+curl -H "Authorization: Bearer $ADMIN" \
+  "$BASE/dynamic-ai/admin/api/v1/catalog/operations?q=findOrders"
+# -> ... "ref": "op:com.acme.orders.service.OrderService#findOrders(java.util.UUID,com.acme.orders.OrderStatus)",
+#        "toolName": "find_orders", "readOnly": true, "enabled": true ...
+```
+
+**3. Create the tool binding** (a `TOOL_BINDING` resource; `specJson` is the spec **as a JSON string**):
+
+```bash
+curl -X POST -H "Authorization: Bearer $AUTHOR" -H "Content-Type: application/json" \
+  "$BASE/dynamic-ai/admin/api/v1/workspaces/$WS/resources" -d '{
+  "kind": "TOOL_BINDING",
+  "slug": "find-orders",
+  "changeSummary": "Expose findOrders over MCP",
+  "specJson": "{\"toolName\":\"find_orders\",\"source\":{\"kind\":\"operation\",\"ref\":\"op:com.acme.orders.service.OrderService#findOrders(java.util.UUID,com.acme.orders.OrderStatus)\"},\"argConstraints\":{\"customerId\":{\"kind\":\"principalAttr\",\"attr\":\"customerId\"}},\"mcpExposed\":true}"
+}'
+# 201 with an ETag (the draft's row version), and a body holding the resource id (resourceId) and the draft revision id (id)
+```
+
+What the spec says (full format in LLD-07 §2):
+
+| Key | Meaning |
+|---|---|
+| `toolName` | name the model and MCP clients see |
+| `source` | `{"kind":"operation","ref":"op:…"}` (only operations can be PROPOSE tools; `query` and `agent` sources are read-only) |
+| `argConstraints` | arguments **the server decides**: `principalAttr` (taken from the caller's identity attributes, which you map from token claims with `dynamic.ai.agent.security.attribute-claims`; a caller without it is refused), `literal`, or a numeric `range`. The model cannot override them, so use them for tenant or owner ids |
+| `mcpExposed` | `true` = offered over MCP (default `false`: the tool is then only usable by agents) |
+| `timeoutSeconds`, `maxCallsPerTurn`, `result.maxChars`, `writeMode`, `change`, `entityIdArgument` | limits and write behaviour |
+
+**4. Submit, approve, publish** (`If-Match` is the `ETag` returned when the draft was created, e.g. `"0"`; 428 if missing, 412 if stale):
+
+```bash
+R=$BASE/dynamic-ai/admin/api/v1/workspaces/$WS/resources/$RESOURCE_ID/revisions/$REVISION_ID
+curl -X POST -H "Authorization: Bearer $AUTHOR"   -H 'If-Match: "0"' -H "Content-Type: application/json" -d '{}' "$R:submit"
+curl -X POST -H "Authorization: Bearer $APPROVER" -H "Content-Type: application/json" -d '{"comment":"ok"}'   "$R:approve"
+curl -X POST -H "Authorization: Bearer $AUTHOR"   -H "Content-Type: application/json" -d '{"reason":"go live"}' "$R:publish"
+```
+
+Publishing creates a new generation of the live set; every node picks it up within
+`dynamic.ai.agent.store.maintenance.snapshot-poll-interval` (default 5 s). Roll back with
+`POST /dynamic-ai/admin/api/v1/cluster/generations/{n}:rollback`; take a tool away immediately with `:suspend` on the
+resource (allowed in every environment).
+
+**5. Grant the tool to callers.** A caller sees and can call the tool only if they hold `tool:invoke` (and the token has
+the scope `dai.mcp.read`):
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  "$BASE/dynamic-ai/admin/api/v1/workspaces/$WS/grants" \
+  -d '{"principalId":"<user or group id>","permission":"tool:invoke","targetType":"WORKSPACE"}'
+```
+
+Use `targetType: RESOURCE` with the binding's `resourceId` to grant just this tool.
+
+**6. Enable the endpoint and call it**
+
+```yaml
+dynamic.ai.agent.mcp:
+  enabled: true
+  workspace-id: <ws>                  # or send X-DAI-Workspace on every request
+  require-approved-client: false      # see the note below
+```
+
+```bash
+H=(-H "Authorization: Bearer $USER_TOKEN" -H "X-DAI-Workspace: $WS" -H "Content-Type: application/json")
+curl "${H[@]}" $BASE/dynamic-ai/mcp -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}'
+curl "${H[@]}" $BASE/dynamic-ai/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+curl "${H[@]}" $BASE/dynamic-ai/mcp -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_orders","arguments":{"status":"PAID"}}}'
+```
+
+`customerId` is not in the call: the binding fills it from the caller's identity. Any MCP client (Claude Desktop through
+the stdio bridge is not available yet; MCP Inspector and SDK clients work over HTTP) points at `$BASE/dynamic-ai/mcp`
+with the same headers. Every call is recorded (admin trace API: `…/workspaces/{ws}/traces/mcp-requests`).
+
+> **Approved MCP clients.** With `require-approved-client: true` (the default) an OAuth token's `client_id` must be an
+> approved client of the workspace, but there is no admin API or UI to approve one yet (OQ-49): insert the client into
+> `dai_mcp_client` yourself, or set the flag to `false` on trusted networks. API-key service accounts of the workspace
+> are always accepted, but API-key issuance is not wired yet either (OQ-37).
+
+**7. A tool that changes data.** Annotate with `readOnly = false` and bind it as a proposing tool: it never writes by
+itself; it records a proposal that the user confirms.
+
+```json
+{"toolName":"update_order_status",
+ "source":{"kind":"operation","ref":"op:com.acme.orders.service.OrderService#updateStatus(java.util.UUID,com.acme.orders.OrderStatus)"},
+ "writeMode":"PROPOSE", "change":"update", "entityIdArgument":"orderId", "mcpExposed":true}
+```
+
+Set `dynamic.ai.agent.write.enabled=true` (default off) and grant `data:write-propose` next to `tool:invoke`. The tool answers
+`status: proposed` with a proposal id. The **owner** reviews it at `GET /dynamic-ai/api/proposals?scope=mine`, then
+`POST …/proposals/{id}:confirm` with the `contentHash` they reviewed (needs `data:write-confirm`); this runs your method
+as that user and returns `APPLIED`, `CONFLICT` (the record changed since, see `entityIdArgument`) or `FAILED`.
+
+**When something is missing or wrong**
+
+| Symptom | Likely cause |
+|---|---|
+| Operation not in the catalog list | method not `public` or `static`, the class is not a Spring bean, `@AiExposedAction` missing, an invalid or duplicate tool name (the scan reports it as an issue), or the host was not restarted |
+| 403 `capability-disabled` on create/publish/browse | environment tier is PROD or unset (§8) |
+| 403 on `:approve` | you approved your own revision; use a second user |
+| 428 / 412 on submit | missing or stale `If-Match`; re-read the revision and use its current `ETag` |
+| Tool not in `tools/list` | not published yet (wait one poll interval), `mcpExposed` is `false`, the caller has no `tool:invoke` grant or lacks the `dai.mcp.read` scope, or the binding was skipped: **a wrong `ref` is not rejected at publish time** (spec validation per kind is open, OQ-41), the tool is just skipped and a warning is logged (`Tool binding … skipped`, `cannot resolve delegate`) |
+| 401 with `WWW-Authenticate` | no valid token; check the resource server and the audience (§5) |
+| 403 "MCP client not approved" | see the note in step 6 |
+| `writes_disabled` / `proposal_unavailable` / `operation_without_entity` | `write.enabled` is off, or the operation is not linked to an entity (annotate the entity with `@AiContext`) |
+| Tool answers `constraint_unsatisfied` | the caller's identity lacks the attribute named in `principalAttr`: map it from a token claim with `dynamic.ai.agent.security.attribute-claims.<attribute>=<claim>` |
+
 ### Conversation history (opt-in)
 
 Users can list, read, close and erase their own conversations through `/dynamic-ai/api/conversations`, but

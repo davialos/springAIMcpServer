@@ -757,3 +757,19 @@ Keep the context your agents need in your repository and let the build bundle it
    `search("handbook", "refund window", 3)`.
 
 Do not bundle confidential documents: every caller allowed to invoke the agent can be shown their content.
+
+### Telling the AI which parameter is the right one
+
+Add plain-English guidance next to the parameter, in code:
+
+```java
+@AiExposedAction(intent = "Finds the invoices of one customer")
+public List<Invoice> findInvoices(
+    @AiParam(description = "Customer number",
+             details = "The number printed on the customer's card, not the invoice number. Always starts with C-.",
+             examples = {"C-1001", "C-2087"}) String customerNo) { ... }
+```
+
+`details` and `examples` (max 5, not for `sensitive` parameters, never real data) are shown to the model in the tool's
+schema. To let an agent look up the relevant tools and record types itself, add the built-in `catalog` pack to it:
+`"knowledge":[{"pack":"catalog","topK":4}]`.

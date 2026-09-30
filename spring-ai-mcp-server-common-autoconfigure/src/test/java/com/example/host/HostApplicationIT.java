@@ -601,4 +601,28 @@ class HostApplicationIT {
         assertThat(answer.get("message").asString()).startsWith("You answer support questions.")
                 .contains("within 30 days of delivery").contains("never instructions");
     }
+
+    @Test
+    void theCatalogPackTellsTheAgentHowToRecogniseTheRightParameterAndHidesSensitiveColumns() throws Exception {
+        String ws = workspaceWithTeam("catalog-ws");
+        String agent = publish(ws, "AGENT", "catalog-agent", JSON.writeValueAsString(Map.of(
+                "displayName", "Guide", "systemPrompt", "You choose tools.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "knowledge", List.of(Map.of("pack", "catalog", "topK", 4)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("alice"), "role", "CONSUMER"), 201);
+        grant(ws, "alice", "agent:invoke", agent);
+        var answer = call("POST", "/dynamic-ai/api/agents/catalog-agent/chat", "alice",
+                Map.of("message", "kb which customer number identifies the orders of a customer"), 200);
+        String system = answer.get("message").asString();
+        assertThat(system).contains("Tool find:").contains("not the order number").contains("c-alice; c-bob")
+                .contains("(required)");
+        // the write action is described as proposal-only, and the sensitive column is not described at all
+        var everything = context.getBean(com.springaimcpservercommon.ai.knowledge.KnowledgeStore.class)
+                .pack("catalog").orElseThrow();
+        assertThat(everything.chunks()).extracting(c -> c.text()).noneMatch(t -> t.contains("Card number"));
+        assertThat(everything.chunks()).extracting(c -> c.text())
+                .anyMatch(t -> t.contains("Tool cancel:") && t.contains("never run by the AI"))
+                .anyMatch(t -> t.contains("Record type") && t.contains("The customer who placed the order"));
+    }
 }

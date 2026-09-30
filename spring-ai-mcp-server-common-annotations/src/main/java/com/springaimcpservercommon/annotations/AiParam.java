@@ -22,6 +22,23 @@ public @interface AiParam {
     String description();
 
     /**
+     * Extra notes in plain English that help the AI decide whether a value is the right one: what it looks like,
+     * what it is not, where it comes from, common mix-ups with similar parameters. Added to the tool's parameter
+     * description and to the searchable catalog knowledge. Never put secrets or real data here.
+     *
+     * @return the notes, empty for none
+     */
+    String details() default "";
+
+    /**
+     * Examples of valid values, as they would be written in the tool call. Ignored when the parameter is
+     * {@link #sensitive()}. Use made-up values, never real data.
+     *
+     * @return up to five examples
+     */
+    String[] examples() default {};
+
+    /**
      * Parameter name; only needed when the host is compiled without {@code -parameters}.
      *
      * @return the name or empty to use the reflected name

@@ -84,6 +84,8 @@ public final class SpringBeanOperationScanner {
     private static final List<String> TRANSACTIONAL = List.of(
             "org.springframework.transaction.annotation.Transactional", "jakarta.transaction.Transactional");
     private static final String SCOPED_TARGET_PREFIX = "scopedTarget.";
+    private static final int MAX_EXAMPLES = 5;
+    private static final int MAX_EXAMPLE_LENGTH = 128;
     private static final Set<String> LIMIT_PARAMETER_NAMES = Set.of("limit", "maxresults", "pagesize", "max", "top");
 
     private final ScanOptions options;
@@ -483,14 +485,38 @@ public final class SpringBeanOperationScanner {
             if (description != null && !textOk(ref, description, TextLint.MAX_DESCRIPTION_LENGTH, issues)) {
                 ok = false;
             }
+            String details = aiParam == null || aiParam.details().isBlank() ? null : aiParam.details().strip();
+            if (details != null && !textOk(ref, details, TextLint.MAX_DESCRIPTION_LENGTH, issues)) {
+                ok = false;
+            }
+            List<String> examples = new ArrayList<>();
+            if (aiParam != null && !aiParam.sensitive()) {
+                for (String example : aiParam.examples()) {
+                    if (example.isBlank()) {
+                        continue;
+                    }
+                    if (examples.size() >= MAX_EXAMPLES) {
+                        issues.add(ScanIssue.of(ScanIssueCode.DESCRIPTION_TOO_LONG, ref, "parameter " + name
+                                + " has more than " + MAX_EXAMPLES + " examples; element excluded", true));
+                        ok = false;
+                        break;
+                    }
+                    if (!textOk(ref, example, MAX_EXAMPLE_LENGTH, issues)) {
+                        ok = false;
+                        continue;
+                    }
+                    examples.add(example.strip());
+                }
+            }
+            String modelText = modelText(description, details, examples);
             ParamDescriptor.Kind kind = parameterKind(p.getType(), name, aiParam);
             boolean optionalType = p.getType() == Optional.class;
             boolean required = kind == ParamDescriptor.Kind.PAGEABLE || kind == ParamDescriptor.Kind.SPRING_DATA_LIMIT
                     ? false : aiParam != null ? aiParam.required() && !optionalType : !optionalType;
             params.add(new ParamDescriptor(name, i, p.getParameterizedType().getTypeName(),
                     description == null || description.isBlank() ? null : description, required,
-                    aiParam != null && aiParam.sensitive(), kind));
-            specs.add(new ParameterSpec(name, p.getParameterizedType(), description, required));
+                    aiParam != null && aiParam.sensitive(), kind, details, examples));
+            specs.add(new ParameterSpec(name, p.getParameterizedType(), modelText, required));
         }
         if (!ok) {
             return null;
@@ -666,6 +692,20 @@ public final class SpringBeanOperationScanner {
     }
 
     // ---- lint helpers ---------------------------------------------------------------------------------------
+
+    /** What the model reads as the parameter's description: meaning, then the notes, then the examples. */
+    private static @Nullable String modelText(@Nullable String description, @Nullable String details,
+                                              List<String> examples) {
+        StringBuilder text = new StringBuilder(description == null ? "" : description.strip());
+        if (details != null) {
+            text.append(text.length() == 0 ? "" : " ").append(details);
+        }
+        if (!examples.isEmpty()) {
+            text.append(text.length() == 0 ? "" : " ").append("Examples: ").append(String.join("; ", examples))
+                    .append('.');
+        }
+        return text.length() == 0 ? null : text.toString();
+    }
 
     private boolean textOk(CatalogElementRef ref, String text, int max, List<ScanIssue> issues) {
         boolean ok = true;

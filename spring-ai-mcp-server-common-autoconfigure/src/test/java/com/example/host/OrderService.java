@@ -26,7 +26,10 @@ public class OrderService {
 
     @AiExposedAction(intent = "Find a customer's orders, optionally by status")
     @Transactional(readOnly = true)
-    public List<String> find(@AiParam(description = "The customer id") String customerId,
+    public List<String> find(@AiParam(description = "The customer id",
+                                     details = "This is the customer number that starts with c-, not the order number "
+                                             + "and not the customer's name.",
+                                     examples = {"c-alice", "c-bob"}) String customerId,
                              @AiParam(description = "Order status", required = false) String status,
                              @AiParam(description = "Maximum rows") int limit) {
         return entityManager.createQuery(

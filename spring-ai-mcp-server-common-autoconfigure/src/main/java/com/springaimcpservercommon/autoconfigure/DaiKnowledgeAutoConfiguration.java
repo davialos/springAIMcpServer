@@ -1,6 +1,8 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.ai.knowledge.CatalogKnowledgeStore;
 import com.springaimcpservercommon.ai.knowledge.ClasspathKnowledgeStore;
+import com.springaimcpservercommon.ai.knowledge.CompositeKnowledgeStore;
 import com.springaimcpservercommon.ai.knowledge.KnowledgeIndexer;
 import com.springaimcpservercommon.ai.knowledge.KnowledgeStore;
 import org.jspecify.annotations.NullMarked;
@@ -46,11 +48,19 @@ public class DaiKnowledgeAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(KnowledgeStore.class)
-    public KnowledgeStore knowledgeStore(ObjectProvider<EmbeddingModel> embeddings, DaiKnowledgeProperties props) {
-        return new ClasspathKnowledgeStore(embeddings::getIfUnique, props.embeddingModelId(),
-                Thread.currentThread().getContextClassLoader() != null
-                        ? Thread.currentThread().getContextClassLoader()
-                        : DaiKnowledgeAutoConfiguration.class.getClassLoader());
+    public KnowledgeStore knowledgeStore(ObjectProvider<EmbeddingModel> embeddings, DaiKnowledgeProperties props,
+                                         ObjectProvider<com.springaimcpservercommon.core.catalog.MetadataRegistry> registry) {
+        ClassLoader loader = Thread.currentThread().getContextClassLoader() != null
+                ? Thread.currentThread().getContextClassLoader()
+                : DaiKnowledgeAutoConfiguration.class.getClassLoader();
+        var bundled = new ClasspathKnowledgeStore(embeddings::getIfUnique, props.embeddingModelId(), loader);
+        var live = registry.getIfAvailable();
+        if (live == null) {
+            return bundled;
+        }
+        // the pack "catalog" describes the operations and record types the AI may use, from the live catalog
+        return new CompositeKnowledgeStore(java.util.List.of(bundled,
+                new CatalogKnowledgeStore(live::current, embeddings::getIfUnique, props.embeddingModelId())));
     }
 
     /**

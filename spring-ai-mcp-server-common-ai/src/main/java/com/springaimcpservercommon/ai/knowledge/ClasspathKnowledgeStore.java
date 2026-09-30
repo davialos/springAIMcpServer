@@ -38,17 +38,13 @@ public final class ClasspathKnowledgeStore implements KnowledgeStore {
 
     /** Location pattern of pack files. */
     public static final String LOCATION = "classpath*:dynamic-ai/knowledge/*/index.jsonl";
-    private static final int CANDIDATES = 50;
-    private static final int RRF_K = 60;
 
     private record Loaded(KnowledgePack pack, Bm25Index bm25) {}
 
-    private final Supplier<@Nullable EmbeddingModel> embeddings;
-    private final @Nullable String embeddingModelId;
+    private final QueryEmbedder embedder;
     private final ClassLoader classLoader;
     private final Map<String, Resource> resources = new HashMap<>();
     private final Map<String, Optional<Loaded>> loaded = new ConcurrentHashMap<>();
-    private final Set<String> warned = ConcurrentHashMap.newKeySet();
 
     /**
      * Creates the store and discovers the pack files (they are not read yet).
@@ -60,8 +56,7 @@ public final class ClasspathKnowledgeStore implements KnowledgeStore {
      */
     public ClasspathKnowledgeStore(Supplier<@Nullable EmbeddingModel> embeddings, @Nullable String embeddingModelId,
                                    ClassLoader classLoader) {
-        this.embeddings = Objects.requireNonNull(embeddings, "embeddings");
-        this.embeddingModelId = embeddingModelId;
+        this.embedder = new QueryEmbedder(embeddings, embeddingModelId);
         this.classLoader = Objects.requireNonNull(classLoader, "classLoader");
         try {
             for (Resource resource : new PathMatchingResourcePatternResolver(classLoader).getResources(LOCATION)) {
@@ -92,41 +87,13 @@ public final class ClasspathKnowledgeStore implements KnowledgeStore {
         if (query == null || query.isBlank()) {
             return List.of();
         }
-        int limit = Math.max(1, Math.min(50, topK));
-        Loaded loaded = load(pack).orElse(null);
-        if (loaded == null) {
+        Loaded found = load(pack).orElse(null);
+        if (found == null) {
             return List.of();
         }
-        List<KnowledgeChunk> chunks = loaded.pack().chunks();
-        Map<Integer, Double> fused = new HashMap<>();
-        List<Bm25Index.Scored> keyword = loaded.bm25().search(query, CANDIDATES);
-        for (int rank = 0; rank < keyword.size(); rank++) {
-            fused.merge(keyword.get(rank).index(), 1.0 / (RRF_K + rank + 1), Double::sum);
-        }
-        Map<Integer, Double> similarity = new HashMap<>();
-        float[] queryVector = embedQuery(loaded.pack(), query);
-        if (queryVector != null) {
-            List<int[]> ranked = new ArrayList<>();
-            double[] scores = new double[chunks.size()];
-            for (int i = 0; i < chunks.size(); i++) {
-                scores[i] = cosine(queryVector, Objects.requireNonNull(chunks.get(i).vector()));
-                if (scores[i] >= minSimilarity) {
-                    ranked.add(new int[] {i});
-                }
-            }
-            ranked.sort(Comparator.<int[]>comparingDouble(a -> scores[a[0]]).reversed()
-                    .thenComparingInt(a -> a[0]));
-            for (int rank = 0; rank < ranked.size() && rank < CANDIDATES; rank++) {
-                int index = ranked.get(rank)[0];
-                fused.merge(index, 1.0 / (RRF_K + rank + 1), Double::sum);
-                similarity.put(index, scores[index]);
-            }
-        }
-        return fused.entrySet().stream()
-                .sorted(Map.Entry.<Integer, Double>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
-                .limit(limit)
-                .map(e -> new KnowledgeHit(pack, chunks.get(e.getKey()), e.getValue()))
-                .toList();
+        IndexedPack indexed = new IndexedPack(found.pack(), found.bm25());
+        return HybridSearch.search(indexed, query, Math.max(1, Math.min(50, topK)), minSimilarity,
+                embedder.embed(found.pack(), query));
     }
 
     private Optional<Loaded> load(String name) {
@@ -146,46 +113,5 @@ public final class ClasspathKnowledgeStore implements KnowledgeStore {
                 return Optional.empty();
             }
         });
-    }
-
-    private float @Nullable [] embedQuery(KnowledgePack pack, String query) {
-        if (!pack.hasVectors()) {
-            return null;
-        }
-        EmbeddingModel model = embeddings.get();
-        if (model == null || embeddingModelId == null || !embeddingModelId.equals(pack.embeddingModel())) {
-            if (warned.add(pack.name())) {
-                LOG.warn("Knowledge pack '{}' has embeddings from '{}' but the runtime embedding model is '{}': "
-                        + "using keyword search only", pack.name(), pack.embeddingModel(),
-                        model == null ? "not available" : embeddingModelId);
-            }
-            return null;
-        }
-        try {
-            float[] vector = model.embed(query);
-            if (vector.length != pack.dimensions()) {
-                if (warned.add(pack.name() + "#dim")) {
-                    LOG.warn("Embedding model answered {} dimensions, pack '{}' has {}: using keyword search only",
-                            vector.length, pack.name(), pack.dimensions());
-                }
-                return null;
-            }
-            return vector;
-        } catch (RuntimeException e) {
-            LOG.warn("Embedding the query failed ({}): using keyword search only", e.getClass().getSimpleName());
-            return null;
-        }
-    }
-
-    static double cosine(float[] a, float[] b) {
-        double dot = 0;
-        double na = 0;
-        double nb = 0;
-        for (int i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            na += a[i] * a[i];
-            nb += b[i] * b[i];
-        }
-        return na == 0 || nb == 0 ? 0 : dot / (Math.sqrt(na) * Math.sqrt(nb));
     }
 }

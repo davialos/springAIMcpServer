@@ -32,3 +32,15 @@ describes. The host wants to keep this context in its repository, review it like
 − Pack content is visible to every caller allowed to invoke the agent: bundled knowledge is not access-controlled
   per document (F-47 ACLs apply to a future document store, not to packs). Do not bundle confidential material.
 − Vectors are tied to one embedding model; changing the model means re-indexing (the id check prevents silent misuse).
+
+## Addendum: parameter guidance and the live `catalog` pack
+- `@AiParam` gained `details` (plain-English notes on how to tell a right value from a wrong one) and `examples`
+  (up to five made-up values, dropped for `sensitive` parameters). Both are linted like descriptions (length, secrets)
+  and appended to the parameter's description in the tool's JSON schema, so the model reads them with every tool call.
+  They are part of the catalog fingerprint only when present.
+- `CatalogKnowledgeStore` serves a pack named `catalog`, built from the live effective catalog: one chunk per enabled
+  operation (intent, every parameter with its notes and examples, "proposed for review" for writes) and per enabled
+  entity (exposable, non-sensitive attributes). Rebuilt per catalog generation; embedded lazily when a model and id
+  are configured. An agent opts in with `"knowledge":[{"pack":"catalog","topK":4}]`; it then sees the relevant
+  entries in its prompt. It describes the whole catalog to every caller of that agent, so it is opt-in.
+- Not yet: `details` on `@AiEntityProperty` (attribute meanings are already included).

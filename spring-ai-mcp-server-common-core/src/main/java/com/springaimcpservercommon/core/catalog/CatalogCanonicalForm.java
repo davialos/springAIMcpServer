@@ -90,6 +90,13 @@ final class CatalogCanonicalForm {
         m.put("required", p.required());
         m.put("sensitive", p.sensitive());
         m.put("kind", p.kind());
+        // only when present, so catalogs that do not use them keep their fingerprints
+        if (p.details() != null) {
+            m.put("details", p.details());
+        }
+        if (!p.examples().isEmpty()) {
+            m.put("examples", p.examples());
+        }
         return m;
     }
 

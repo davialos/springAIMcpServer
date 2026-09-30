@@ -54,6 +54,21 @@ import java.util.Map;
 public class DaiWebMvcAutoConfiguration {
 
     /**
+     * Maps the library's controllers (plain {@code @Bean}s with a type-level {@code @RequestMapping}) into the host's
+     * handler mapping; Spring MVC 7 only detects {@code @Controller} types by itself.
+     *
+     * @param mapping the host's handler mapping(s)
+     * @param beans   the bean factory, to find the controllers
+     * @return the registrar
+     */
+    @Bean
+    @ConditionalOnMissingBean(DaiControllerRegistrar.class)
+    static DaiControllerRegistrar daiControllerRegistrar(ObjectProvider<RequestMappingHandlerMapping> mapping,
+                                                         org.springframework.beans.factory.ListableBeanFactory beans) {
+        return new DaiControllerRegistrar(mapping, beans);
+    }
+
+    /**
      * Default principal resolver: uses the registered {@link AuthorityMapper} to map the
      * Spring Security {@link org.springframework.security.core.context.SecurityContextHolder} authentication
      * to a {@link com.springaimcpservercommon.core.principal.DaiPrincipal}.

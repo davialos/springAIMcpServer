@@ -38,6 +38,11 @@ final class TtlSnapshot<T> {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
+    /** Forces the next {@link #get()} to reload; the last good value still serves if that reload fails. */
+    void invalidate() {
+        expiresAt = Instant.MIN;
+    }
+
     /**
      * Returns the cached value, reloading it when the TTL has passed.
      *

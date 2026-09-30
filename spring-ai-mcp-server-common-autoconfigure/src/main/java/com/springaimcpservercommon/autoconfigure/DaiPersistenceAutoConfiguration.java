@@ -569,6 +569,32 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * Lets the admin write path make a publish visible to authorization at once (same hook the snapshot caches
+     * use). Without it a resource checked while still a draft reads as unpublished for up to the cache TTL after
+     * it is published.
+     *
+     * @param status the status port
+     * @return the refresh hook, or a no-op for a host-supplied port
+     */
+    @Bean
+    @ConditionalOnBean(ResourceStatusView.class)
+    SnapshotView resourceStatusRefresh(ResourceStatusView status) {
+        return new SnapshotView() {
+            @Override
+            public void refreshNow() {
+                if (status instanceof StoreSecurityPorts.ResourceStatuses statuses) {
+                    statuses.invalidateAll();
+                }
+            }
+
+            @Override
+            public long loadedGeneration() {
+                return 0;
+            }
+        };
+    }
+
+    /**
      * API key lookup port over the store.
      *
      * @param store API key store

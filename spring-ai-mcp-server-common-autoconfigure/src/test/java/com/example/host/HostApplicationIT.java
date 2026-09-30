@@ -52,7 +52,28 @@ class HostApplicationIT {
             return new ChatModel() {
                 @Override
                 public ChatResponse call(Prompt prompt) {
+                    var last = prompt.getInstructions().getLast();
+                    if (last instanceof org.springframework.ai.chat.messages.ToolResponseMessage tr) {
+                        return new ChatResponse(List.of(new Generation(new AssistantMessage(
+                                "Tool said: " + tr.getResponses().getFirst().responseData()))));
+                    }
+                    String text = last.getText() == null ? "" : last.getText();
+                    if (text.startsWith("findbig")) {
+                        return toolCall("find_orders", "{\"customerId\":\"c-evil\",\"limit\":500}");
+                    }
+                    if (text.startsWith("find")) {
+                        return toolCall("find_orders", "{\"customerId\":\"c-evil\",\"limit\":3}");
+                    }
+                    if (text.startsWith("cancel")) {
+                        return toolCall("cancel_order", "{\"orderId\":\"o1\"}");
+                    }
                     return new ChatResponse(List.of(new Generation(new AssistantMessage("Hello from the model"))));
+                }
+
+                private ChatResponse toolCall(String name, String args) {
+                    var call = new AssistantMessage.ToolCall("call-1", "function", name, args);
+                    return new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("")
+                            .toolCalls(List.of(call)).build())));
                 }
 
                 @Override
@@ -105,7 +126,7 @@ class HostApplicationIT {
     private static String token(String subject, String scope) {
         try {
             var claims = new com.nimbusds.jwt.JWTClaimsSet.Builder().subject(subject).issuer("https://idp.test")
-                    .claim("scope", scope).expirationTime(new java.util.Date(System.currentTimeMillis() + 600_000))
+                    .claim("scope", scope).claim("customerId", "c-" + subject).expirationTime(new java.util.Date(System.currentTimeMillis() + 600_000))
                     .build();
             var jwt = new com.nimbusds.jwt.SignedJWT(new com.nimbusds.jose.JWSHeader.Builder(
                     com.nimbusds.jose.JWSAlgorithm.RS256).keyID("test").build(), claims);
@@ -124,16 +145,21 @@ class HostApplicationIT {
     static void start() {
         POSTGRES.start();
         SpringApplication app = new SpringApplication(HostApp.class);
-        app.setDefaultProperties(Map.of(
-                "spring.datasource.url", POSTGRES.getJdbcUrl(),
-                "spring.datasource.username", POSTGRES.getUsername(),
-                "spring.datasource.password", POSTGRES.getPassword(),
-                "dynamic.ai.agent.environment.tier", "DEV",
-                "dynamic.ai.agent.store.validate-schema", "true",
-                "dynamic.ai.agent.environment.application-name", "host-it",
-                "dynamic.ai.agent.security.static-role-mappings[0].source", "AUTHORITY",
-                "dynamic.ai.agent.security.static-role-mappings[0].match-value", "SCOPE_dai.admin",
-                "dynamic.ai.agent.security.static-role-mappings[0].role", "PLATFORM_ADMIN"));
+        var props = new java.util.HashMap<String, Object>();
+        props.put("spring.jpa.hibernate.ddl-auto", "create");
+        props.put("dynamic.ai.agent.write.enabled", "true");
+        props.put("dynamic.ai.agent.security.attribute-claims.customerId", "customerId");
+        props.put("spring.datasource.url", POSTGRES.getJdbcUrl());
+        props.put("spring.datasource.username", POSTGRES.getUsername());
+        props.put("spring.datasource.password", POSTGRES.getPassword());
+        props.put("dynamic.ai.agent.environment.tier", "DEV");
+        props.put("dynamic.ai.agent.store.validate-schema", "true");
+        props.put("dynamic.ai.agent.environment.application-name", "host-it");
+        props.put("dynamic.ai.agent.security.static-role-mappings[0].source", "AUTHORITY");
+        props.put("dynamic.ai.agent.security.static-role-mappings[0].match-value", "SCOPE_dai.admin");
+        props.put("dynamic.ai.agent.security.static-role-mappings[0].role", "PLATFORM_ADMIN");
+        app.setDefaultProperties(props);
+
         app.setWebApplicationType(org.springframework.boot.WebApplicationType.SERVLET);
         // a mock servlet environment, as @SpringBootTest uses: no embedded server needed
         app.setApplicationContextFactory(type -> new org.springframework.web.context.support.GenericWebApplicationContext(
@@ -277,5 +303,97 @@ class HostApplicationIT {
 
         var answer = call("POST", "/dynamic-ai/api/agents/helper/chat", "alice", Map.of("message", "hi"), 200);
         assertThat(answer.toString()).contains("Hello from the model");
+    }
+
+    // ─── annotated host code becomes safe AI tools ────────────────────────────────────────────────────────
+
+    /** Creates a workspace with an author (admin), and approvers (admin, admin2); returns its id. */
+    private static String workspaceWithTeam(String slug) throws Exception {
+        String ws = call("POST", "/dynamic-ai/admin/api/v1/workspaces", "admin",
+                Map.of("slug", slug, "name", slug), 201).get("id").asString();
+        String members = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members";
+        String author = principalId("admin");
+        String reviewer = principalId("admin2");
+        call("POST", members, "admin", Map.of("principalId", author, "role", "AUTHOR"), 201);
+        call("POST", members, "admin", Map.of("principalId", reviewer, "role", "APPROVER"), 201);
+        return ws;
+    }
+
+    private static String principalId(String user) throws Exception {
+        return call("GET", "/dynamic-ai/admin/api/v1/me", user, null, 200).get("principal").get("principalId")
+                .asString();
+    }
+
+    /** Authors, reviews (by someone else) and publishes a resource; returns its resource id. */
+    private static String publish(String ws, String kind, String slug, String spec) throws Exception {
+        var created = call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/resources", "admin",
+                Map.of("kind", kind, "slug", slug, "specJson", spec, "changeSummary", "first"), 201);
+        String resource = created.get("resourceId").asString();
+        String base = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/resources/" + resource + "/revisions/"
+                + created.get("id").asString();
+        long version = created.get("rowVersion").asLong();
+        version = call("POST", base + ":submit", "admin", Map.of(), 200, version).get("rowVersion").asLong();
+        version = call("POST", base + ":approve", "admin2", Map.of("comment", "ok"), 200, version)
+                .get("rowVersion").asLong();
+        call("POST", base + ":publish", "admin", Map.of(), 200, version);
+        return resource;
+    }
+
+    private static void grant(String ws, String user, String permission, String resource) throws Exception {
+        String id = principalId(user);
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/grants", "admin", Map.of("principalId", id,
+                "permission", permission, "targetType", "RESOURCE", "resourceId", resource), 201);
+    }
+
+    private static void seedOrders() {
+        var emf = context.getBean(jakarta.persistence.EntityManagerFactory.class);
+        try (var em = emf.createEntityManager()) {
+            em.getTransaction().begin();
+            em.persist(new Order("o1", "c-alice", "OPEN", "4111111111111111"));
+            em.persist(new Order("o2", "c-alice", "OPEN", "4111111111111111"));
+            em.persist(new Order("o3", "c-bob", "OPEN", "5500000000000004"));
+            em.getTransaction().commit();
+        }
+    }
+
+    @Test
+    void annotatedHostCodeBecomesAToolThatRunsAsTheCallerWithinItsConstraints() throws Exception {
+        seedOrders();
+        var operations = call("GET", "/dynamic-ai/admin/api/v1/catalog/operations", "admin", null, 200);
+        assertThat(operations.toString()).contains("OrderService#find").contains("OrderService#cancel");
+        var entities = call("GET", "/dynamic-ai/admin/api/v1/catalog/entities", "admin", null, 200);
+        assertThat(entities.toString()).contains("Order");
+
+        String ws = workspaceWithTeam("orders");
+        String ref = null;
+        for (var op : operations.has("items") ? operations.get("items") : operations) {
+            if (op.get("ref").asString().contains("OrderService#find")) {
+                ref = op.get("ref").asString();
+            }
+        }
+        assertThat(ref).isNotNull();
+        String binding = publish(ws, "TOOL_BINDING", "find-orders", JSON.writeValueAsString(Map.of(
+                "toolName", "find_orders",
+                "source", Map.of("kind", "operation", "ref", ref),
+                "argConstraints", Map.of(
+                        "customerId", Map.of("kind", "principalAttr", "attr", "customerId"),
+                        "limit", Map.of("kind", "range", "min", 1, "max", 5)))));
+        String agent = publish(ws, "AGENT", "orders-agent", JSON.writeValueAsString(Map.of(
+                "displayName", "Orders", "systemPrompt", "You help with orders.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "tools", List.of(Map.of("bindingId", binding, "revision", 1)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("alice"), "role", "CONSUMER"), 201);
+        grant(ws, "alice", "agent:invoke", agent);
+        grant(ws, "alice", "tool:invoke", binding);
+
+        // the model asked for customer c-evil; the tool ran for alice's own customer id
+        // (the model's out-of-range limit is refused, not silently changed)
+        var big = call("POST", "/dynamic-ai/api/agents/orders-agent/chat", "alice",
+                Map.of("message", "findbig orders"), 200);
+        assertThat(big.toString()).contains("out_of_range").doesNotContain("o1");
+        var answer = call("POST", "/dynamic-ai/api/agents/orders-agent/chat", "alice",
+                Map.of("message", "find orders"), 200);
+        assertThat(answer.toString()).contains("o1").contains("o2").doesNotContain("o3");
     }
 }

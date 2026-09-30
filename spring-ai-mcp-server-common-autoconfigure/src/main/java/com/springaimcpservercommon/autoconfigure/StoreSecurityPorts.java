@@ -293,6 +293,15 @@ final class StoreSecurityPorts {
             return looked;
         }
 
+        /**
+         * Drops what this node knows so a publish, suspend or retire made through this node is seen by the very
+         * next request; other nodes converge within the TTL.
+         */
+        void invalidateAll() {
+            fallback.clear();
+            live.invalidate();
+        }
+
         private Loaded load() {
             long latest = configStore.latestGeneration().orElse(0L);
             Map<UUID, ResourceStatus> byId = new HashMap<>();

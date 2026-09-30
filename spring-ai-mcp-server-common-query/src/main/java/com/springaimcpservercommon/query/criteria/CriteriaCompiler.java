@@ -82,6 +82,21 @@ public final class CriteriaCompiler {
                                       List<RowPolicy> rowPolicies, int effectiveLimit,
                                       Map<String, Object> params, EntityManager em,
                                       @Nullable List<@Nullable Object> keysetPosition) {
+        return compile(query, principal, rowPolicies, effectiveLimit, params, em, keysetPosition, List.of());
+    }
+
+    /**
+     * Same, and also selects the given root attributes after the sort keys (per-record context columns): they are
+     * read by position, {@code projections + sort keys + i}.
+     *
+     * @param contextAttributes names of root attributes to select in addition (see {@code @AiRowContext})
+     * @return a ready-to-execute typed query
+     */
+    public TypedQuery<Tuple> compile(QueryDefinition query, DaiPrincipal principal,
+                                      List<RowPolicy> rowPolicies, int effectiveLimit,
+                                      Map<String, Object> params, EntityManager em,
+                                      @Nullable List<@Nullable Object> keysetPosition,
+                                      List<String> contextAttributes) {
         Objects.requireNonNull(query, "query");
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(rowPolicies, "rowPolicies");
@@ -114,6 +129,11 @@ public final class CriteriaCompiler {
             @SuppressWarnings({"unchecked", "rawtypes"})
             Expression<?> hidden = cb.coalesce((Expression) sortPaths.get(idx), (Expression) sortPaths.get(idx));
             selections.add(hidden.alias("_ks_" + idx));
+        }
+        for (String attribute : contextAttributes) {
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Expression<?> column = cb.coalesce((Expression) root.get(attribute), (Expression) root.get(attribute));
+            selections.add(column);
         }
         cq.multiselect(selections);
 

@@ -42,6 +42,11 @@ final class CatalogCanonicalForm {
         m.put("writable", a.writable());
         m.put("classification", a.classification());
         m.put("identifier", a.identifier());
+        // only when present, so catalogs that do not use it keep their fingerprints
+        if (a.rowContext()) {
+            m.put("rowContextLabel", a.rowContextLabel());
+            m.put("rowContextMaxChars", a.rowContextMaxChars());
+        }
         return m;
     }
 

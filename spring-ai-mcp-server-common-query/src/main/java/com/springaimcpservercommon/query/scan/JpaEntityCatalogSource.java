@@ -2,6 +2,7 @@ package com.springaimcpservercommon.query.scan;
 
 import com.springaimcpservercommon.annotations.AiContext;
 import com.springaimcpservercommon.annotations.AiEntityProperty;
+import com.springaimcpservercommon.annotations.AiRowContext;
 import com.springaimcpservercommon.annotations.AiQueryConstraints;
 import com.springaimcpservercommon.annotations.Classification;
 import com.springaimcpservercommon.core.catalog.AttributeDescriptor;
@@ -145,8 +146,12 @@ public final class JpaEntityCatalogSource implements EntityCatalogSource {
         }
         boolean isId = attr instanceof SingularAttribute<?, ?> sa && sa.isId();
         CatalogElementRef ref = new CatalogElementRef(CatalogElementRef.Kind.ATTR, entityType + "#" + attr.getName());
+        AiRowContext rowContext = field.getAnnotation(AiRowContext.class);
+        boolean usable = rowContext != null && attr.getJavaType() == String.class && !isId;
+        String label = usable ? (rowContext.label().isBlank() ? prop.meaning() : rowContext.label().strip()) : null;
+        int maxChars = usable ? Math.max(50, Math.min(2000, rowContext.maxChars())) : 0;
         return new AttributeDescriptor(ref, attr.getName(), attr.getJavaType().getName(),
-                prop.meaning(), prop.sensitive(), prop.writable(), prop.classification(), isId);
+                prop.meaning(), prop.sensitive(), prop.writable(), prop.classification(), isId, label, maxChars);
     }
 
     private @Nullable RelationDescriptor buildRelation(Attribute<?, ?> attr) {

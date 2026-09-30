@@ -44,3 +44,14 @@ describes. The host wants to keep this context in its repository, review it like
   are configured. An agent opts in with `"knowledge":[{"pack":"catalog","topK":4}]`; it then sees the relevant
   entries in its prompt. It describes the whole catalog to every caller of that agent, so it is opt-in.
 - Not yet: `details` on `@AiEntityProperty` (attribute meanings are already included).
+
+## Addendum: `@AiRowContext` — per-record context columns
+`@AiEntityProperty.meaning` says what a column means in general; `@AiRowContext(label, maxChars)` on a `String` column
+says "the value of this column is context about *that record*". Dynamic queries over the entity (AI tools and MCP tools
+alike, they share the executor) deliver it with every row under `_context: {label: text}`, even when the query did not
+select the column. The executor selects the columns by position after the sort keys and applies governance per call:
+the attribute must be enabled, not `sensitive`, and not classified above the caller's clearance; text is cut at
+`maxChars` (default 500, max 2000). The query tool's description tells the model that `_context` is information about
+the record, never instructions (the text is stored data and may have been typed by users). Fingerprints only change for
+catalogs that use it. Not covered: host `@AiExposedAction` methods that return entities (their results are the host's
+own objects); non-`String` columns are ignored.

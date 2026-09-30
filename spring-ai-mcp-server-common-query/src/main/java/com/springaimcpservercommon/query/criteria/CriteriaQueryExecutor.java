@@ -1,6 +1,8 @@
 package com.springaimcpservercommon.query.criteria;
 
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
+import com.springaimcpservercommon.core.catalog.EffectiveEntity;
+import com.springaimcpservercommon.core.catalog.EffectiveAttribute;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.query.ast.QueryDefinition;
 import com.springaimcpservercommon.query.ast.RowPolicy;
@@ -148,7 +150,7 @@ public class CriteriaQueryExecutor implements QueryExecutor {
             throw new QueryBulkheadException(bulkhead.availablePermits() + (int) bulkhead.getQueueLength());
         }
         try {
-            return doExecute(query, principal, params, rowPolicies, requestedSize);
+            return doExecute(query, principal, params, rowPolicies, requestedSize, catalog);
         } finally {
             bulkhead.release();
         }
@@ -156,7 +158,7 @@ public class CriteriaQueryExecutor implements QueryExecutor {
 
     private QueryResult doExecute(QueryDefinition query, DaiPrincipal principal,
                                    Map<String, Object> params, List<RowPolicy> rowPolicies,
-                                   int requestedSize) {
+                                   int requestedSize, EffectiveCatalog catalog) {
         EntityManager em = EntityManagerFactoryUtils.getTransactionalEntityManager(entityManagerFactory);
         if (em == null) {
             throw new IllegalStateException(
@@ -190,8 +192,10 @@ public class CriteriaQueryExecutor implements QueryExecutor {
                 .filter(p -> p.appliesTo(principal.globalRoles()))
                 .toList();
 
+        List<EffectiveAttribute> context = rowContext(query, principal, catalog);
         TypedQuery<Tuple> typedQuery = compiler.compile(
-                query, principal, applicablePolicies, effectiveSize, queryParams, em, keysetPosition);
+                query, principal, applicablePolicies, effectiveSize, queryParams, em, keysetPosition,
+                context.stream().map(EffectiveAttribute::name).toList());
         typedQuery.setHint("jakarta.persistence.query.timeout", timeoutMs);
 
         // Apply offset fallback only when keyset was not available
@@ -202,11 +206,26 @@ public class CriteriaQueryExecutor implements QueryExecutor {
         LOG.debug("Executing query {} rev {} for principal {}", query.id(), query.revision(), principal.principalId());
         List<Tuple> tuples = typedQuery.getResultList();
 
-        return buildResult(tuples, query, effectiveSize, currentOffset);
+        return buildResult(tuples, query, effectiveSize, currentOffset, context);
+    }
+
+    /**
+     * The per-record context columns of the query's root entity that this caller may receive: marked
+     * {@code @AiRowContext}, enabled, not sensitive, and not classified above the caller's clearance.
+     */
+    private static List<EffectiveAttribute> rowContext(QueryDefinition query, DaiPrincipal principal,
+                                                        EffectiveCatalog catalog) {
+        return catalog.entity(query.root())
+                .filter(EffectiveEntity::enabled)
+                .map(entity -> entity.attributes().values().stream()
+                        .filter(EffectiveAttribute::rowContext)
+                        .filter(a -> a.classification().compareTo(principal.clearance()) <= 0)
+                        .toList())
+                .orElse(List.of());
     }
 
     private QueryResult buildResult(List<Tuple> tuples, QueryDefinition query,
-                                     int effectiveSize, int currentOffset) {
+                                     int effectiveSize, int currentOffset, List<EffectiveAttribute> context) {
         boolean hasMore = tuples.size() > effectiveSize;
         List<Tuple> page = hasMore ? tuples.subList(0, effectiveSize) : tuples;
 
@@ -220,6 +239,10 @@ public class CriteriaQueryExecutor implements QueryExecutor {
             Map<String, Object> row = new LinkedHashMap<>();
             for (int i = 0; i < outputNames.size() && i < tuple.getElements().size(); i++) {
                 row.put(outputNames.get(i), tuple.get(i));
+            }
+            Map<String, Object> notes = contextOf(tuple, projectionCount + query.orderBy().size(), context);
+            if (!notes.isEmpty()) {
+                row.put(QueryResult.CONTEXT_KEY, notes);
             }
             rows.add(row);
         }
@@ -244,6 +267,25 @@ public class CriteriaQueryExecutor implements QueryExecutor {
             return QueryResult.paged(rows, codec.encodeOffset(currentOffset + effectiveSize));
         }
         return QueryResult.complete(rows);
+    }
+
+    private static Map<String, Object> contextOf(Tuple tuple, int offset, List<EffectiveAttribute> context) {
+        Map<String, Object> notes = new LinkedHashMap<>();
+        for (int i = 0; i < context.size() && offset + i < tuple.getElements().size(); i++) {
+            Object value = tuple.get(offset + i);
+            if (value == null || value.toString().isBlank()) {
+                continue;
+            }
+            EffectiveAttribute attribute = context.get(i);
+            String text = value.toString().strip();
+            int max = attribute.descriptor().rowContextMaxChars();
+            if (text.length() > max) {
+                text = text.substring(0, max) + "…";
+            }
+            String label = attribute.descriptor().rowContextLabel();
+            notes.put(label == null ? attribute.name() : label, text);
+        }
+        return notes;
     }
 
     private static List<@Nullable Object> extractSortKeyValues(Tuple tuple,

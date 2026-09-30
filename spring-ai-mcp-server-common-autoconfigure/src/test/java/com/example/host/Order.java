@@ -3,6 +3,8 @@ package com.example.host;
 import com.springaimcpservercommon.annotations.AiContext;
 import com.springaimcpservercommon.annotations.AiEntityProperty;
 import com.springaimcpservercommon.annotations.AiQueryConstraints;
+import com.springaimcpservercommon.annotations.AiRowContext;
+import com.springaimcpservercommon.annotations.Classification;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
@@ -27,6 +29,18 @@ public class Order {
     @AiEntityProperty(meaning = "Card number used to pay", sensitive = true)
     private String cardNumber;
 
+    @AiEntityProperty(meaning = "Free-text remarks the customer or support left on this order")
+    @AiRowContext(label = "Customer notes", maxChars = 60)
+    private String notes;
+
+    @AiEntityProperty(meaning = "Fraud team remarks", classification = Classification.RESTRICTED)
+    @AiRowContext(label = "Fraud notes")
+    private String fraudNotes;
+
+    @AiEntityProperty(meaning = "Private remarks", sensitive = true)
+    @AiRowContext(label = "Private notes")
+    private String privateNotes;
+
     protected Order() {
     }
 
@@ -35,6 +49,13 @@ public class Order {
         this.customerId = customerId;
         this.status = status;
         this.cardNumber = cardNumber;
+    }
+
+    public Order withNotes(String notes, String fraudNotes, String privateNotes) {
+        this.notes = notes;
+        this.fraudNotes = fraudNotes;
+        this.privateNotes = privateNotes;
+        return this;
     }
 
     public String getId() {

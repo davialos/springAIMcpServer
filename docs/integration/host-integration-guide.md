@@ -773,3 +773,16 @@ public List<Invoice> findInvoices(
 `details` and `examples` (max 5, not for `sensitive` parameters, never real data) are shown to the model in the tool's
 schema. To let an agent look up the relevant tools and record types itself, add the built-in `catalog` pack to it:
 `"knowledge":[{"pack":"catalog","topK":4}]`.
+
+### Context that belongs to one record: `@AiRowContext`
+
+```java
+@AiEntityProperty(meaning = "Remarks the customer or support left on this order")
+@AiRowContext(label = "Customer notes", maxChars = 300)
+private String notes;
+```
+
+Every row of that entity returned by a query (to an agent or an MCP client) carries
+`"_context": {"Customer notes": "Prefers morning delivery"}`, so the caller knows more about *that* entry, not just what
+the column means. The column keeps all its rules: sensitive, disabled and above-clearance columns are never delivered,
+and the text is cut at `maxChars`. The AI is told the notes are information, never instructions.

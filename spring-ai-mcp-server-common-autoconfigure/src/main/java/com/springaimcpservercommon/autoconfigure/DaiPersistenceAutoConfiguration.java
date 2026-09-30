@@ -794,11 +794,19 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(ConfigStore.class)
     ToolBridge.QueryCallbackFactory queryCallbackFactory(
             org.springframework.beans.factory.ObjectProvider<DispatchingBackingExecutor.QueryBackingHandler> handlers,
-            org.springframework.beans.factory.ObjectProvider<DaiQueryAutoConfiguration.QueryDefinitionLoader> loaders) {
+            org.springframework.beans.factory.ObjectProvider<DaiQueryAutoConfiguration.QueryDefinitionLoader> loaders,
+            org.springframework.beans.factory.ObjectProvider<MetadataRegistry> registry) {
         return (queryId, binding, principal) -> {
             DaiQueryAutoConfiguration.QueryDefinitionLoader loader = loaders.getIfAvailable();
-            return BackingToolCallback.forQuery(queryId, loader == null ? null : loader.load(queryId), binding,
-                    principal, handlers.getObject());
+            QueryDefinition definition = loader == null ? null : loader.load(queryId);
+            MetadataRegistry live = registry.getIfAvailable();
+            boolean rowContext = definition != null && live != null
+                    && live.current().entity(definition.root())
+                            .map(e -> e.enabled() && e.attributes().values().stream()
+                                    .anyMatch(com.springaimcpservercommon.core.catalog.EffectiveAttribute::rowContext))
+                            .orElse(false);
+            return BackingToolCallback.forQuery(queryId, definition, binding, principal, handlers.getObject(),
+                    rowContext);
         };
     }
 

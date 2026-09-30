@@ -174,6 +174,9 @@ public final class CatalogKnowledgeStore implements KnowledgeStore {
         for (EffectiveAttribute a : entity.attributes().values()) {
             if (a.enabled() && a.exposable()) {
                 text.append("\n- ").append(a.name()).append(": ").append(a.meaning());
+                if (a.rowContext()) {
+                    text.append(" (each record carries its own text here, delivered as context with every row)");
+                }
             }
         }
         return text.toString();

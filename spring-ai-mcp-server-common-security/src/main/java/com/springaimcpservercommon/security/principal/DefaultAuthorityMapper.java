@@ -150,6 +150,7 @@ public final class DefaultAuthorityMapper implements AuthorityMapper {
     /**
      * Drops all cached mapping results, e.g. after role mappings or memberships changed.
      */
+    @Override
     public void invalidateAll() {
         cache.invalidateAll();
         groupPrincipalIds.invalidateAll();

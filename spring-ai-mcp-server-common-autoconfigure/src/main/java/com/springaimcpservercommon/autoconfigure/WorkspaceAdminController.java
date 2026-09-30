@@ -131,7 +131,17 @@ public final class WorkspaceAdminController {
     private final AdminApi api;
     private final Clock clock;
 
+    private final Runnable identityChanged;
+
     WorkspaceAdminController(WorkspaceStore store, AdminAudit audit, AdminApi api, Clock clock) {
+        this(store, audit, api, clock, () -> { });
+    }
+
+    /**
+     * @param identityChanged called after a change that alters callers' roles (drops the principal-mapping cache)
+     */
+    WorkspaceAdminController(WorkspaceStore store, AdminAudit audit, AdminApi api, Clock clock, Runnable identityChanged) {
+        this.identityChanged = Objects.requireNonNull(identityChanged, "identityChanged");
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -273,6 +283,8 @@ public final class WorkspaceAdminController {
         store.archive(workspaceId, caller.principalId());
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "WORKSPACE_ARCHIVED", workspaceId, "workspace",
                 workspaceId.toString(), null, null, Map.of());
+        identityChanged.run();
+        identityChanged.run();
         return ResponseEntity.noContent().build();
     }
 
@@ -331,6 +343,7 @@ public final class WorkspaceAdminController {
                 Objects.requireNonNull(role), caller.principalId(), expiresAt);
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "WORKSPACE_MEMBER_ADDED", workspaceId,
                 "workspace_member", member.principalId().toString(), null, null, Map.of("role", member.role().name()));
+        identityChanged.run();
         return ResponseEntity.status(HttpStatus.CREATED).body(MemberDto.of(member));
     }
 
@@ -366,6 +379,7 @@ public final class WorkspaceAdminController {
         }
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "WORKSPACE_MEMBER_REMOVED", workspaceId,
                 "workspace_member", principalId.toString(), null, null, Map.of("role", parsed.name()));
+        identityChanged.run();
         return ResponseEntity.noContent().build();
     }
 

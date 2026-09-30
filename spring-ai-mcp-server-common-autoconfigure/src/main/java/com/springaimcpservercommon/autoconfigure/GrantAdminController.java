@@ -102,7 +102,17 @@ public final class GrantAdminController {
     private final Clock clock;
     private final ConditionParser conditionParser = new ConditionParser();
 
+    private final Runnable grantsChanged;
+
     GrantAdminController(GrantStore store, AdminAudit audit, AdminApi api, Clock clock) {
+        this(store, audit, api, clock, () -> { });
+    }
+
+    /**
+     * @param grantsChanged called after grants changed, so this node's grant cache does not serve the old state
+     */
+    GrantAdminController(GrantStore store, AdminAudit audit, AdminApi api, Clock clock, Runnable grantsChanged) {
+        this.grantsChanged = Objects.requireNonNull(grantsChanged, "grantsChanged");
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -186,6 +196,7 @@ public final class GrantAdminController {
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "GRANT_CREATED", workspaceId, "grant",
                 created.id().toString(), null, null,
                 Map.of("permission", created.permission(), "grantee", created.principalId().toString()));
+        grantsChanged.run();
         return ResponseEntity.status(HttpStatus.CREATED).body(GrantDto.of(created));
     }
 
@@ -213,6 +224,7 @@ public final class GrantAdminController {
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "GRANT_REVOKED", workspaceId, "grant",
                 grantId.toString(), null, null,
                 Map.of("permission", grant.permission(), "grantee", grant.principalId().toString()));
+        grantsChanged.run();
         return ResponseEntity.noContent().build();
     }
 

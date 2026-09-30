@@ -63,7 +63,17 @@ public final class ClusterAdminController {
     private final AdminAudit audit;
     private final AdminApi api;
 
+    private final Runnable generationPublished;
+
     ClusterAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api) {
+        this(configStore, audit, api, () -> { });
+    }
+
+    /**
+     * @param generationPublished called after a rollback published a new generation on this node
+     */
+    ClusterAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api, Runnable generationPublished) {
+        this.generationPublished = Objects.requireNonNull(generationPublished, "generationPublished");
         this.configStore = Objects.requireNonNull(configStore, "configStore");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -123,6 +133,7 @@ public final class ClusterAdminController {
         PublishResult result = configStore.rollback(generation, caller.principalId(), Objects.requireNonNull(reason));
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "GENERATION_ROLLED_BACK", null, "generation",
                 Long.toString(generation), null, reason, Map.of("newGeneration", result.generation()));
+        generationPublished.run();
         return ResponseEntity.ok(result);
     }
 }

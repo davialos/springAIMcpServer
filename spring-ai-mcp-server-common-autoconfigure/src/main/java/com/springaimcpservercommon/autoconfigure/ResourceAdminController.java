@@ -152,7 +152,19 @@ public final class ResourceAdminController {
     private final AdminApi api;
     private final int requiredApprovals;
 
+    private final Runnable generationPublished;
+
     ResourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api, int requiredApprovals) {
+        this(configStore, audit, api, requiredApprovals, () -> { });
+    }
+
+    /**
+     * @param generationPublished called after a new generation was published by this node, so its snapshot caches
+     *                            load it at once instead of at the next poll (other nodes: within the poll interval)
+     */
+    ResourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api, int requiredApprovals,
+                            Runnable generationPublished) {
+        this.generationPublished = Objects.requireNonNull(generationPublished, "generationPublished");
         this.configStore = Objects.requireNonNull(configStore, "configStore");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -571,6 +583,7 @@ public final class ResourceAdminController {
             DaiPrincipal caller = gate.caller();
             PublishResult result = configStore.publish(revisionId, caller.principalId(), reason);
             recordGeneration(caller, "REVISION_PUBLISHED", workspaceId, "revision", revisionId, reason, result);
+            generationPublished.run();
             return ResponseEntity.ok(result);
         });
     }
@@ -602,6 +615,7 @@ public final class ResourceAdminController {
             PublishResult result = configStore.suspend(resourceId, Objects.requireNonNull(reason),
                     caller.principalId());
             recordGeneration(caller, "RESOURCE_SUSPENDED", workspaceId, "resource", resourceId, reason, result);
+            generationPublished.run();
             return ResponseEntity.ok(result);
         });
     }
@@ -632,6 +646,7 @@ public final class ResourceAdminController {
             DaiPrincipal caller = gate.caller();
             PublishResult result = configStore.resume(resourceId, caller.principalId(), reason);
             recordGeneration(caller, "RESOURCE_RESUMED", workspaceId, "resource", resourceId, reason, result);
+            generationPublished.run();
             return ResponseEntity.ok(result);
         });
     }
@@ -690,6 +705,7 @@ public final class ResourceAdminController {
                     : configStore.deprecate(resourceId, caller.principalId(), reason);
             recordGeneration(caller, retire ? "RESOURCE_RETIRED" : "RESOURCE_DEPRECATED", workspaceId, "resource",
                     resourceId, reason, result);
+            generationPublished.run();
             return ResponseEntity.ok(result);
         });
     }

@@ -146,8 +146,9 @@ public class DaiAdminAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(ClusterAdminController.class)
     @ConditionalOnBean({ConfigStore.class, AdminAudit.class, AdminApi.class})
-    public ClusterAdminController clusterAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api) {
-        return new ClusterAdminController(configStore, audit, api);
+    public ClusterAdminController clusterAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<DaiPersistenceAutoConfiguration.SnapshotView> views) {
+        return new ClusterAdminController(configStore, audit, api, () -> views.orderedStream().forEach(DaiPersistenceAutoConfiguration.SnapshotView::refreshNow));
     }
 
     /**
@@ -220,8 +221,10 @@ public class DaiAdminAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(WorkspaceAdminController.class)
     @ConditionalOnBean({WorkspaceStore.class, AdminAudit.class, AdminApi.class})
-    public WorkspaceAdminController workspaceAdminController(WorkspaceStore store, AdminAudit audit, AdminApi api) {
-        return new WorkspaceAdminController(store, audit, api, java.time.Clock.systemUTC());
+    public WorkspaceAdminController workspaceAdminController(WorkspaceStore store, AdminAudit audit, AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers) {
+        return new WorkspaceAdminController(store, audit, api, java.time.Clock.systemUTC(),
+                () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll));
     }
 
     /**
@@ -236,8 +239,9 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnMissingBean(RoleMappingAdminController.class)
     @ConditionalOnBean({RoleMappingStore.class, AdminAudit.class, AdminApi.class})
     public RoleMappingAdminController roleMappingAdminController(RoleMappingStore store, AdminAudit audit,
-                                                                 AdminApi api) {
-        return new RoleMappingAdminController(store, audit, api);
+                                                                 AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers) {
+        return new RoleMappingAdminController(store, audit, api, () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll));
     }
 
     /**
@@ -251,8 +255,10 @@ public class DaiAdminAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(GrantAdminController.class)
     @ConditionalOnBean({GrantStore.class, AdminAudit.class, AdminApi.class})
-    public GrantAdminController grantAdminController(GrantStore store, AdminAudit audit, AdminApi api) {
-        return new GrantAdminController(store, audit, api, java.time.Clock.systemUTC());
+    public GrantAdminController grantAdminController(GrantStore store, AdminAudit audit, AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.port.GrantSource> grants) {
+        return new GrantAdminController(store, audit, api, java.time.Clock.systemUTC(),
+                () -> grants.ifAvailable(com.springaimcpservercommon.security.port.GrantSource::invalidateAll));
     }
 
     /**
@@ -267,8 +273,10 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnMissingBean(ServiceAccountAdminController.class)
     @ConditionalOnBean({ApiKeyStore.class, AdminAudit.class, AdminApi.class})
     public ServiceAccountAdminController serviceAccountAdminController(ApiKeyStore store, AdminAudit audit,
-                                                                       AdminApi api) {
-        return new ServiceAccountAdminController(store, audit, api, java.time.Clock.systemUTC());
+                                                                       AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers) {
+        return new ServiceAccountAdminController(store, audit, api, java.time.Clock.systemUTC(),
+                () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll));
     }
 
     /**
@@ -410,7 +418,8 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnMissingBean(ResourceAdminController.class)
     @ConditionalOnBean({ConfigStore.class, AdminAudit.class, AdminApi.class})
     public ResourceAdminController resourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api,
-                                                           DaiProperties props) {
-        return new ResourceAdminController(configStore, audit, api, props.review().requiredApprovals());
+                                                           DaiProperties props, org.springframework.beans.factory.ObjectProvider<DaiPersistenceAutoConfiguration.SnapshotView> views) {
+        return new ResourceAdminController(configStore, audit, api, props.review().requiredApprovals(),
+                () -> views.orderedStream().forEach(DaiPersistenceAutoConfiguration.SnapshotView::refreshNow));
     }
 }

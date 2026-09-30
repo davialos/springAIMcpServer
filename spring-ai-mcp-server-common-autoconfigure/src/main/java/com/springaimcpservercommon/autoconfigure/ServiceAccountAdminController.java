@@ -100,7 +100,17 @@ public final class ServiceAccountAdminController {
     private final AdminApi api;
     private final Clock clock;
 
+    private final Runnable identityChanged;
+
     ServiceAccountAdminController(ApiKeyStore store, AdminAudit audit, AdminApi api, Clock clock) {
+        this(store, audit, api, clock, () -> { });
+    }
+
+    /**
+     * @param identityChanged called after a change that alters callers' roles (drops the principal-mapping cache)
+     */
+    ServiceAccountAdminController(ApiKeyStore store, AdminAudit audit, AdminApi api, Clock clock, Runnable identityChanged) {
+        this.identityChanged = Objects.requireNonNull(identityChanged, "identityChanged");
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -242,6 +252,7 @@ public final class ServiceAccountAdminController {
         audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL,
                 enabled ? "SERVICE_ACCOUNT_ENABLED" : "SERVICE_ACCOUNT_DISABLED", workspaceId, "service_account",
                 id.toString(), null, null, Map.of());
+        identityChanged.run();
         return ResponseEntity.ok(AccountDto.of(updated));
     }
 

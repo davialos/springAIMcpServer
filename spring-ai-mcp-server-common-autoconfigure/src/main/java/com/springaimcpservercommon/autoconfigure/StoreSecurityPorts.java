@@ -196,6 +196,11 @@ final class StoreSecurityPorts {
             cache.put(key, new Entry(result, now.plus(ttl)));
             return result;
         }
+
+        @Override
+        public void invalidateAll() {
+            cache.clear();
+        }
     }
 
     /** Active kill switches from {@code dai_kill_switch}, reloaded every couple of seconds (F-73: effective in 10 s). */

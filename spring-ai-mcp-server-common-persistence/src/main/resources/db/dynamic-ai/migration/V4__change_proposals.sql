@@ -138,8 +138,11 @@ CREATE TABLE dai_change_proposal_approval
     CONSTRAINT fk_change_proposal_approval_approver FOREIGN KEY (approver_id) REFERENCES dai_principal (id)
 );
 
+-- Reads another table, so it pins the search_path captured at migration time (as dai_review_segregation_of_duties in V2):
+-- the runtime connection's search_path is not guaranteed to contain the dynamic_ai schema.
 CREATE OR REPLACE FUNCTION dai_proposal_approval_segregation_of_duties() RETURNS trigger
-    LANGUAGE plpgsql AS
+    LANGUAGE plpgsql
+    SET search_path FROM CURRENT AS
 $$
 BEGIN
     IF EXISTS (SELECT 1 FROM dai_change_proposal p WHERE p.id = NEW.proposal_id AND p.owner_id = NEW.approver_id) THEN

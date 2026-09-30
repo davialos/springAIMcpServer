@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.core.catalog.CatalogElementRef;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import org.jspecify.annotations.NullMarked;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -203,7 +204,8 @@ public final class DispatchingBackingExecutor implements GenericDynamicHandler.B
             AgentDefinitionResolver resolver) {
         return (agentId, renderedInput, principal, authentication) -> {
             AgentInvoker.AgentChatRequest request =
-                    new AgentInvoker.AgentChatRequest(null, renderedInput, UUID.randomUUID().toString());
+                    new AgentInvoker.AgentChatRequest(null, renderedInput, UUID.randomUUID().toString(), null,
+                            com.springaimcpservercommon.core.invocation.Channel.ENDPOINT);
             com.springaimcpservercommon.ai.agent.AgentDefinition def = resolver.resolve(agentId);
             if (def == null) {
                 throw new GenericDynamicHandler.BackingException(
@@ -222,8 +224,7 @@ public final class DispatchingBackingExecutor implements GenericDynamicHandler.B
     /** Port: resolves an {@link com.springaimcpservercommon.ai.agent.AgentDefinition} by id. */
     @FunctionalInterface
     public interface AgentDefinitionResolver {
-        @org.jspecify.annotations.Nullable
-        com.springaimcpservercommon.ai.agent.AgentDefinition resolve(UUID agentId);
+        com.springaimcpservercommon.ai.agent.@org.jspecify.annotations.Nullable AgentDefinition resolve(UUID agentId);
     }
 
     private static String syncResultToJson(AgentInvoker.SyncChatResult result) {

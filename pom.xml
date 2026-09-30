@@ -42,9 +42,9 @@
         <spring-ai.version>2.0.1</spring-ai.version>
 
         <!-- Not managed by the Boot BOM -->
-        <jspecify.version>1.0.0</jspecify.version>
+        <jspecify.version>1.0.1</jspecify.version>
         <archunit.version>1.4.1</archunit.version>
-        <networknt-json-schema.version>1.4.3</networknt-json-schema.version>
+        <networknt-json-schema.version>3.0.1</networknt-json-schema.version>
 
         <!-- Plugins -->
         <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
@@ -179,6 +179,8 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                     <configuration>
+                        <!-- Mockito's inline mock maker attaches an agent at runtime; JDK 21+ warns unless allowed -->
+                        <argLine>-XX:+EnableDynamicAgentLoading</argLine>
                         <excludes>
                             <exclude>**/*IT.java</exclude>
                         </excludes>

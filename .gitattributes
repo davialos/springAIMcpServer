@@ -3,3 +3,7 @@
 *.bat text eol=crlf
 *.jar binary
 *.png binary
+
+# Vendored Maven repository (see docs/offline-build.md): keep bytes exactly as resolved
+offline-repo/** -text
+offline-repo/**/*.jar binary

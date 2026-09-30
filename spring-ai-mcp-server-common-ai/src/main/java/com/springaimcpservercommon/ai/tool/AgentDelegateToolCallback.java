@@ -1,8 +1,8 @@
 package com.springaimcpservercommon.ai.tool;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker.AgentChatRequest;
@@ -15,7 +15,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.context.ToolContext;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.security.core.Authentication;
@@ -40,7 +40,7 @@ import java.util.Objects;
 final class AgentDelegateToolCallback implements ToolCallback {
 
     private static final Logger LOG = LoggerFactory.getLogger(AgentDelegateToolCallback.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final JsonMapper MAPPER = JsonMapper.builder().build();
     private static final String MESSAGE_PARAM = "message";
     private static final String INPUT_SCHEMA =
             "{\"type\":\"object\"," +
@@ -148,7 +148,7 @@ final class AgentDelegateToolCallback implements ToolCallback {
             if (!node.isMissingNode() && node.isTextual()) {
                 return node.asText();
             }
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             LOG.debug("Sub-agent tool input is not JSON; forwarding raw input");
         }
         return toolInput;

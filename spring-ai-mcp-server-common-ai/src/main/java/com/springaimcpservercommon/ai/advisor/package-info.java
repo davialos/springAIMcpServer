@@ -1,5 +1,5 @@
 /**
- * Spring AI {@code CallAroundAdvisor} implementations for agent invocation governance (LLD-06 §4).
+ * Spring AI {@code CallAdvisor} implementations for agent invocation governance (LLD-06 §4).
  *
  * <ul>
  *   <li>{@link com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor} — kill switch, input

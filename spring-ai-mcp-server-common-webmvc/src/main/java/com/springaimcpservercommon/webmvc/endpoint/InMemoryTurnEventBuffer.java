@@ -70,8 +70,11 @@ public final class InMemoryTurnEventBuffer implements TurnEventBuffer, AutoClose
     }
 
     @Override
-    public void append(UUID turnId, int seq, StreamEvent event) {
-        TurnSlot slot = slots.computeIfAbsent(turnId, k -> new TurnSlot());
+    public void append(UUID turnId, UUID ownerId, int seq, StreamEvent event) {
+        TurnSlot slot = slots.computeIfAbsent(turnId, k -> new TurnSlot(ownerId));
+        if (!slot.ownerId.equals(ownerId)) {
+            throw new IllegalArgumentException("turn " + turnId + " belongs to another principal");
+        }
         synchronized (slot) {
             if (slot.events.size() >= maxEventsPerTurn) {
                 slot.events.remove(0); // drop oldest to make room
@@ -81,9 +84,9 @@ public final class InMemoryTurnEventBuffer implements TurnEventBuffer, AutoClose
     }
 
     @Override
-    public @Nullable List<BufferedEvent> since(UUID turnId, int afterSeq) {
+    public @Nullable List<BufferedEvent> since(UUID turnId, UUID ownerId, int afterSeq) {
         TurnSlot slot = slots.get(turnId);
-        if (slot == null) return null;
+        if (slot == null || !slot.ownerId.equals(ownerId)) return null;
         if (isExpired(slot)) {
             slots.remove(turnId, slot);
             return null;
@@ -135,7 +138,13 @@ public final class InMemoryTurnEventBuffer implements TurnEventBuffer, AutoClose
     }
 
     private static final class TurnSlot {
+        final UUID ownerId;
         final List<BufferedEvent> events = new ArrayList<>();
+
+        TurnSlot(UUID ownerId) {
+            this.ownerId = ownerId;
+        }
+
         volatile boolean complete;
         volatile long completedAtNanos = -1;
     }

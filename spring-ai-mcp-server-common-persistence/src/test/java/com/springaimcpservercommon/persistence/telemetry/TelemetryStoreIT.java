@@ -111,6 +111,80 @@ class TelemetryStoreIT {
     }
 
     @Test
+    void traceQueriesFilterAndAggregate() {
+        Instant start = Instant.now();
+        String trace = "trace-" + UUID.randomUUID();
+        UUID okTurn = Ids.newId();
+        UUID failedTurn = Ids.newId();
+        telemetry.recordTurn(new NewAgentTurn(okTurn, start, start.plusMillis(500), null, workspace, null, null,
+                principal, Channel.CHAT, trace, null, TurnFinishReason.STOP, TurnOutcome.SUCCESS, null, null));
+        telemetry.recordTurn(new NewAgentTurn(failedTurn, start, start.plusMillis(500), null, workspace, null, null,
+                principal, Channel.PLAYGROUND, null, null, TurnFinishReason.ERROR, TurnOutcome.FAILED, "boom", null));
+        CatalogElementRef ref = CatalogElementRef.parse("op:com.acme.OrderService#find(java.lang.Long)");
+        telemetry.recordToolInvocation(new NewToolInvocation(Ids.newId(), start, start.plusMillis(100), Channel.CHAT,
+                okTurn, null, null, null, workspace, principal, "trace_tool_a", ref, null, ToolAccessMode.READ,
+                Sha256.of("1"), null, ToolInvocationStatus.OK, 1, Sha256.of("r"), false, null, false, null));
+        telemetry.recordToolInvocation(new NewToolInvocation(Ids.newId(), start, start.plusMillis(300), Channel.CHAT,
+                okTurn, null, null, null, workspace, principal, "trace_tool_a", ref, null, ToolAccessMode.READ,
+                Sha256.of("2"), null, ToolInvocationStatus.OK, 1, Sha256.of("r"), false, null, false, null));
+        telemetry.recordToolInvocation(new NewToolInvocation(Ids.newId(), start, start.plusMillis(50),
+                Channel.PLAYGROUND, failedTurn, null, null, null, workspace, principal, "trace_tool_b", ref, null,
+                ToolAccessMode.READ, Sha256.of("3"), null, ToolInvocationStatus.ERROR, null, null, false,
+                "write_violation", true, null));
+        telemetry.recordMcpRequest(new NewMcpRequest(Ids.newId(), start, start.plusMillis(5), null, null, principal,
+                workspace, "tools/call", "1", "trace_tool_a", McpRequestStatus.OK, null, null));
+        telemetry.recordMcpRequest(new NewMcpRequest(Ids.newId(), start, start.plusMillis(5), null, null, principal,
+                workspace, "ping", "2", null, McpRequestStatus.ERROR, "internal_error", null));
+        UUID tracedRequest = Ids.newId();
+        telemetry.recordMcpRequest(new NewMcpRequest(tracedRequest, start, start.plusMillis(5), null, null, principal,
+                workspace, "prompts/get", "3", null, McpRequestStatus.OK, null, trace));
+
+        TimeRange range = TimeRange.lastUntil(start.plusSeconds(60), Duration.ofHours(1));
+        PageRequest page = PageRequest.first(50);
+
+        assertThat(telemetry.turnsOfWorkspace(workspace, range,
+                new TurnFilter(null, null, TurnOutcome.FAILED, null), page).items())
+                .extracting(AgentTurn::getId).contains(failedTurn).doesNotContain(okTurn);
+        assertThat(telemetry.turnsOfWorkspace(workspace, range,
+                new TurnFilter(principal, null, null, Channel.CHAT), page).items())
+                .extracting(AgentTurn::getId).contains(okTurn).doesNotContain(failedTurn);
+        assertThat(telemetry.turnsOfWorkspace(workspace, range,
+                new TurnFilter(UUID.randomUUID(), null, null, null), page).items()).isEmpty();
+        assertThat(telemetry.turnsOfTrace(trace, range)).extracting(AgentTurn::getId).containsExactly(okTurn);
+        assertThat(telemetry.mcpRequestsOfTrace(trace, range)).extracting(McpRequest::getId)
+                .containsExactly(tracedRequest);
+
+        assertThat(telemetry.toolInvocationsOfWorkspace(workspace, range,
+                new ToolInvocationFilter("trace_tool_a", null, null, false, false), page).items()).hasSize(2);
+        assertThat(telemetry.toolInvocationsOfWorkspace(workspace, range,
+                new ToolInvocationFilter(null, ToolInvocationStatus.ERROR, null, false, false), page).items())
+                .extracting(ToolInvocation::getToolName).contains("trace_tool_b").doesNotContain("trace_tool_a");
+        assertThat(telemetry.toolInvocationsOfWorkspace(workspace, range,
+                new ToolInvocationFilter(null, null, null, true, false), page).items())
+                .extracting(ToolInvocation::getToolName).contains("trace_tool_b");
+        assertThat(telemetry.toolInvocationsOfWorkspace(workspace, range,
+                new ToolInvocationFilter("trace_tool_a", null, null, false, true), page).items()).isEmpty();
+
+        List<ToolStat> stats = telemetry.toolStats(workspace, range, 100);
+        assertThat(stats).filteredOn(t -> t.toolName().equals("trace_tool_a")).singleElement().satisfies(t -> {
+            assertThat(t.calls()).isEqualTo(2);
+            assertThat(t.errors()).isZero();
+            assertThat(t.avgMillis()).isBetween(199.0, 201.0);
+            assertThat(t.maxMillis()).isBetween(299.0, 301.0);
+        });
+        assertThat(stats).filteredOn(t -> t.toolName().equals("trace_tool_b")).singleElement().satisfies(t -> {
+            assertThat(t.errors()).isEqualTo(1);
+            assertThat(t.writeViolations()).isEqualTo(1);
+        });
+
+        assertThat(telemetry.mcpRequestsOfWorkspace(workspace, range,
+                new McpRequestFilter("tools/call", "trace_tool_a", null, null), page).items()).hasSize(1);
+        assertThat(telemetry.mcpRequestsOfWorkspace(workspace, range,
+                new McpRequestFilter(null, null, McpRequestStatus.ERROR, null), page).items())
+                .extracting(McpRequest::getJsonrpcMethod).contains("ping");
+    }
+
+    @Test
     void conversationMemoryAppendReplaceAndErase() {
         String key = Sha256.of("conversation-" + UUID.randomUUID());
         NewConversation data = new NewConversation(key, workspace, null, principal, Channel.CHAT, "Orders",
@@ -141,6 +215,46 @@ class TelemetryStoreIT {
         assertThatThrownBy(() -> telemetry.appendMessage(conversation.getId(),
                 new NewMessage(MessageRole.USER, "again", false, null, null, null)))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void anEraseKeptForAuditHidesTheConversationButKeepsItsMessagesUntilTheHoldEnds() {
+        String key = Sha256.of("audit-" + UUID.randomUUID());
+        Conversation conversation = telemetry.openConversation(new NewConversation(key, workspace, null, principal,
+                Channel.CHAT, "Refund question", Duration.ofDays(30)));
+        telemetry.appendMessage(conversation.getId(), new NewMessage(MessageRole.USER, "refund?", false, null, null, 1));
+
+        assertThat(telemetry.eraseConversationKeepingForAudit(conversation.getId(), Duration.ofDays(90))).isTrue();
+        assertThat(telemetry.eraseConversationKeepingForAudit(conversation.getId(), Duration.ofDays(90))).isFalse();
+
+        Conversation held = telemetry.findConversation(key).orElseThrow();
+        assertThat(held.getStatus()).isEqualTo(ConversationStatus.ERASED);
+        assertThat(held.getErasedAt()).isNotNull();
+        assertThat(held.getAuditHoldUntil()).isEqualTo(held.getRetentionUntil()).isAfter(held.getErasedAt());
+        assertThat(held.getTitle()).isEqualTo("Refund question");
+        assertThat(telemetry.messages(conversation.getId(), 10)).extracting(ConversationMessage::getContent)
+                .containsExactly("refund?");
+        assertThatThrownBy(() -> telemetry.appendMessage(conversation.getId(),
+                new NewMessage(MessageRole.USER, "again", false, null, null, null)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(telemetry.conversationsOfWorkspace(workspace, ConversationStatus.ERASED, principal,
+                PageRequest.first(500)).items()).extracting(Conversation::getId).contains(conversation.getId());
+
+        assertThat(telemetry.purgeConversation(conversation.getId())).isTrue();
+        assertThat(telemetry.findConversation(key)).isEmpty();
+        assertThat(telemetry.messages(conversation.getId(), 10)).isEmpty();
+        assertThat(telemetry.purgeConversation(conversation.getId())).isFalse();
+    }
+
+    @Test
+    void theDatabaseRefusesAnAuditHoldOnAConversationThatIsNotErased() {
+        Conversation conversation = telemetry.openConversation(new NewConversation(
+                Sha256.of("hold-" + UUID.randomUUID()), workspace, null, principal, Channel.CHAT, null,
+                Duration.ofDays(1)));
+        assertThatThrownBy(() -> PostgresTestSupport.jdbc().update("UPDATE " + unit.schema()
+                + ".dai_conversation SET audit_hold_until = now() + interval '1 day' WHERE id = ?",
+                conversation.getId()))
+                .hasStackTraceContaining("ck_conversation_audit_hold");
     }
 
     @Test

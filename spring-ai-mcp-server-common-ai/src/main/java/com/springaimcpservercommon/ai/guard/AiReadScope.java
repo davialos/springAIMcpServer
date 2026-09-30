@@ -31,7 +31,10 @@ public final class AiReadScope {
      * @throws Exception any exception thrown by {@code task}
      */
     public static void runScoped(CheckedRunnable task) throws Exception {
-        ScopedValue.runWhere(FLAG, Boolean.TRUE, task::run);
+        ScopedValue.where(FLAG, Boolean.TRUE).call(() -> {
+            task.run();
+            return null;
+        });
     }
 
     /**
@@ -43,7 +46,7 @@ public final class AiReadScope {
      * @throws Exception any exception thrown by {@code task}
      */
     public static <T> T callScoped(CheckedCallable<T> task) throws Exception {
-        return ScopedValue.callWhere(FLAG, Boolean.TRUE, task::call);
+        return ScopedValue.where(FLAG, Boolean.TRUE).call(task::call);
     }
 
     /** A {@link Runnable} that may throw a checked exception. */

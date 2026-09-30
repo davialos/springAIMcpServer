@@ -3,6 +3,7 @@ package com.springaimcpservercommon.autoconfigure;
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
 import com.springaimcpservercommon.core.catalog.EntityCatalogSource;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
+import com.springaimcpservercommon.core.catalog.ScanIssue;
 import com.springaimcpservercommon.core.catalog.ScannedCatalog;
 import com.springaimcpservercommon.core.catalog.SwappableMetadataRegistry;
 import com.springaimcpservercommon.core.environment.DefaultEnvironmentSafetyPolicy;
@@ -37,6 +38,8 @@ import java.util.Map;
  * {@link ConditionalOnMissingBean} — host applications and test configurations may replace any of them.
  */
 @AutoConfiguration
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(DaiProperties.class)
 @NullMarked
 public class DaiCoreAutoConfiguration {
@@ -137,13 +140,18 @@ public class DaiCoreAutoConfiguration {
                     JsonSchemaMapper.Options.defaults(), TextLint.defaults(), null);
             SpringBeanOperationScanner scanner = new SpringBeanOperationScanner(options, Clock.systemUTC());
             ScannedCatalog scanned = scanner.scan(beanFactory, entitySources);
-            long errors = scanned.issues().stream().filter(i -> i.error()).count();
+            long errors = scanned.issues().stream().filter(i -> i.severity() == ScanIssue.Severity.ERROR).count();
             if (errors > 0) {
                 log.warn("AI catalog scan completed with {} error(s); affected elements excluded", errors);
             }
             PolicyMerger merger = new PolicyMerger(PolicyMerger.DEFAULT_GLOBAL_MAX_LIMIT, scanProps.strict());
             EffectiveCatalog effective = merger.merge(scanned, List.of(), 1L);
-            metadataRegistry.publish(effective);
+            if (metadataRegistry instanceof SwappableMetadataRegistry swappable) {
+                swappable.publish(effective);
+            } else {
+                log.warn("Custom MetadataRegistry in use; the bootstrap catalog was not published into it");
+                return;
+            }
             log.info("AI catalog bootstrap published generation 1: {} entities, {} operations",
                     effective.entities().size(), effective.operations().size());
         };

@@ -8,16 +8,22 @@ import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.MemorySpec;
 import com.springaimcpservercommon.ai.agent.OutputSpec;
+import com.springaimcpservercommon.ai.agent.ModelSelection;
 import com.springaimcpservercommon.ai.model.ModelRouter;
+import com.springaimcpservercommon.ai.model.ResolvedModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.ai.tool.ToolCallScope;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
@@ -33,6 +39,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.Instant;
+import java.time.Duration;
+import java.time.Clock;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -58,6 +68,16 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultAgentInvoker.class);
     private static final int MEMORY_ORDER = Ordered.HIGHEST_PRECEDENCE + 201;
+    /** Cap on the answer text kept in memory for a streamed turn that is being recorded. */
+    private static final int MAX_RECORDED_ANSWER_CHARS = 200_000;
+    /**
+     * Reactor-context key under which Micrometer and Spring AI look up the parent observation
+     * ({@code ObservationThreadLocalAccessor.KEY}; written as a literal so the ai module needs no compile dependency
+     * on context-propagation).
+     */
+    static final String OBSERVATION_CONTEXT_KEY = "micrometer.observation";
+    /** Largest structured answer held back for validation on a stream; more fails the turn. */
+    private static final int MAX_STRUCTURED_ANSWER_CHARS = 1_000_000;
 
     private final ModelRouter modelRouter;
     private final @Nullable ToolBridge toolBridge;
@@ -65,6 +85,9 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker;
     private final InvocationGuardAdvisor.BudgetChecker budgetChecker;
     private final UsageMeteringAdvisor.UsageSink usageSink;
+    private final TurnRecorder turnRecorder;
+    private final ConversationRecorder conversationRecorder;
+    private final Clock clock = Clock.systemUTC();
     private final ObservationRegistry observationRegistry;
     private final ChatMemory chatMemory;
     private final @Nullable JsonSchemaValidationPort schemaValidator;
@@ -78,6 +101,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
      * @param killSwitchChecker    runtime kill-switch check
      * @param budgetChecker        token-budget pre-check
      * @param usageSink            token usage accounting
+     * @param turnRecorder         receives one record per finished turn (trace viewer, F-72)
+     * @param conversationRecorder receives the user message and answer of each successful turn (F-44)
      * @param observationRegistry  Micrometer observation registry
      * @param chatMemory           conversation history store
      * @param schemaValidator      optional JSON Schema conformance validator (Level 2);
@@ -89,6 +114,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
                                 InvocationGuardAdvisor.BudgetChecker budgetChecker,
                                 UsageMeteringAdvisor.UsageSink usageSink,
+                                TurnRecorder turnRecorder,
+                                ConversationRecorder conversationRecorder,
                                 ObservationRegistry observationRegistry,
                                 ChatMemory chatMemory,
                                 @Nullable JsonSchemaValidationPort schemaValidator) {
@@ -98,6 +125,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         this.killSwitchChecker = Objects.requireNonNull(killSwitchChecker, "killSwitchChecker");
         this.budgetChecker = Objects.requireNonNull(budgetChecker, "budgetChecker");
         this.usageSink = Objects.requireNonNull(usageSink, "usageSink");
+        this.turnRecorder = Objects.requireNonNull(turnRecorder, "turnRecorder");
+        this.conversationRecorder = Objects.requireNonNull(conversationRecorder, "conversationRecorder");
         this.observationRegistry = Objects.requireNonNull(observationRegistry, "observationRegistry");
         this.chatMemory = Objects.requireNonNull(chatMemory, "chatMemory");
         this.schemaValidator = schemaValidator;
@@ -109,8 +138,14 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     public SyncChatResult invoke(AgentDefinition agent, AgentChatRequest request,
                                   DaiPrincipal principal, Authentication authentication) {
         UUID conversationId = request.conversationId() != null ? request.conversationId() : Ids.newId();
-        UUID turnId = Ids.newId();
+        UUID turnId = request.turnId() != null ? request.turnId() : Ids.newId();
+        UUID modelCallId = Ids.newId();
         LOG.debug("Agent {} sync turn {} for principal {}", agent.slug(), turnId, principal.principalId());
+        Instant startedAt = clock.instant();
+        Observation turnObservation = startTurnObservation(agent, request, turnId, modelCallId, false);
+        // open for the whole synchronous turn so spans below it (model call, tools, queries) nest under it
+        Observation.Scope turnScope = turnObservation.openScope();
+        String traceId = currentTraceId();
 
         try {
             if (!budgetChecker.hasRemainingBudget(agent, principal)) {
@@ -119,14 +154,15 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 throw new AgentInvocationException("budget-exhausted",
                         "The usage budget for this agent is exhausted for the current period.", false);
             }
-            ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
-            ChatClient client = buildChatClient(agent, principal, chatModel);
+            ResolvedModel resolved = modelRouter.resolveModel(agent.model(), principal);
+            ChatModel chatModel = resolved.model();
+            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
+            ChatClient client = buildChatClient(agent, principal, resolved);
             String convKey = convKey(principal, agent, conversationId);
 
             ChatResponse response = client.prompt()
                     .user(request.message())
-                    .tools(callbacks.toArray(new ToolCallback[0]))
+                    .toolCallbacks(callbacks)
                     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
                     .call()
                     .chatResponse();
@@ -135,13 +171,26 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 throw new AgentInvocationException("empty-response",
                         "Agent returned no response.", true);
             }
-            return mapSyncResult(response, conversationId, turnId);
+            SyncChatResult result = mapSyncResult(response, conversationId, turnId);
+            recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
+                    TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, null,
+                    result.usage().inputTokens(), result.usage().outputTokens());
+            recordExchange(agent, request, principal, turnId, conversationId, startedAt, result.message());
+            return result;
         } catch (AgentInvocationException e) {
+            boolean budget = "budget-exhausted".equals(e.code());
+            recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
+                    budget ? TurnRecorder.Outcome.REJECTED : TurnRecorder.Outcome.FAILED,
+                    budget ? TurnRecorder.Finish.BUDGET : TurnRecorder.Finish.ERROR, e.code(), null, 0, 0);
             throw e;
         } catch (Exception e) {
             LOG.error("Agent {} sync turn {} failed for principal {}",
                     agent.slug(), turnId, principal.principalId(), e);
+            recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
+                    TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, "execution-error", null, 0, 0);
             throw new AgentInvocationException("execution-error", "Agent invocation failed.", true);
+        } finally {
+            turnScope.close();
         }
     }
 
@@ -151,40 +200,121 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     public Flux<StreamEvent> stream(AgentDefinition agent, AgentChatRequest request,
                                      DaiPrincipal principal, Authentication authentication) {
         UUID conversationId = request.conversationId() != null ? request.conversationId() : Ids.newId();
-        UUID turnId = Ids.newId();
+        UUID turnId = request.turnId() != null ? request.turnId() : Ids.newId();
+        UUID modelCallId = Ids.newId();
 
         return Flux.defer(() -> {
             LOG.debug("Agent {} stream turn {} for principal {}",
                     agent.slug(), turnId, principal.principalId());
+            Instant startedAt = clock.instant();
+            Observation turnObservation = startTurnObservation(agent, request, turnId, modelCallId, true);
+            String traceId;
+            try (Observation.Scope ignored = turnObservation.openScope()) {
+                traceId = currentTraceId();
+            }
             try {
+                // Streamed turns skip the call-advisor chain, so the input checks run here (LLD-06 §4)
+                var violation = new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker)
+                        .checkInput(request.message());
+                if (violation.isPresent()) {
+                    String code = violation.get().code().replace('_', '-');
+                    LOG.info("Agent {} stream turn {} rejected by guard ({})", agent.slug(), turnId, code);
+                    recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                            TurnRecorder.Outcome.REJECTED, TurnRecorder.Finish.ERROR, code, null, 0, 0);
+                    return Flux.just(new StreamEvent.ErrorEvent(
+                            "/errors/agent/" + code, violation.get().message(), code, false, turnId));
+                }
                 if (!budgetChecker.hasRemainingBudget(agent, principal)) {
                     LOG.warn("Agent {} budget exhausted for principal {}; stream turn {} rejected",
                             agent.slug(), principal.principalId(), turnId);
+                    recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                            TurnRecorder.Outcome.REJECTED, TurnRecorder.Finish.BUDGET, "budget-exhausted",
+                            null, 0, 0);
                     return Flux.just(new StreamEvent.ErrorEvent(
                             "/errors/agent/budget-exhausted", "Usage limit reached",
                             "budget-exhausted", false, turnId));
                 }
-                ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
-                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication);
-                ChatClient client = buildChatClient(agent, principal, chatModel);
+                ResolvedModel resolved = modelRouter.resolveModel(agent.model(), principal);
+                ChatModel chatModel = resolved.model();
+                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
+                ChatClient client = buildChatClient(agent, principal, resolved);
                 String convKey = convKey(principal, agent, conversationId);
 
                 AtomicInteger seq = new AtomicInteger(0);
                 AtomicReference<@Nullable ChatResponse> lastResponse = new AtomicReference<>();
+                AtomicReference<@Nullable Instant> firstText = new AtomicReference<>();
+                AtomicReference<@Nullable String> failure = new AtomicReference<>();
+                StringBuilder answer = new StringBuilder();
+                // JSON_SCHEMA agents: a partial document is not usable and cannot be validated, so the answer is held
+                // back, validated when the stream ends and then sent whole (or refused) (OQ-51)
+                boolean structured = agent.output().mode() == OutputSpec.Mode.JSON_SCHEMA;
+                StringBuilder held = new StringBuilder();
+                AtomicBoolean heldTooLarge = new AtomicBoolean(false);
 
                 Flux<StreamEvent> content = client.prompt()
                         .user(request.message())
-                        .tools(callbacks.toArray(new ToolCallback[0]))
+                        .toolCallbacks(callbacks)
                         .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
                         .stream()
                         .chatResponse()
+                        // A stream has no stable thread, so its span can't be current in a ThreadLocal. Spring AI's
+                        // stream path reads its parent from the Reactor context under this key instead (OQ-50).
+                        .contextWrite(ctx -> ctx.put(OBSERVATION_CONTEXT_KEY, turnObservation))
                         .timeout(agent.limits().turnTimeout())
                         .doOnNext(lastResponse::set)
-                        .flatMapIterable(r -> extractTextDeltas(r, seq));
+                        .flatMapIterable(r -> {
+                            List<StreamEvent> deltas = extractTextDeltas(r, seq);
+                            if (structured) {
+                                for (StreamEvent e : deltas) {
+                                    if (e instanceof StreamEvent.TextDelta d) {
+                                        firstText.compareAndSet(null, clock.instant());
+                                        if (held.length() + d.text().length() > MAX_STRUCTURED_ANSWER_CHARS) {
+                                            heldTooLarge.set(true);
+                                        } else {
+                                            held.append(d.text());
+                                        }
+                                    }
+                                }
+                                return List.<StreamEvent>of();
+                            }
+                            if (!deltas.isEmpty()) {
+                                firstText.compareAndSet(null, clock.instant());
+                                for (StreamEvent e : deltas) {
+                                    if (e instanceof StreamEvent.TextDelta d) {
+                                        synchronized (answer) {
+                                            if (answer.length() < MAX_RECORDED_ANSWER_CHARS) {
+                                                answer.append(d.text());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return deltas;
+                        });
 
                 Flux<StreamEvent> ending = Flux.defer(() -> {
                     ChatResponse last = lastResponse.get();
                     recordStreamUsage(agent, principal, last);
+                    if (structured) {
+                        String text = held.toString();
+                        var failed = heldTooLarge.get()
+                                ? java.util.Optional.of(new StructuredOutputValidationAdvisor.Failure(
+                                        "output_too_large", "The agent response is too large."))
+                                : new StructuredOutputValidationAdvisor(agent.output(), schemaValidator).check(text);
+                        if (failed.isPresent()) {
+                            String code = failed.get().code().replace('_', '-');
+                            failure.set(code);
+                            return Flux.just(new StreamEvent.ErrorEvent("/errors/agent/" + code,
+                                    failed.get().message(), code, false, turnId));
+                        }
+                        synchronized (answer) {
+                            answer.append(text, 0, Math.min(text.length(), MAX_RECORDED_ANSWER_CHARS));
+                        }
+                        List<StreamEvent> events = new ArrayList<>();
+                        events.add(new StreamEvent.TextDelta(seq.incrementAndGet(), text));
+                        events.addAll(buildEndingEvents(last, agent, turnId));
+                        return Flux.fromIterable(events);
+                    }
                     return Flux.fromIterable(buildEndingEvents(last, agent, turnId));
                 });
 
@@ -192,6 +322,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         turnId, conversationId, agent.slug(), agent.revision(),
                         StreamEvent.TurnStart.PROTOCOL);
 
+                AtomicBoolean recorded = new AtomicBoolean(false);
                 return Flux.concat(
                         Flux.just(turnStart),
                         content.concatWith(ending)
@@ -199,13 +330,43 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                     LOG.error("Agent {} stream error for principal {}",
                             agent.slug(), principal.principalId(), e);
                     String code = errorCode(e);
+                    failure.set(code);
                     return Flux.just(new StreamEvent.ErrorEvent(
                             "/errors/agent/" + code, "Agent stream error",
                             code, isRetryable(e), turnId));
+                }).doFinally(signal -> {
+                    if (!recorded.compareAndSet(false, true)) {
+                        return;
+                    }
+                    long[] usage = usageOf(lastResponse.get());
+                    Instant first = firstText.get();
+                    Integer ttft = first == null ? null : (int) Math.min(Integer.MAX_VALUE,
+                            Duration.between(startedAt, first).toMillis());
+                    String code = failure.get();
+                    if (signal == reactor.core.publisher.SignalType.CANCEL && code == null) {
+                        recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                                TurnRecorder.Outcome.CANCELLED, TurnRecorder.Finish.CANCELLED, "client-cancelled",
+                                ttft, usage[0], usage[1]);
+                    } else if (code != null) {
+                        recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                                TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, code, ttft,
+                                usage[0], usage[1]);
+                    } else {
+                        recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                                TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, ttft,
+                                usage[0], usage[1]);
+                        String text;
+                        synchronized (answer) {
+                            text = answer.toString();
+                        }
+                        recordExchange(agent, request, principal, turnId, conversationId, startedAt, text);
+                    }
                 });
             } catch (Exception e) {
                 LOG.error("Agent {} stream setup failed for principal {}",
                         agent.slug(), principal.principalId(), e);
+                recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                        TurnRecorder.Outcome.FAILED, TurnRecorder.Finish.ERROR, "stream-error", null, 0, 0);
                 return Flux.just(new StreamEvent.ErrorEvent(
                         "/errors/agent/stream-error", "Stream setup failed",
                         "stream-error", true, turnId));
@@ -213,9 +374,97 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         });
     }
 
+    // ─── Tracing ──────────────────────────────────────────────────────────────
+
+    /**
+     * Starts the {@code dai.agent.turn} span (meter {@code dynamic.ai.agent.turn}, LLD-10 §3): agent, channel and
+     * streaming as tags, turn and model call ids as high-cardinality attributes so a trace can be followed to the
+     * store rows. No prompt, answer or tool content is attached.
+     */
+    private Observation startTurnObservation(AgentDefinition agent, AgentChatRequest request, UUID turnId,
+                                             UUID modelCallId, boolean streaming) {
+        return Observation.createNotStarted("dynamic.ai.agent.turn", observationRegistry)
+                .contextualName("dai.agent.turn")
+                .lowCardinalityKeyValue("dai.agent.slug", agent.slug())
+                .lowCardinalityKeyValue("dai.channel", request.effectiveChannel().name())
+                .lowCardinalityKeyValue("dai.streaming", String.valueOf(streaming))
+                .highCardinalityKeyValue("dai.agent.revision", Integer.toString(agent.revision()))
+                .highCardinalityKeyValue("dai.turn.id", turnId.toString())
+                .highCardinalityKeyValue("dai.model_call.id", modelCallId.toString())
+                .start();
+    }
+
+    /** Ends the turn span with the outcome; failures mark it as an error so tracing backends flag it. */
+    private static void finishTurnObservation(@Nullable Observation observation, TurnRecorder.Outcome outcome,
+                                              TurnRecorder.Finish finish, @Nullable String errorCode,
+                                              long inputTokens, long outputTokens) {
+        if (observation == null) {
+            return;
+        }
+        observation.lowCardinalityKeyValue("dai.turn.outcome", outcome.name());
+        observation.lowCardinalityKeyValue("dai.turn.finish", finish.name());
+        if (errorCode != null) {
+            observation.lowCardinalityKeyValue("dai.turn.error_code", errorCode);
+        }
+        observation.highCardinalityKeyValue("dai.tokens.input", Long.toString(inputTokens));
+        observation.highCardinalityKeyValue("dai.tokens.output", Long.toString(outputTokens));
+        if (outcome == TurnRecorder.Outcome.FAILED) {
+            observation.error(new IllegalStateException(errorCode == null ? "turn failed" : errorCode));
+        }
+        observation.stop();
+    }
+
+    // ─── Turn recording ───────────────────────────────────────────────────────
+
+    /** Hands a finished turn to the recorder; whatever the recorder does never affects the turn. */
+    private void recordTurn(AgentDefinition agent, AgentChatRequest request, DaiPrincipal principal, UUID turnId,
+                            UUID modelCallId, @Nullable Observation turnObservation, UUID conversationId, Instant startedAt, @Nullable String traceId, boolean streaming,
+                            TurnRecorder.Outcome outcome, TurnRecorder.Finish finish, @Nullable String errorCode,
+                            @Nullable Integer timeToFirstTokenMs, long inputTokens, long outputTokens) {
+        finishTurnObservation(turnObservation, outcome, finish, errorCode, inputTokens, outputTokens);
+        try {
+            turnRecorder.record(new TurnRecorder.TurnRecord(turnId, startedAt, clock.instant(), conversationId,
+                    agent, principal, request.effectiveChannel(), traceId, request.clientRequestId(), outcome,
+                    finish, errorCode, timeToFirstTokenMs, streaming, inputTokens, outputTokens, modelCallId));
+        } catch (RuntimeException e) {
+            LOG.warn("Turn recording failed for agent {} turn {}; the turn is unaffected", agent.slug(), turnId, e);
+        }
+    }
+
+    /** Hands the message pair of a successful turn to the conversation recorder (never affects the turn). */
+    private void recordExchange(AgentDefinition agent, AgentChatRequest request, DaiPrincipal principal, UUID turnId,
+                                UUID conversationId, Instant startedAt, String answer) {
+        if (answer.isBlank() || request.message().isBlank()) {
+            return;
+        }
+        try {
+            conversationRecorder.record(new ConversationRecorder.Exchange(conversationId, turnId, agent, principal,
+                    request.effectiveChannel(), request.message(), answer, startedAt));
+        } catch (RuntimeException e) {
+            LOG.warn("Conversation recording failed for agent {} turn {}; the turn is unaffected",
+                    agent.slug(), turnId, e);
+        }
+    }
+
+    /** The active trace id from the logging context (set by Micrometer Tracing), if it looks like one. */
+    private static @Nullable String currentTraceId() {
+        String id = MDC.get("traceId");
+        return id != null && id.matches("[0-9a-fA-F]{16,32}") ? id : null;
+    }
+
+    private static long[] usageOf(@Nullable ChatResponse response) {
+        if (response == null || response.getMetadata() == null || response.getMetadata().getUsage() == null) {
+            return new long[] {0L, 0L};
+        }
+        var u = response.getMetadata().getUsage();
+        return new long[] {u.getPromptTokens() != null ? u.getPromptTokens() : 0L,
+                u.getCompletionTokens() != null ? u.getCompletionTokens() : 0L};
+    }
+
     // ─── ChatClient assembly ──────────────────────────────────────────────────
 
-    private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ChatModel chatModel) {
+    private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ResolvedModel resolved) {
+        ChatModel chatModel = resolved.model();
         List<Advisor> advisors = new ArrayList<>();
         advisors.add(new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker));
         if (agent.memory().strategy() == MemorySpec.Strategy.SUMMARY) {
@@ -231,26 +480,43 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         }
         advisors.add(new UsageMeteringAdvisor(agent, principal, usageSink, observationRegistry));
 
-        ChatClient.Builder builder = ChatClient.builder(chatModel)
+        // With the host's registry Spring AI emits its own client/advisor spans, nested under dai.agent.turn
+        ChatClient.Builder builder = ChatClient.builder(chatModel, observationRegistry, null, null)
                 .defaultSystem(agent.systemPrompt())
+                .defaultOptions(chatOptions(resolved.selection()))
                 .defaultAdvisors(advisors);
         return builder.build();
+    }
+
+    /** The per-agent request options of the selection that resolved: model name, temperature, token limit (OQ-47). */
+    static ChatOptions.Builder<?> chatOptions(ModelSelection selection) {
+        ChatOptions.Builder<?> options = ChatOptions.builder().model(selection.modelName());
+        if (selection.temperature() != null) {
+            options.temperature(selection.temperature());
+        }
+        if (selection.maxTokens() != null) {
+            options.maxTokens(selection.maxTokens());
+        }
+        return options;
     }
 
     // ─── Tool callbacks ───────────────────────────────────────────────────────
 
     private List<ToolCallback> buildToolCallbacks(AgentDefinition agent, DaiPrincipal principal,
-                                                    Authentication authentication) {
+                                                    Authentication authentication, AgentChatRequest request,
+                                                    UUID turnId, UUID modelCallId,
+                                                    Observation turnObservation) {
         if (toolBridge == null || agent.tools().isEmpty()) {
             return List.of();
         }
-        return toolBridge.buildCallbacks(agent, principal, authentication, metadataRegistry.current());
+        return toolBridge.buildCallbacks(agent, principal, authentication, metadataRegistry.current(),
+                ToolCallScope.ofTurn(request.effectiveChannel(), turnId, modelCallId, turnObservation));
     }
 
     // ─── Conversation key ─────────────────────────────────────────────────────
 
     private static String convKey(DaiPrincipal principal, AgentDefinition agent, UUID conversationId) {
-        return agent.workspaceId() + ":" + agent.id() + ":" + principal.principalId() + ":" + conversationId;
+        return ConversationKeys.memoryKey(agent.workspaceId(), agent.id(), principal.principalId(), conversationId);
     }
 
     // ─── Response mapping ─────────────────────────────────────────────────────
@@ -267,7 +533,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
             var u = response.getMetadata().getUsage();
             if (u.getPromptTokens() != null) promptTokens = u.getPromptTokens();
-            if (u.getGenerationTokens() != null) completionTokens = u.getGenerationTokens();
+            if (u.getCompletionTokens() != null) completionTokens = u.getCompletionTokens();
         }
         return new SyncChatResult(conversationId, turnId, text,
                 List.of(), new UsageRecord(promptTokens, completionTokens));
@@ -287,7 +553,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         }
         var u = last.getMetadata().getUsage();
         long prompt = u.getPromptTokens() != null ? u.getPromptTokens() : 0L;
-        long completion = u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L;
+        long completion = u.getCompletionTokens() != null ? u.getCompletionTokens() : 0L;
         if (prompt + completion == 0) {
             return;
         }
@@ -305,7 +571,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         if (last != null && last.getMetadata() != null && last.getMetadata().getUsage() != null) {
             var u = last.getMetadata().getUsage();
             long prompt = u.getPromptTokens() != null ? u.getPromptTokens() : 0L;
-            long completion = u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L;
+            long completion = u.getCompletionTokens() != null ? u.getCompletionTokens() : 0L;
             events.add(new StreamEvent.UsageEvent(prompt, completion, 0L, agent.model().modelName()));
         }
         events.add(new StreamEvent.TurnEnd("stop", null));

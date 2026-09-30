@@ -48,4 +48,11 @@ public interface GrantSource {
             Objects.requireNonNull(permission, "permission");
         }
     }
+
+    /**
+     * Drops cached grants after grants changed on this node (other nodes see the change when their short-lived
+     * entries expire). The default does nothing (no cache).
+     */
+    default void invalidateAll() {
+    }
 }

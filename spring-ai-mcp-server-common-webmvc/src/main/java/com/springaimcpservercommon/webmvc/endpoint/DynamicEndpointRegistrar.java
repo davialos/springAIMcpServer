@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * route table via {@link #routeTable} are lock-free (AtomicReference).
  */
 @NullMarked
-public final class DynamicEndpointRegistrar {
+public final class DynamicEndpointRegistrar implements EndpointLookup {
 
     private static final Logger LOG = LoggerFactory.getLogger(DynamicEndpointRegistrar.class);
 
@@ -130,6 +130,7 @@ public final class DynamicEndpointRegistrar {
      * @param method   HTTP method string
      * @return the endpoint definition, or {@code null} if not found
      */
+    @Override
     public @Nullable EndpointDefinition lookup(String fullPath, String method) {
         DaiHttpMethod daiMethod;
         try {

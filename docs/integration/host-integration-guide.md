@@ -93,8 +93,23 @@ psql -h db.internal -U postgres -d dai_store \
      -f scripts/db/postgresql/02_create_schema_and_privileges.sql
 ```
 
-Then either let the application run its own migration at startup, or have a DBA run Flyway directly
-(`scripts/db/postgresql/README.md` "Two operating modes") before the first deployment.
+Then either let the application run its own migration at startup (`dynamic.ai.agent.store.migrate=true`, the
+default), or have a DBA run Flyway directly (`scripts/db/postgresql/README.md` "Two operating modes") before the
+first deployment and set `store.migrate=false`.
+
+By default the store uses the host's own `DataSource` (the one Spring Boot builds from `spring.datasource.*`). To
+put it on the dedicated database, declare the persistence unit yourself; the auto-configuration then backs off:
+
+```java
+@Bean(destroyMethod = "close")
+DaiPersistenceUnit daiPersistenceUnit(@Qualifier("daiDataSource") DataSource daiDataSource) {
+    return DaiPersistenceUnit.start(daiDataSource,
+            DaiPersistenceSettings.defaults("orders-api-prod-eu", "PROD"));   // environment id, tier
+}
+```
+
+`daiDataSource` is an ordinary pooled `DataSource` for `jdbc:postgresql://dai-db.internal:5432/dai_store` as the
+`dai_app` user. Mark your own primary `DataSource` `@Primary` so the rest of the host keeps using it.
 
 ### Option B — host's own database, own schema
 
@@ -115,175 +130,154 @@ objects inside `dynamic_ai` (CLAUDE.md namespace rules, ADR-0019).
 
 ## 4. `application.yml` examples
 
-### DEV — reuse the host's DataSource, app-run migrations
+Every property below exists in `DaiProperties` (`dynamic.ai.agent.*`); Spring ignores unknown keys silently, so
+copy names exactly. The whole library is on as soon as the starter is on the classpath
+(`dynamic.ai.agent.enabled`, default `true`); only the MCP endpoint and conversation recording are opt-in.
+
+### DEV — host's DataSource, app-run migrations
 
 ```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: orders
+    password: ${DB_PASSWORD}
+
 dynamic:
   ai:
     agent:
-      enabled: true
       environment:
-        tier: dev                     # explicit — never leave this unset, even in DEV (LLD-12 §2.1)
+        tier: DEV                     # explicit — never leave this unset (UNKNOWN is treated as PROD, LLD-12 §2.1)
+        application-name: orders-api
       store:
-        enabled: true
-        migrate: true                 # app runs Flyway itself on startup
-        # datasource.url left unset ⇒ reuses the host's own DataSource, schema dynamic_ai
-      endpoints:
-        enabled: true
-      agents:
-        enabled: true
-      admin:
-        enabled: true
-        ui:
-          enabled: true
+        migrate: true                 # default: Flyway runs at startup into schema dynamic_ai
       mcp:
-        server:
-          enabled: true               # LLD-07 §5 — confirm this is enabled in your build (see version note above)
+        enabled: true                 # serves POST /dynamic-ai/mcp (default false) — §9
 ```
 
-### PROD — dedicated datasource, DBA-run migrations, tuned retention
+### PROD — DBA-run migrations, schema validation, explicit identity
 
 ```yaml
 dynamic:
   ai:
     agent:
-      enabled: true
       environment:
-        tier: prod
-        id: orders-api-prod-eu        # ${spring.application.name}-<tier> is the default; override for clarity
+        tier: PROD
+        id: orders-api-prod-eu        # default: <application-name>-<tier>
       store:
-        enabled: true
         migrate: false                # a DBA already ran Flyway (scripts/db/postgresql/README.md Mode B)
-        validate-schema: true         # fail fast if the applied schema doesn't match what this build expects
-        schema: dynamic_ai
-        datasource:
-          url: jdbc:postgresql://dai-db.internal:5432/dai_store
-          username: dai_app
-          password: ${DAI_APP_PASSWORD}
-          maximum-pool-size: 20
-          connection-timeout: 5s
-        retention:
-          telemetry-months: 13
-          audit-months: 14
-          conversation-days: 30
-          proposal-days: 7
+        validate-schema: true         # fail fast if the applied schema does not match this build
         maintenance:
-          cron: "0 17 3 * * *"
-      audit:
-        evidence:
-          enabled: false              # opt in per workspace/regulatory need (ADR-0018, OQ-27) — off by default
+          enabled: true               # false = you run partitions, retention and node bookkeeping yourself
+          cron: "0 17 3 * * *"        # UTC
       security:
-        api-key:
-          pepper-secret-ref: "vault:secret/dai/api-key-pepper#value"   # resolved by your SecretResolver SPI
-      endpoints:
-        enabled: true
-      agents:
-        enabled: true
-      admin:
-        enabled: true
-        ui:
-          enabled: false              # LLD-12 §2.2 — authoring/introspection UI is locked in PROD by default
+        groups-claim: groups
+        cache-ttl: 2m                 # how long a node may serve a user's old roles after a change elsewhere
+      conversations:
+        enabled: true                 # record transcripts (redacted) — off by default
+        retention: 30d
+        erase-mode: RETAIN_FOR_AUDIT  # default; HARD deletes on user erase — see §9 "Conversation history"
+        audit-retention: 90d
+      memory:
+        retention: 24h                # what the model remembers of a conversation
+      model:
+        failure-threshold: 5          # a provider failing 5 calls in a row is skipped for breaker-open-for
+        breaker-open-for: 30s
       mcp:
-        server:
-          enabled: true
+        enabled: true
+        resource-uri: https://orders.example.com/dynamic-ai/mcp
+        authorization-servers: [ "https://login.example.com" ]
 ```
 
-`store.migration.username`/`.password` are only needed if the migration identity (`dai_migrator`) differs from
-the runtime identity (`dai_app`) **and** `store.migrate=true` (app-run mode) — in the PROD example above,
-`store.migrate=false` means Flyway never runs from inside the application at all, so those two properties are
-omitted.
+Reference of the top-level groups (defaults in parentheses):
+
+| Group | Keys |
+|---|---|
+| `environment` | `tier` (`UNKNOWN` ⇒ treated as PROD), `id`, `application-name`, `prod-profile-patterns` |
+| `store` | `migrate` (true), `validate-schema` (false), `maintenance.*` (enabled, `cron`, `snapshot-poll-interval` 5s, `heartbeat-interval`, `sweep-interval`, `node-retention`, `approval-ttl`, `apply-timeout`, `node-id`) |
+| `security` | `groups-claim` (groups), `clearance-claim`, `default-clearance` (INTERNAL), `attribute-claims`, `issuer-override`, `local-issuer`, `cache-ttl` (5m, max 5m), `cache-max-entries`, `static-role-mappings`, `filter-chains.enabled` (true) |
+| `mcp` | `enabled` (false), `workspace-id`, `transport` (STATELESS), `allowed-origins`, `resource-uri`, `authorization-servers`, `max-request-bytes`, `require-approved-client` (true) |
+| `conversations` | `enabled` (false), `retention` (30d), `max-stored-chars`, `purge-interval`, `erase-mode` (RETAIN_FOR_AUDIT), `audit-retention` (90d) |
+| `memory` | `persistent` (true), `retention` (24h), `max-stored-chars` |
+| `model` | `failure-threshold` (5), `breaker-open-for` (30s) |
+| `budget` | `enforce` (true) and limits — §10 |
+| `write` | `enabled` (false) — reviewed change proposals, §6 |
+| `review` | `required-approvals` (1) |
+| `chat`, `query`, `scan` | endpoint limits, query bulkhead (`max-concurrency`, `timeout`), `@Ai*` scan (`base-packages`, `strict`) |
 
 ## 5. Security integration
 
-The framework never authenticates anyone itself (SEC-01 §1); it reads the host's `Authentication` and maps it
-to a `DaiPrincipal` and a set of framework roles via `dai_role_mapping` rows and/or the static config below
-(SEC-01 §3). Configure `dynamic.ai.agent.security.identity.*` to tell the mapper where to find the subject id,
-groups/roles and (optionally) ABAC attributes in **your** IdP's tokens, then add `role-mappings` entries.
+The framework never authenticates anyone itself (SEC-01 §1). It reads the host's `Authentication` and maps it to
+a `DaiPrincipal` with framework roles, from `dai_role_mapping` rows (admin API) and/or the static mappings below
+(SEC-01 §3).
 
-### Entra ID (Azure AD)
+### Filter chains
+
+The starter registers three Spring Security chains, each limited to its own paths, so your chains keep everything
+else:
+
+| Chain | Paths | Accepts | Notes |
+|---|---|---|---|
+| admin | `/dynamic-ai/admin/**` | your session login, bearer tokens | CSRF for session requests, exempt for requests with credentials in a header |
+| mcp | `/dynamic-ai/mcp` | bearer tokens | stateless; 401 carries the RFC 9728 challenge when `mcp.resource-uri` is set |
+| api | every other `/dynamic-ai/**` | bearer tokens | stateless, no CSRF |
+
+Bearer tokens are validated with **your** `JwtDecoder` (or `OpaqueTokenIntrospector`) bean and converted with your
+`JwtAuthenticationConverter` if you have one, so claims and authorities look exactly as in the rest of your app.
+If you rely on Spring Boot's default chain, it stays in place for the rest of the app. To assemble the chains
+yourself, set `dynamic.ai.agent.security.filter-chains.enabled=false` and use `DynamicAiHttpSecurityConfigurer`.
+API keys for service accounts are not wired yet (OQ-37).
+
+### Roles, memberships and grants
+
+Access is default-deny. A caller needs, in order:
+
+1. **A global role** from a role mapping (e.g. `PLATFORM_ADMIN` to create workspaces), or
+2. **A workspace role** (`WORKSPACE_OWNER`, `AUTHOR`, `APPROVER`, `OPERATOR`, `CONSUMER`) granted with
+   `POST /dynamic-ai/admin/api/v1/workspaces/{id}/members`, and
+3. **A grant** for the grant-only permissions (`agent:invoke`, `endpoint:invoke`, `tool:invoke`, …) with
+   `POST /dynamic-ai/admin/api/v1/workspaces/{id}/grants`. `CONSUMER` alone carries no permission.
+
+Platform admins run the platform but do not author: authoring is `AUTHOR`, approving is `APPROVER` (and nobody
+approves their own revision). A typical agent rollout is: create workspace → add an author and an approver →
+author creates the agent draft and submits it → approver approves → publish → grant `agent:invoke` to its users.
+State transitions use optimistic concurrency: send the `rowVersion` you last read as `If-Match`.
+
+Changes made through the admin API take effect immediately on the node that served the request. Other nodes pick
+them up within `security.cache-ttl` (roles), 5 seconds (grants) and `store.maintenance.snapshot-poll-interval`
+(published generations).
+
+### Static role mappings
 
 ```yaml
 dynamic:
   ai:
     agent:
       security:
-        identity:
-          subject-claim: oid          # stable object id — do NOT use email or upn as the subject
-          groups-claim: roles         # prefer App Roles surfaced as "roles" over the raw "groups" claim
-        role-mappings:
-          - match: { authority: "APPROLE_PlatformAdmin" }
+        groups-claim: groups          # the claim holding group names (default "groups")
+        static-role-mappings:
+          - source: AUTHORITY         # AUTHORITY | SCOPE | LDAP_GROUP | OIDC_CLAIM
+            match-value: "SCOPE_dai.admin"
             role: PLATFORM_ADMIN
-          - match: { group: "AppRole.SalesEngineering.Owner" }
-            role: WORKSPACE_OWNER
-            workspace: sales
-```
-
-Assign **App Roles** to Entra security groups rather than reading the raw `groups` claim directly: a user in
-more than ~200 groups gets a *group overage* claim (`_claim_names`/`hasgroups`) instead of the actual list, and
-resolving it needs an extra Microsoft Graph call via a custom `GroupResolver` (SEC-01 §2). App Roles avoid the
-overage case entirely and are the pattern SEC-01 recommends.
-
-### Okta
-
-```yaml
-dynamic:
-  ai:
-    agent:
-      security:
-        identity:
-          subject-claim: sub
-          groups-claim: groups
-        role-mappings:
-          - match: { group: "sales-analysts" }
+          - source: OIDC_CLAIM
+            claim-name: roles
+            match-value: "Sales.Author"
             role: AUTHOR
-            workspace: sales
-          - match: { group: "sales-approvers" }
-            role: APPROVER
-            workspace: sales
+            workspace-id: 0193c2f4-…  # workspace-scoped roles take the workspace id (not its slug)
 ```
 
-### Keycloak
+`match-value` is a glob. The subject is the token's `sub` (never an e-mail or UPN); the subject and roles claims
+are not configurable today.
 
-```yaml
-dynamic:
-  ai:
-    agent:
-      security:
-        identity:
-          subject-claim: sub
-          groups-claim: realm_access.roles
-        role-mappings:
-          - match: { group: "platform-admin" }
-            role: PLATFORM_ADMIN
-```
+**Entra ID:** map **App Roles** (the `roles` claim) with `source: OIDC_CLAIM, claim-name: roles` rather than the raw
+`groups` claim: a user in more than ~200 groups gets a *group overage* marker instead of the list, and resolving it
+needs a custom `GroupResolver` bean (SEC-01 §2).
 
-Keycloak's realm roles arrive nested (`realm_access.roles`, not a top-level claim). Confirm your
-`AuthorityMapper`/`PrincipalAttributeResolver` SPI implementation (SEC-01 §3) actually resolves a dotted claim
-path before relying on this in PROD — if the default mapper only reads top-level claim names, provide a small
-custom `PrincipalAttributeResolver` bean that flattens `realm_access.roles` into a claim the default mapper can
-read, or map Keycloak client roles into a top-level custom claim in your Keycloak client mapper configuration
-instead.
+**Keycloak:** realm roles arrive nested (`realm_access.roles`). Add a client mapper that emits them as a top-level
+claim, or provide a `PrincipalAttributeResolver` bean that flattens them.
 
-### LDAP / Active Directory
-
-```yaml
-dynamic:
-  ai:
-    agent:
-      security:
-        role-mappings:
-          - match: { ldapGroup: "cn=data-owners,ou=groups,dc=acme,dc=com" }
-            role: APPROVER
-          - match: { ldapGroup: "cn=sales-team,ou=groups,dc=acme,dc=com" }
-            role: AUTHOR
-            workspace: sales
-```
-
-`memberOf` DNs resolve to `GrantedAuthority`s through Spring Security's LDAP support upstream of this mapping;
-`ldapGroup` matches the full DN, not just the CN, to avoid collisions across OUs.
-
-Whichever IdP you use, mapping results are cached per `(issuer, subject, token hash/session id)` for up to 5
-minutes (SEC-01 §3) — a role mapping change takes effect for a given user within that window, not instantly.
+**LDAP / Active Directory:** `source: LDAP_GROUP` matches the full DN of a `memberOf` group
+(`cn=sales-team,ou=groups,dc=acme,dc=com`), not just the CN, to avoid collisions across OUs.
 
 ## 6. Annotating host code
 
@@ -391,30 +385,26 @@ enough description key — but always supply `description`; it is what the LLM a
 
 ## 7. Enabling features
 
-Every top-level feature switch defaults to **`false`** (LLD-01 §4); enable only what a given environment
-needs:
+Everything is on once the starter is on the classpath; switches exist only where a feature has a cost or a
+privacy impact:
 
 ```yaml
 dynamic:
   ai:
     agent:
-      enabled: true              # master switch — everything else is inert if this is false
-      endpoints:
-        enabled: true            # metadata-driven dynamic REST endpoints (data plane)
-      agents:
-        enabled: true            # Spring AI agent runtime, chat API
-      admin:
-        enabled: true            # admin REST API (control plane)
-        ui:
-          enabled: true          # embedded admin dashboard — see §8 for the PROD default
+      enabled: true              # master switch (default true); false makes the whole library inert
       mcp:
-        server:
-          enabled: true          # exposes agents/tools over MCP at /dynamic-ai/mcp — LLD-07 §5, confirm v1.x status
+        enabled: true            # serves POST /dynamic-ai/mcp (default false) — §9
+        workspace-id: 0193…      # workspace used when a request sends no X-DAI-Workspace header
+      conversations:
+        enabled: true            # record redacted transcripts (default false)
+      write:
+        enabled: true            # reviewed change proposals from tools (default false) — §6
 ```
 
-`dynamic.ai.agent.store.enabled` (default `true`) is independent of these — the persistence unit initializes
-whenever the starter is on the classpath and `dynamic.ai.agent.enabled=true`, because audit/versioning tables
-are foundational to every other feature.
+The dynamic endpoints, agents and the admin API have no separate switch: they are inert until something is
+published and granted. Which *capabilities* an environment allows (authoring, introspection, playground,
+reviewed writes …) is decided by the environment tier (§8) and shown at `GET /dynamic-ai/admin/api/v1/me`.
 
 ## 8. Environment tiers and the PROD lock-down
 
@@ -424,28 +414,16 @@ DEV. Active Spring profiles matching `prod-profile-patterns` (default `prod,prod
 only make the resolved tier *stricter*, never looser: an explicit `tier: dev` alongside an active `prod`
 profile still resolves to PROD, logged as `CRITICAL` and audited as `ENVIRONMENT_CONFLICT`.
 
-In PROD, **authoring, introspection, query preview/explain, and the playground are disabled at the bean
-level** by default (LLD-12 §2.2) — there is no controller to reach, not just a permission check. Published
+In PROD, **authoring, introspection, query preview/explain and the playground are disabled** (LLD-12 §2.2): the
+endpoints answer `403 capability disabled` whatever the caller's roles; `GET /dynamic-ai/admin/api/v1/me` lists
+the capabilities of the environment. Published
 endpoints/agents/tools, reviewed writes, MCP, and ops views (usage, audit, kill switches) all continue to work
 in PROD; only the "build/inspect the configuration live" surfaces are locked. Config changes in PROD go
 through a signed bundle import promoted from STAGE, not the live UI (LLD-09 §5, LLD-12 §2.2).
 
-A time-boxed break-glass override exists for genuine incidents:
-
-```yaml
-dynamic:
-  ai:
-    agent:
-      environment:
-        tier: prod
-        production-override:
-          enabled: true
-          capabilities: [AUTHORING, PLAYGROUND]
-          expires-at: 2026-10-01T18:00:00Z   # mandatory; rejected at startup if missing or > 72h away
-          reason: "INC-4412 hotfix of agent prompt"
-```
-Every action taken under an active override is audited with `override=true`, and the affected capability turns
-off again automatically at `expires-at` without a restart (LLD-12 §2.3).
+A time-boxed break-glass override (named capabilities, mandatory expiry within 72 hours, reason, every action
+audited) is modelled in the core (`ProductionOverride`, LLD-12 §2.3) but **not yet configurable** (OQ-53): today
+the way to change a PROD configuration is a reviewed publish from an environment that allows authoring.
 
 ## 9. MCP client configuration
 
@@ -473,8 +451,251 @@ client records a consent entry (`dai_mcp_client_consent`), visible and revocable
 | `dai.mcp.propose` | Call write tools — which only ever create a proposal (§6), never execute directly |
 | `dai.mcp.agents` | Call `ask_<agent>` tools |
 
-`dynamic.ai.agent.mcp.server.mode` (`stateful` default, or `stateless` for multi-replica hosts without sticky
-sessions — OQ-22) controls whether the server keeps per-session state or treats every request independently.
+**Enabling it.** Off by default. Set `dynamic.ai.agent.mcp.enabled=true` and make the endpoint reachable:
+
+```yaml
+dynamic.ai.agent.mcp:
+  enabled: true
+  workspace-id: <uuid>            # or require every client to send the X-DAI-Workspace header
+  resource-uri: https://host.example.com/dynamic-ai/mcp   # audience of the tokens; used in the metadata
+  authorization-servers: [https://login.example.com/realms/acme]
+  allowed-origins: []             # Origin values allowed for browser clients; requests without Origin are fine
+  max-request-bytes: 1048576
+  require-approved-client: true   # default; false only for trusted networks
+```
+
+The endpoint is **stateless** (`POST` only, one JSON-RPC message per request, JSON responses, no
+`Mcp-Session-Id`; `GET`/`DELETE` answer 405), so any replica behind a plain round-robin balancer can serve it
+(ADR-0021). `transport: STATEFUL` is not implemented and logs a warning. Authentication is **your** Spring
+Security filter chain: configure it as an OAuth2 resource server (audience = `resource-uri`, see
+`McpAudienceValidators`) or with API keys, and require authentication for `/dynamic-ai/mcp`; permit
+`/.well-known/oauth-protected-resource/dynamic-ai/mcp` without authentication. Unauthenticated calls get `401`
+with `WWW-Authenticate: Bearer resource_metadata="…"`.
+
+**Tools.** A tool is offered only if a published `TOOL_BINDING` resource has `mcpExposed: true`, the caller's
+token has the scope and the caller holds the grant (`tool:invoke`, `agent:invoke`, plus `data:write-propose` for
+proposal tools). A tool the caller may not use looks exactly like an unknown tool. Every call runs as the caller,
+in the read-only scope, with the binding's argument constraints applied, and is recorded in `dai_tool_invocation`
+(hashes only) under a `dai_mcp_request` row. Writes never execute: a PROPOSE tool records a reviewable proposal
+(owned by the caller, `dynamic.ai.agent.write.enabled=true` needed, otherwise it answers `writes_disabled`); the
+caller confirms it through the review API, which then runs your operation **through your own Spring bean, as that
+user** (your `@PreAuthorize`, transactions, `@Version`, auditing and Envers see the real user). A host `OptimisticLock`
+failure is reported as a conflict. **Record versions:** name the id argument in the tool binding
+(`entityIdArgument`) and the proposal remembers the record's version (JPA `@Version`, or a hash of the exposed,
+non-sensitive attributes when the entity has none); if the record changed before the user confirmed, the change is
+reported as a conflict and your operation is not called. Register a `VersioningAdapter` bean for Envers or a history
+table to be consulted first. Applying is refused unless `write.enabled=true`, the capability `REVIEWED_WRITES`
+is on for the environment, and the user still holds `data:write-confirm`. Optional: `write.capture-before-values`
+(store the record's exposed, non-sensitive values for the review diff; row-level visibility is not applied) and
+`write.require-base-version`. Not yet: Envers/history-table adapters, editing (OQ-36).
+
+**Not yet:** MCP resources and prompts, server-initiated notifications (`tools/list_changed`), per-client rate
+limits, `insufficient_scope` step-up challenges (a tool outside the token's scopes is simply not listed), and the
+STDIO bridge (OQ-49).
+
+### Walkthrough: expose an existing method as an MCP tool
+
+> **Status.** This describes the implemented design end to end. The code has not been compiled or run yet (see the
+> project status), so treat the exact responses as the intended shape; report any difference.
+
+The path is: **annotate the method → find it in the catalog → publish a tool binding → grant it → call it over MCP.**
+Nothing is reachable until every step is done (default deny), and the model can never call anything you did not publish.
+An existing REST endpoint is not exposed as such: expose the **service method behind it** (the endpoint's own
+`@PreAuthorize`, validation and transactions live there and are kept, because the method is called through its Spring
+proxy, as the calling user).
+
+**0. Prerequisites**
+
+- `dynamic.ai.agent.environment.tier: dev` (or `test`). Authoring and catalog browsing are **off in PROD, and an unset tier
+  counts as PROD** (§8); publishing needs the `CONFIG_CHANGES_UI` capability, browsing the catalog `INTROSPECTION`.
+- A workspace id (`{ws}` below) and **two** admin users: one with `tool:author` and `tool:publish`, one with
+  `review:approve`. The author can never approve their own revision (403); one approval is needed by default
+  (`dynamic.ai.agent.review.required-approvals`).
+- Your Spring Security chain authenticates the admin API (`/dynamic-ai/admin/**`) and the MCP endpoint (§5, §9).
+
+**1. Annotate the method** (a Spring bean; the method must be `public`):
+
+```java
+@Service
+public class OrderService {
+
+    @AiExposedAction(intent = "Find a customer's orders, optionally by status", keywords = {"orders", "status"})
+    @PreAuthorize("hasAuthority('orders:read')")                       // your own security still applies
+    public List<OrderDto> findOrders(@AiParam(description = "Customer id") UUID customerId,
+                                     @AiParam(description = "Order status", required = false) OrderStatus status) {
+        ...
+    }
+}
+```
+
+`readOnly` defaults to `true`. Use `@AiParam(sensitive = true)` for arguments that must never be echoed, and `name` to
+choose the tool name (`^[a-z][a-z0-9_]{2,63}$`; the default is derived from the method). Restart the host: the startup
+scan builds the catalog.
+
+**2. Find the operation reference**
+
+```bash
+curl -H "Authorization: Bearer $ADMIN" \
+  "$BASE/dynamic-ai/admin/api/v1/catalog/operations?q=findOrders"
+# -> ... "ref": "op:com.acme.orders.service.OrderService#findOrders(java.util.UUID,com.acme.orders.OrderStatus)",
+#        "toolName": "find_orders", "readOnly": true, "enabled": true ...
+```
+
+**3. Create the tool binding** (a `TOOL_BINDING` resource; `specJson` is the spec **as a JSON string**):
+
+```bash
+curl -X POST -H "Authorization: Bearer $AUTHOR" -H "Content-Type: application/json" \
+  "$BASE/dynamic-ai/admin/api/v1/workspaces/$WS/resources" -d '{
+  "kind": "TOOL_BINDING",
+  "slug": "find-orders",
+  "changeSummary": "Expose findOrders over MCP",
+  "specJson": "{\"toolName\":\"find_orders\",\"source\":{\"kind\":\"operation\",\"ref\":\"op:com.acme.orders.service.OrderService#findOrders(java.util.UUID,com.acme.orders.OrderStatus)\"},\"argConstraints\":{\"customerId\":{\"kind\":\"principalAttr\",\"attr\":\"customerId\"}},\"mcpExposed\":true}"
+}'
+# 201 with an ETag (the draft's row version), and a body holding the resource id (resourceId) and the draft revision id (id)
+```
+
+What the spec says (full format in LLD-07 §2):
+
+| Key | Meaning |
+|---|---|
+| `toolName` | name the model and MCP clients see |
+| `source` | `{"kind":"operation","ref":"op:…"}` (only operations can be PROPOSE tools; `query` and `agent` sources are read-only) |
+| `argConstraints` | arguments **the server decides**: `principalAttr` (taken from the caller's identity attributes, which you map from token claims with `dynamic.ai.agent.security.attribute-claims`; a caller without it is refused), `literal`, or a numeric `range`. The model cannot override them, so use them for tenant or owner ids |
+| `mcpExposed` | `true` = offered over MCP (default `false`: the tool is then only usable by agents) |
+| `timeoutSeconds`, `maxCallsPerTurn`, `result.maxChars`, `writeMode`, `change`, `entityIdArgument` | limits and write behaviour |
+
+**4. Submit, approve, publish** (`If-Match` is the `ETag` returned when the draft was created, e.g. `"0"`; 428 if missing, 412 if stale):
+
+```bash
+R=$BASE/dynamic-ai/admin/api/v1/workspaces/$WS/resources/$RESOURCE_ID/revisions/$REVISION_ID
+curl -X POST -H "Authorization: Bearer $AUTHOR"   -H 'If-Match: "0"' -H "Content-Type: application/json" -d '{}' "$R:submit"
+curl -X POST -H "Authorization: Bearer $APPROVER" -H "Content-Type: application/json" -d '{"comment":"ok"}'   "$R:approve"
+curl -X POST -H "Authorization: Bearer $AUTHOR"   -H "Content-Type: application/json" -d '{"reason":"go live"}' "$R:publish"
+```
+
+Publishing creates a new generation of the live set; every node picks it up within
+`dynamic.ai.agent.store.maintenance.snapshot-poll-interval` (default 5 s). Roll back with
+`POST /dynamic-ai/admin/api/v1/cluster/generations/{n}:rollback`; take a tool away immediately with `:suspend` on the
+resource (allowed in every environment).
+
+**5. Grant the tool to callers.** A caller sees and can call the tool only if they hold `tool:invoke` (and the token has
+the scope `dai.mcp.read`):
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  "$BASE/dynamic-ai/admin/api/v1/workspaces/$WS/grants" \
+  -d '{"principalId":"<user or group id>","permission":"tool:invoke","targetType":"WORKSPACE"}'
+```
+
+Use `targetType: RESOURCE` with the binding's `resourceId` to grant just this tool.
+
+**6. Enable the endpoint and call it**
+
+```yaml
+dynamic.ai.agent.mcp:
+  enabled: true
+  workspace-id: <ws>                  # or send X-DAI-Workspace on every request
+  require-approved-client: false      # see the note below
+```
+
+```bash
+H=(-H "Authorization: Bearer $USER_TOKEN" -H "X-DAI-Workspace: $WS" -H "Content-Type: application/json")
+curl "${H[@]}" $BASE/dynamic-ai/mcp -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}'
+curl "${H[@]}" $BASE/dynamic-ai/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+curl "${H[@]}" $BASE/dynamic-ai/mcp -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_orders","arguments":{"status":"PAID"}}}'
+```
+
+`customerId` is not in the call: the binding fills it from the caller's identity. Any MCP client (Claude Desktop through
+the stdio bridge is not available yet; MCP Inspector and SDK clients work over HTTP) points at `$BASE/dynamic-ai/mcp`
+with the same headers. Every call is recorded (admin trace API: `…/workspaces/{ws}/traces/mcp-requests`).
+
+> **Approved MCP clients.** With `require-approved-client: true` (the default) an OAuth token's `client_id` must be an
+> approved client of the workspace, but there is no admin API or UI to approve one yet (OQ-49): insert the client into
+> `dai_mcp_client` yourself, or set the flag to `false` on trusted networks. API-key service accounts of the workspace
+> are always accepted, but API-key issuance is not wired yet either (OQ-37).
+
+**7. A tool that changes data.** Annotate with `readOnly = false` and bind it as a proposing tool: it never writes by
+itself; it records a proposal that the user confirms.
+
+```json
+{"toolName":"update_order_status",
+ "source":{"kind":"operation","ref":"op:com.acme.orders.service.OrderService#updateStatus(java.util.UUID,com.acme.orders.OrderStatus)"},
+ "writeMode":"PROPOSE", "change":"update", "entityIdArgument":"orderId", "mcpExposed":true}
+```
+
+Set `dynamic.ai.agent.write.enabled=true` (default off) and grant `data:write-propose` next to `tool:invoke`. The tool answers
+`status: proposed` with a proposal id. The **owner** reviews it at `GET /dynamic-ai/api/proposals?scope=mine`, then
+`POST …/proposals/{id}:confirm` with the `contentHash` they reviewed (needs `data:write-confirm`); this runs your method
+as that user and returns `APPLIED`, `CONFLICT` (the record changed since, see `entityIdArgument`) or `FAILED`.
+
+**When something is missing or wrong**
+
+| Symptom | Likely cause |
+|---|---|
+| Operation not in the catalog list | method not `public` or `static`, the class is not a Spring bean, `@AiExposedAction` missing, an invalid or duplicate tool name (the scan reports it as an issue), or the host was not restarted |
+| 403 `capability-disabled` on create/publish/browse | environment tier is PROD or unset (§8) |
+| 403 on `:approve` | you approved your own revision; use a second user |
+| 428 / 412 on submit | missing or stale `If-Match`; re-read the revision and use its current `ETag` |
+| Tool not in `tools/list` | not published yet (wait one poll interval), `mcpExposed` is `false`, the caller has no `tool:invoke` grant or lacks the `dai.mcp.read` scope, or the binding was skipped: **a wrong `ref` is not rejected at publish time** (spec validation per kind is open, OQ-41), the tool is just skipped and a warning is logged (`Tool binding … skipped`, `cannot resolve delegate`) |
+| 401 with `WWW-Authenticate` | no valid token; check the resource server and the audience (§5) |
+| 403 "MCP client not approved" | see the note in step 6 |
+| `writes_disabled` / `proposal_unavailable` / `operation_without_entity` | `write.enabled` is off, or the operation is not linked to an entity (annotate the entity with `@AiContext`) |
+| Tool answers `constraint_unsatisfied` | the caller's identity lacks the attribute named in `principalAttr`: map it from a token claim with `dynamic.ai.agent.security.attribute-claims.<attribute>=<claim>` |
+
+### Conversation history (opt-in)
+
+Users can list, read, close and erase their own conversations through `/dynamic-ai/api/conversations`, but
+transcripts contain what users typed, so nothing is stored until you enable it:
+
+```yaml
+dynamic.ai.agent.conversations:
+  enabled: true          # default false
+  retention: 30d         # kept this long after the last activity; 1ms..3660d
+  max-stored-chars: 100000
+  purge-interval: 15m    # expired conversations are deleted (runs even while enabled=false)
+  erase-mode: RETAIN_FOR_AUDIT   # default; HARD deletes the transcript when the user erases
+  audit-retention: 90d   # how long an erased conversation is kept for audit (1ms..3660d)
+```
+
+**Erase keeps the transcript for audit by default.** When a user erases a conversation it disappears from their
+history (the title is hidden too), the model's memory of it is deleted, and nothing is written to it again. With
+`RETAIN_FOR_AUDIT` the redacted transcript is kept for `audit-retention` and then purged by the same job as expired
+conversations; with `HARD` it is deleted at once. The audit trail records the erase and its mode either way.
+
+Auditors see the workspace's conversations, including erased ones still on hold, at
+`/dynamic-ai/admin/api/v1/workspaces/{workspaceId}/conversations`:
+
+| Call | Permission | What it does |
+|---|---|---|
+| `GET …/conversations?status=ERASED&principalId=…` | `AUDIT_READ` | lists conversations with `erasedAt`, `auditHoldUntil`, `retentionUntil` |
+| `GET …/conversations/{id}` | `AUDIT_READ` | the stored (redacted) transcript; every read is itself audited (`CONVERSATION_READ`) |
+| `DELETE …/conversations/{id}?reason=…` | `WORKSPACE_ADMIN` | deletes the conversation, its messages and its model memory now, hold or not (`CONVERSATION_PURGED`) |
+
+> **Privacy.** Under `RETAIN_FOR_AUDIT` a user's erase is not a deletion: the content stays for `audit-retention`.
+> Tell users so in your privacy notice, make sure you have a legal basis for the hold, and handle a data-subject
+> erasure request with the admin `DELETE` above (or run with `erase-mode: HARD`).
+
+Each successful turn stores the user message and the answer, after redaction: a message that contains a
+credential (private key, API or cloud token, JWT, URL with credentials, password assignment) is replaced by a
+placeholder, never stored in part. Refused, failed and cancelled turns store nothing. PII detectors are not
+implemented yet. The stored conversation uses the conversation id the client sends and is found again through a
+hash of (principal, agent, conversation id), so another user cannot read or append to it. A conversation the user
+erased or closed is not written to again. This is the history shown to users, not the memory the model reads.
+
+### Chat memory (what the model remembers)
+
+Follow-up questions work on any replica and after a restart: the window the model reads is kept in PostgreSQL
+(`dai_chat_memory_message`) as soon as the `dynamic_ai` store exists. It is redacted like transcripts, keyed by a
+hash of (workspace, agent, principal, conversation), and expires on its own clock:
+
+```yaml
+dynamic.ai.agent.memory:
+  persistent: true       # default; false keeps the window in this node's heap (lost on restart, per node)
+  retention: 24h         # kept this long after the last message; 1ms..3660d
+  max-stored-chars: 100000
+```
+
+Expired memories are deleted by the same background job as expired conversations.
 
 ## 10. Operations
 
@@ -486,14 +707,18 @@ sessions — OQ-22) controls whether the server keeps per-session state or treat
   library never starts its own metrics server). Key meters: `.endpoint.requests`, `.query.executions`,
   `.agent.turns`, `.agent.tool.calls`, `.llm.tokens`, `.llm.cost`, `.budget.utilization`,
   `.ratelimit.rejections`, `.snapshot.generation`/`.snapshot.lag`, `.authz.decisions` (LLD-10 §2). Spans:
-  `dai.endpoint`, `dai.query`, `dai.agent.turn`, `dai.tool`, `dai.snapshot.apply` (LLD-10 §3).
-- **Partition maintenance**: runs on `dynamic.ai.agent.store.maintenance.cron` (default `0 17 3 * * *`),
+  `dai.endpoint`, `dai.query`, `dai.agent.turn`, `dai.tool`, `dai.snapshot.apply` (LLD-10 §3). Implemented so far:
+  `dai.agent.turn`, `dai.tool`, `dai.mcp` (meters `dynamic.ai.agent.turn|tool|mcp`), carrying the turn, model-call and
+  MCP-request ids so a trace in your tracing backend (Tempo, Jaeger, Langfuse via OTLP, …) can be matched to the rows
+  in the admin trace API; add `micrometer-tracing` with your OpenTelemetry or Brave bridge to get them as spans.
+- **Partition maintenance**: runs on `dynamic.ai.agent.store.maintenance.cron` (default `0 17 3 * * *`, UTC; disable
+  with `store.maintenance.enabled=false`),
   advisory-locked so exactly one cluster node does the work per run (`dai_job_run` records the outcome). Verify
   it is actually running with `scripts/db/postgresql/04_verify.sql` §3–4 (empty `DEFAULT` partitions, expected
   partitions present).
-- **Retention**: `dynamic.ai.agent.store.retention.{telemetry-months,audit-months,conversation-days,
-  proposal-days}` (§4 PROD example) — see `docs/lld/15-database-schema.md` §10 for exactly how each is
-  enforced (partition drop vs. row purge).
+- **Retention**: telemetry and audit are kept by monthly partition and dropped by the partition maintenance with
+  the defaults of `docs/lld/15-database-schema.md` §10 (not yet configurable per host, OQ-31); conversations and
+  chat memory follow `conversations.retention` / `audit-retention` and `memory.retention`.
 - **Backups**: continuous archiving (WAL + base backups) is recommended over `pg_dump` alone for anything
   beyond a dev snapshot; see `docs/lld/15-database-schema.md` §14 for the full restore-drill checklist,
   including why roles/grants must be recreated (`scripts/db/postgresql/02_`/`03_`) before an application can
@@ -503,7 +728,7 @@ sessions — OQ-22) controls whether the server keeps per-session state or treat
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| App fails to start with a Flyway `permission denied for schema dynamic_ai` | Migration credentials point at `dai_app` (DML-only) instead of `dai_migrator` | Set `dynamic.ai.agent.store.migration.username/.password` to `dai_migrator`, or switch to DBA-run migrations (`store.migrate=false`) |
+| App fails to start with a Flyway `permission denied for schema dynamic_ai` | Migration credentials point at `dai_app` (DML-only) instead of `dai_migrator` | Point the migrating `DataSource` at `dai_migrator` (or let a DBA run Flyway and set `dynamic.ai.agent.store.migrate=false`), or switch to DBA-run migrations (`store.migrate=false`) |
 | Runtime queries fail with `permission denied for table dai_...` | `02_create_schema_and_privileges.sql` never ran, or ran *after* Flyway already created the tables | Run `scripts/db/postgresql/03_post_migration_grants.sql` as a catch-up |
 | Authoring/introspection/playground unexpectedly disabled in what you believe is DEV | `dynamic.ai.agent.environment.tier` unset ⇒ resolves to `UNKNOWN` ⇒ treated as `PROD` (§8) | Set `environment.tier: dev` explicitly |
 | Startup logs `ENVIRONMENT_CONFLICT` / `CONFIG_STORE_IDENTITY_MISMATCH` | An active Spring profile matches a prod pattern despite an explicit non-prod tier, or this app is pointed at a store whose `dai_environment` row belongs to a different environment (e.g. a prod backup restored into stage) | Fix the profile/tier mismatch, or confirm you are connecting to the intended store (`scripts/db/postgresql/04_verify.sql` §2) |

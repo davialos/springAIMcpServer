@@ -7,6 +7,7 @@ import com.springaimcpservercommon.security.authz.AuthorizationRequest;
 import com.springaimcpservercommon.security.authz.ResourceRef;
 import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory;
+import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -89,11 +90,47 @@ public final class GenericDynamicHandler implements Controller {
     /**
      * Thrown by {@link BackingExecutor} when execution fails.
      *
-     * @param code    problem code for the failure
-     * @param message safe, displayable message
+     * Carries the problem code and a safe, displayable message. (A class, not a record: records cannot extend
+     * {@link Exception}.) The stack trace is not filled in: this is an expected control-flow failure.
      */
-    public record BackingException(ProblemCode code, String message) extends Exception {
-        public BackingException { Objects.requireNonNull(code, "code"); Objects.requireNonNull(message, "message"); }
+    public static final class BackingException extends Exception {
+
+        private static final long serialVersionUID = 1L;
+
+        private final ProblemCode code;
+
+        /**
+         * Creates the exception.
+         *
+         * @param code    problem code for the failure
+         * @param message safe, displayable message
+         */
+        public BackingException(ProblemCode code, String message) {
+            this(code, message, null);
+        }
+
+        /**
+         * Creates the exception with the failure that caused it (kept for classification, for example a host
+         * optimistic-lock failure; never shown to callers).
+         *
+         * @param code    problem code for the failure
+         * @param message safe, displayable message
+         * @param cause   underlying failure, if any
+         */
+        public BackingException(ProblemCode code, String message, @Nullable Throwable cause) {
+            super(Objects.requireNonNull(message, "message"), cause, false, false);
+            this.code = Objects.requireNonNull(code, "code");
+        }
+
+        /** @return problem code for the failure */
+        public ProblemCode code() {
+            return code;
+        }
+
+        /** @return safe, displayable message */
+        public String message() {
+            return getMessage();
+        }
     }
 
     /**
@@ -115,7 +152,7 @@ public final class GenericDynamicHandler implements Controller {
         int checkAndRecord(DaiPrincipal principal, UUID endpointId);
     }
 
-    private final DynamicEndpointRegistrar registrar;
+    private final EndpointLookup registrar;
     private final DaiPrincipalResolver principalResolver;
     private final AuthorizationEngine authorizationEngine;
     private final BackingExecutor backingExecutor;
@@ -134,7 +171,7 @@ public final class GenericDynamicHandler implements Controller {
      * @param rateLimiter          enforces per-principal rate limits
      * @param observationRegistry  Micrometer registry for metrics
      */
-    public GenericDynamicHandler(DynamicEndpointRegistrar registrar,
+    public GenericDynamicHandler(EndpointLookup registrar,
                                   DaiPrincipalResolver principalResolver,
                                   AuthorizationEngine authorizationEngine,
                                   BackingExecutor backingExecutor,
@@ -151,8 +188,30 @@ public final class GenericDynamicHandler implements Controller {
     }
 
     @Override
+    @SuppressWarnings("try") // the scope is held open so the backing work nests under the span
     public @Nullable ModelAndView handleRequest(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
+        Observation observation = Observation.createNotStarted("dynamic.ai.agent.endpoint", observationRegistry)
+                .contextualName("dai.endpoint")
+                .lowCardinalityKeyValue("dai.endpoint.method", request.getMethod())
+                .start();
+        try (Observation.Scope ignored = observation.openScope()) {
+            return dispatch(request, response, observation);
+        } catch (IOException | RuntimeException e) {
+            observation.error(e);
+            throw e;
+        } finally {
+            observation.lowCardinalityKeyValue("dai.endpoint.status", statusClass(response.getStatus()));
+            observation.stop();
+        }
+    }
+
+    private static String statusClass(int status) {
+        return status >= 100 && status < 600 ? (status / 100) + "xx" : "unknown";
+    }
+
+    private @Nullable ModelAndView dispatch(HttpServletRequest request, HttpServletResponse response,
+                                            Observation observation) throws IOException {
         String fullPath = resolveFullPath(request);
         String method = request.getMethod();
 
@@ -164,6 +223,10 @@ public final class GenericDynamicHandler implements Controller {
                     null, fullPath);
             return null;
         }
+
+        observation.lowCardinalityKeyValue("dai.endpoint.route", fullPath);
+        observation.highCardinalityKeyValue("dai.endpoint.id", def.id().toString());
+        observation.highCardinalityKeyValue("dai.workspace.id", def.workspaceId().toString());
 
         // Stage 2: kill-switch
         if (killSwitchChecker.isActive(def.id())) {

@@ -33,4 +33,18 @@ public interface ModelRouter {
      * @throws ModelUnavailableException if no suitable model can be found (including fallback)
      */
     ChatModel resolve(ModelSelection selection, DaiPrincipal principal);
+
+    /**
+     * Like {@link #resolve} but also reports which selection matched, so the invoker can apply that selection's model
+     * name, temperature and token limit to the call. The default assumes the primary selection matched; routers that
+     * fall back (the autoconfigure default does) override it.
+     *
+     * @param selection the model selection from the agent definition
+     * @param principal the calling principal
+     * @return the model and the selection it was resolved for
+     * @throws ModelUnavailableException if no suitable model can be found (including fallback)
+     */
+    default ResolvedModel resolveModel(ModelSelection selection, DaiPrincipal principal) {
+        return new ResolvedModel(resolve(selection, principal), selection);
+    }
 }

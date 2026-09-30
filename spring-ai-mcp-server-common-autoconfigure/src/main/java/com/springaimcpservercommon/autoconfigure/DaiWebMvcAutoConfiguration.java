@@ -12,6 +12,7 @@ import com.springaimcpservercommon.security.principal.AuthorityMapper;
 import com.springaimcpservercommon.webmvc.endpoint.AgentChatController;
 import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
 import com.springaimcpservercommon.webmvc.endpoint.DynamicEndpointRegistrar;
+import com.springaimcpservercommon.webmvc.endpoint.EndpointLookup;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.webmvc.endpoint.InMemoryTurnEventBuffer;
 import com.springaimcpservercommon.webmvc.endpoint.TurnEventBuffer;
@@ -44,11 +45,29 @@ import java.util.Map;
  *
  * <p>All beans are {@link ConditionalOnMissingBean}; hosts may replace any component.
  */
-@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiSecurityAutoConfiguration.class,
+@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiPersistenceAutoConfiguration.class,
+                             DaiSecurityAutoConfiguration.class, DaiAiAutoConfiguration.class,
                              WebMvcAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({GenericDynamicHandler.class, RequestMappingHandlerMapping.class})
 @NullMarked
 public class DaiWebMvcAutoConfiguration {
+
+    /**
+     * Maps the library's controllers (plain {@code @Bean}s with a type-level {@code @RequestMapping}) into the host's
+     * handler mapping; Spring MVC 7 only detects {@code @Controller} types by itself.
+     *
+     * @param mapping the host's handler mapping(s)
+     * @param beans   the bean factory, to find the controllers
+     * @return the registrar
+     */
+    @Bean
+    @ConditionalOnMissingBean(DaiControllerRegistrar.class)
+    static DaiControllerRegistrar daiControllerRegistrar(ObjectProvider<RequestMappingHandlerMapping> mapping,
+                                                         org.springframework.beans.factory.ListableBeanFactory beans) {
+        return new DaiControllerRegistrar(mapping, beans);
+    }
 
     /**
      * Default principal resolver: uses the registered {@link AuthorityMapper} to map the
@@ -125,15 +144,18 @@ public class DaiWebMvcAutoConfiguration {
                         AuthorizationEngine.class,
                         GenericDynamicHandler.BackingExecutor.class})
     public GenericDynamicHandler genericDynamicHandler(
-            DynamicEndpointRegistrar registrar,
+            ObjectProvider<DynamicEndpointRegistrar> registrar,
             GenericDynamicHandler.DaiPrincipalResolver principalResolver,
             AuthorizationEngine authorizationEngine,
             GenericDynamicHandler.BackingExecutor backingExecutor,
             GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
             GenericDynamicHandler.RateLimiter rateLimiter,
-            ObservationRegistry observationRegistry) {
-        return new GenericDynamicHandler(registrar, principalResolver, authorizationEngine,
-                backingExecutor, killSwitchChecker, rateLimiter, observationRegistry);
+            ObjectProvider<ObservationRegistry> observationRegistry) {
+        // resolved per request: the registrar itself needs this handler to register routes
+        EndpointLookup lookup = (path, method) -> registrar.getObject().lookup(path, method);
+        return new GenericDynamicHandler(lookup, principalResolver, authorizationEngine,
+                backingExecutor, killSwitchChecker, rateLimiter,
+                observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
 
     /**
@@ -234,12 +256,12 @@ public class DaiWebMvcAutoConfiguration {
             if (cause instanceof AccessDeniedException) {
                 throw new GenericDynamicHandler.BackingException(
                         ProblemCode.ACCESS_DENIED,
-                        cause.getMessage() != null ? cause.getMessage() : "Access denied.");
+                        cause.getMessage() != null ? cause.getMessage() : "Access denied.", cause);
             }
             String msg = cause != null ? cause.getMessage() : null;
             throw new GenericDynamicHandler.BackingException(
                     ProblemCode.EXECUTION_ERROR,
-                    msg != null ? msg : "Operation invocation failed.");
+                    msg != null ? msg : "Operation invocation failed.", cause);
         } catch (IllegalAccessException e) {
             throw new GenericDynamicHandler.BackingException(
                     ProblemCode.EXECUTION_ERROR, "Method is not accessible.");
@@ -356,6 +378,7 @@ public class DaiWebMvcAutoConfiguration {
      *
      * @param turnEventBufferProvider optional ring buffer for SSE stream replay
      * @param budgetCheckerProvider   optional budget check for an early {@code 429 budget-exhausted}
+     * @param props                   framework properties (chat limits)
      * @return the controller
      */
     @Bean
@@ -370,10 +393,13 @@ public class DaiWebMvcAutoConfiguration {
             GenericDynamicHandler.RateLimiter rateLimiter,
             GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
             ObjectProvider<TurnEventBuffer> turnEventBufferProvider,
-            ObjectProvider<InvocationGuardAdvisor.BudgetChecker> budgetCheckerProvider) {
+            ObjectProvider<InvocationGuardAdvisor.BudgetChecker> budgetCheckerProvider,
+            DaiProperties props) {
+        DaiProperties.Chat chat = props.chat();
         return new AgentChatController(agentResolver, agentInvoker, principalResolver,
                 authorizationEngine, rateLimiter, killSwitchChecker,
-                turnEventBufferProvider.getIfAvailable(), budgetCheckerProvider.getIfAvailable());
+                turnEventBufferProvider.getIfAvailable(), budgetCheckerProvider.getIfAvailable(),
+                new AgentChatController.Settings(chat.streamIdleTimeout(), chat.maxMessageChars()));
     }
 
     /**
@@ -385,7 +411,7 @@ public class DaiWebMvcAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnBean(RequestMappingHandlerMapping.class)
+    @ConditionalOnBean({RequestMappingHandlerMapping.class, GenericDynamicHandler.class})
     public DynamicEndpointRegistrar dynamicEndpointRegistrar(RequestMappingHandlerMapping handlerMapping,
                                                               GenericDynamicHandler handler) throws NoSuchMethodException {
         Method handleMethod = GenericDynamicHandler.class.getMethod(

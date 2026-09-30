@@ -24,7 +24,12 @@ import java.util.UUID;
  * the host's {@link EntityManagerFactory} bean is available. The query executor runs against the host's
  * JPA persistence unit, never the framework's isolated one.
  */
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+// After Boot's JPA auto-configuration: the query engine runs over the host's EntityManagerFactory
+// (by name: spring-boot-hibernate is optional).
+@AutoConfiguration(after = DaiCoreAutoConfiguration.class,
+        afterName = "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(CriteriaQueryExecutor.class)
 @NullMarked
 public class DaiQueryAutoConfiguration {
@@ -72,17 +77,43 @@ public class DaiQueryAutoConfiguration {
      *
      * @param entityManagerFactory the host's entity manager factory (injected by Spring)
      * @param props                framework properties
+     * @param observations         the host's observation registry, if any (the {@code dai.query} span)
      * @return the executor
      */
     @Bean
     @ConditionalOnMissingBean(QueryExecutor.class)
     @ConditionalOnBean(EntityManagerFactory.class)
-    public CriteriaQueryExecutor queryExecutor(EntityManagerFactory entityManagerFactory,
-                                                DaiProperties props) {
+    public QueryExecutor queryExecutor(EntityManagerFactory entityManagerFactory, DaiProperties props,
+                                       org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
         DaiProperties.Query q = props.query();
         int maxConcurrent = clamp(q.maxConcurrency(), 1, 200, CriteriaQueryExecutor.DEFAULT_MAX_CONCURRENT);
         int timeoutMs = clampMs(q.timeout(), CriteriaQueryExecutor.DEFAULT_TIMEOUT_MS);
-        return new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent, timeoutMs);
+        QueryExecutor executor = new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent,
+                timeoutMs);
+        io.micrometer.observation.ObservationRegistry registry = observations.getIfAvailable();
+        return registry == null || registry.isNoop() ? executor : new ObservedQueryExecutor(executor, registry);
+    }
+
+    /**
+     * Versions of the host's records for the write path (LLD-11 §5): host-registered
+     * {@link com.springaimcpservercommon.core.versioning.VersioningAdapter} beans first (Envers, history tables), then
+     * JPA {@code @Version}, then a hash of the exposed attributes. Read-only, over the host's own persistence unit.
+     *
+     * @param entityManagerFactory the host's entity manager factory
+     * @param registry             the live catalog
+     * @param hostAdapters         adapters the host registered
+     * @return the record versions
+     */
+    @Bean
+    @ConditionalOnMissingBean(com.springaimcpservercommon.core.versioning.RecordVersions.class)
+    @ConditionalOnBean({EntityManagerFactory.class, com.springaimcpservercommon.core.catalog.MetadataRegistry.class})
+    public com.springaimcpservercommon.core.versioning.RecordVersions recordVersions(
+            EntityManagerFactory entityManagerFactory,
+            com.springaimcpservercommon.core.catalog.MetadataRegistry registry,
+            org.springframework.beans.factory.ObjectProvider<
+                    com.springaimcpservercommon.core.versioning.VersioningAdapter> hostAdapters) {
+        return com.springaimcpservercommon.query.versioning.VersioningRegistry.forJpa(entityManagerFactory,
+                registry::current, hostAdapters.orderedStream().toList());
     }
 
     private static int clamp(int value, int min, int max, int defaultValue) {

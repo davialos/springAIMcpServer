@@ -1,6 +1,9 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.ai.runtime.ConversationKeys;
+import com.springaimcpservercommon.core.hash.Sha256;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import com.springaimcpservercommon.persistence.audit.AuditCategory;
 import com.springaimcpservercommon.persistence.audit.AuditPlane;
 import com.springaimcpservercommon.persistence.support.PageRequest;
@@ -13,6 +16,7 @@ import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -61,8 +65,10 @@ public final class ConversationController {
                                   @Nullable String title, String status, Instant startedAt,
                                   Instant lastActivityAt) {
         static ConversationDto of(Conversation c) {
+            // an erased conversation kept for audit still has its title; its user no longer sees it
+            String title = c.getStatus() == ConversationStatus.ERASED ? null : c.getTitle();
             return new ConversationDto(c.getId(), c.getWorkspaceId(), c.getAgentResourceId(),
-                    c.getChannel().name(), c.getTitle(), c.getStatus().name(), c.getStartedAt(),
+                    c.getChannel().name(), title, c.getStatus().name(), c.getStartedAt(),
                     c.getLastActivityAt());
         }
     }
@@ -98,8 +104,20 @@ public final class ConversationController {
     private final TelemetryStore store;
     private final AdminAudit audit;
     private final AdminApi api;
+    private final @Nullable ChatMemoryStore memory;
+    private final java.time.@Nullable Duration auditHold;
 
-    ConversationController(TelemetryStore store, AdminAudit audit, AdminApi api) {
+    ConversationController(TelemetryStore store, AdminAudit audit, AdminApi api, @Nullable ChatMemoryStore memory) {
+        this(store, audit, api, memory, null);
+    }
+
+    /**
+     * @param auditHold how long an erased conversation is kept for audit; {@code null} deletes it at once (HARD)
+     */
+    ConversationController(TelemetryStore store, AdminAudit audit, AdminApi api, @Nullable ChatMemoryStore memory,
+                           java.time.@Nullable Duration auditHold) {
+        this.memory = memory;
+        this.auditHold = auditHold;
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -175,11 +193,15 @@ public final class ConversationController {
             return AdminApi.problem(ProblemCode.NOT_FOUND, "Conversation not found", null, request);
         }
         store.closeConversation(id);
+        forgetMemory(c);
         return ResponseEntity.noContent().build();
     }
 
     /**
-     * Erases a conversation: deletes its stored messages and marks it erased. Irreversible.
+     * Erases a conversation for the caller: it disappears from their history and from what the model remembers.
+     * Depending on {@code dynamic.ai.agent.conversations.erase-mode} the transcript is either deleted at once
+     * ({@code HARD}) or kept for audit until the audit retention ends ({@code RETAIN_FOR_AUDIT}, default).
+     * Irreversible for the caller.
      *
      * @param id      conversation
      * @param request current request
@@ -193,12 +215,36 @@ public final class ConversationController {
         }
         DaiPrincipal caller = gate.caller();
         Conversation c = owned(id, caller);
-        if (c == null || !store.eraseConversation(id)) {
+        boolean erased = c != null && (auditHold == null ? store.eraseConversation(id)
+                : store.eraseConversationKeepingForAudit(id, auditHold));
+        if (!erased) {
             return AdminApi.problem(ProblemCode.NOT_FOUND, "Conversation not found", null, request);
         }
+        forgetMemory(c);
         audit.record(caller, AuditCategory.DATA_WRITE, AuditPlane.DATA, "CONVERSATION_ERASED", c.getWorkspaceId(),
-                "conversation", id.toString(), null, null, Map.of());
+                "conversation", id.toString(), null, null,
+                Map.of("mode", auditHold == null ? "HARD" : "RETAIN_FOR_AUDIT"));
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Deletes what the model remembers of a conversation that was closed or erased (OQ-45), best effort: the memory
+     * expires by retention anyway, so a failure here is logged and never fails the request.
+     */
+    void forgetMemory(Conversation c) {
+        UUID agent = c.getAgentResourceId();
+        if (memory == null || agent == null) {
+            return;
+        }
+        try {
+            String key = ConversationKeys.memoryKey(c.getWorkspaceId(), agent, c.getPrincipalId(), c.getId());
+            memory.delete(Sha256.of(key));
+            memory.delete(Sha256.of(ConversationKeys.summaryKey(key)));
+        } catch (RuntimeException e) {
+            LoggerFactory.getLogger(ConversationController.class)
+                    .warn("Could not delete chat memory of a closed conversation ({}); it expires by retention",
+                            e.getClass().getSimpleName());
+        }
     }
 
     private @Nullable Conversation owned(UUID id, DaiPrincipal caller) {

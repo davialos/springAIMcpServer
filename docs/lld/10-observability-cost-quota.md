@@ -36,6 +36,30 @@ Observation API → OTel. Spans: `dai.endpoint`, `dai.query`, `dai.agent.turn`, 
 `dai.snapshot.apply`, plus Spring AI chat/tool spans. Content recording off by default;
 when on, passes through the redaction pipeline.
 
+**Implemented (2026-09-29, extended 2026-09-30):** six spans, each also a meter (Micrometer `Observation`, so a host with a `MeterRegistry`
+gets timers and one with Micrometer Tracing gets spans; without either they cost nothing). The meter names follow the
+`dynamic.ai.agent.*` convention, the span names the `dai.*` one:
+
+| Span (`contextualName`) | Meter | Tags (low cardinality) | Attributes (high cardinality, spans only) |
+|---|---|---|---|
+| `dai.agent.turn` | `dynamic.ai.agent.turn` | `dai.agent.slug`, `dai.channel`, `dai.streaming`, `dai.turn.outcome`, `dai.turn.finish`, `dai.turn.error_code` | `dai.turn.id`, `dai.model_call.id`, `dai.agent.revision`, `dai.tokens.input/output` |
+| `dai.tool` | `dynamic.ai.agent.tool` | `dai.tool.name`, `dai.tool.access_mode`, `dai.channel`, `dai.tool.status`, `dai.tool.error_code`, `dai.tool.write_violation` | `dai.turn.id`, `dai.model_call.id`, `dai.mcp.request.id` |
+| `dai.endpoint` | `dynamic.ai.agent.endpoint` | `dai.endpoint.method`, `dai.endpoint.route`, `dai.endpoint.status` (`2xx`..`5xx`) | `dai.endpoint.id`, `dai.workspace.id` |
+| `dai.query` | `dynamic.ai.agent.query` | `dai.query.outcome` (`ok`, `truncated`, `error`) | `dai.query.id`, `dai.workspace.id`, `dai.query.rows` (a count, never a row) |
+| `dai.snapshot.apply` | `dynamic.ai.agent.snapshot.apply` | `dai.snapshot.cache` (`agents`, `queries`, `tool-bindings`), `dai.snapshot.outcome` (`applied`, `missing`, `failed`) | `dai.snapshot.generation` |
+| `dai.mcp` | `dynamic.ai.agent.mcp` | `dai.mcp.method` (known methods only, else `other`), `dai.mcp.status`, `dai.mcp.error_code` | `dai.mcp.request.id`, `dai.mcp.tool`, `dai.workspace.id` |
+
+The ids are the primary keys of `dai_agent_turn`, `dai_model_call`, `dai_mcp_request`, so a trace can be followed to the
+store rows and, through `GET …/traces/by-trace-id/{traceId}`, back. The `traceId` recorded on turn and MCP request rows
+is read while the span is open, so it is that span's trace. Never attached: prompts, answers, tool arguments or results
+(content recording stays off, see above). A failed turn marks its span as an error. The tool span's parent is the turn
+span, set explicitly because a streamed turn may run its tools on another thread; a **synchronous** turn also keeps its
+span current, so Spring AI's own spans and the host's below it nest under it. A **streamed** turn has no stable thread,
+so it puts its span into the Reactor context (`micrometer.observation`), where Spring AI's stream path looks for its
+parent: the chat and provider spans of a streamed turn are its children too. The invoker builds its `ChatClient` with
+the host's registry, so Spring AI's own client and advisor spans are emitted under the turn. The library
+registers no `ObservationRegistry` of its own: it uses the host's when there is one and is silent otherwise.
+
 Every span joins the host's current trace (Micrometer Tracing with the host's OTel or Brave bridge), so one trace
 shows the split between LLM call, each tool call, and each dynamic query. The LLM segment is measured by the
 **client-side** span around the provider call; that needs no cooperation from the provider.
@@ -96,6 +120,8 @@ the check fails open by default (logged and counted in `dynamic.ai.agent.budget.
 | `dynamic.ai.agent.budget.enforce` | `true` (`false` = record and show usage, refuse nothing) |
 | `dynamic.ai.agent.budget.cache-ttl` | `10s` (`0` disables the per-(workspace, agent, principal) decision cache) |
 | `dynamic.ai.agent.budget.fail-open` | `true` |
+
+**Turn telemetry (implemented slice):** `DefaultAgentInvoker` reports every finished turn, including refused, failed and cancelled ones, to the `TurnRecorder` port (no-op by default). `StoreTurnRecorder` writes one `dai_agent_turn` row and, when the provider reported tokens, one priced `dai_model_call` row on a virtual thread behind a 64-slot bulkhead; a full bulkhead or a failed write drops the record and increments `dynamic.ai.agent.turn.record.dropped` / `...failures`, never affecting the turn. Records hold identifiers, timings, token counts and outcome codes only. The turn id is the one the client saw (SSE ids, replay URL, response). See OQ-43 for what is not recorded yet.
 
 ## 7. Health & readiness
 `HealthContributor` `dynamicAi` with details: catalog state, snapshot generation & lag,

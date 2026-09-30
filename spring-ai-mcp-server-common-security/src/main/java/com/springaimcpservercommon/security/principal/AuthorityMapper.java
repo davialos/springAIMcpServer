@@ -19,4 +19,12 @@ public interface AuthorityMapper {
      * @throws PrincipalMappingException if the authentication is missing, anonymous, unauthenticated or unusable
      */
     DaiPrincipal map(Authentication authentication);
+
+    /**
+     * Drops cached mapping results, so the next request of every caller sees changed memberships, role mappings or
+     * principal status. Called after such a change on the node that made it; other nodes see it when their cache
+     * entries expire ({@code dynamic.ai.agent.security.cache-ttl}). The default does nothing (no cache).
+     */
+    default void invalidateAll() {
+    }
 }

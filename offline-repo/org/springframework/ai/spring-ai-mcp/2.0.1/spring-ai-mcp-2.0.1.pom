@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.springframework.ai</groupId>
+  <artifactId>spring-ai-mcp</artifactId>
+  <version>2.0.1</version>
+  <name>Spring AI MCP Client</name>
+  <description>Spring Framework integration for Model Context Protocol (MCP), providing Spring AI function calling capabilities and Spring-friendly abstractions for MCP clients and MCP servers</description>
+  <url>https://github.com/spring-projects/spring-ai</url>
+  <organization>
+    <name>Broadcom Inc.</name>
+    <url>https://spring.io</url>
+  </organization>
+  <licenses>
+    <license>
+      <name>Apache 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>mpollack</id>
+      <name>Mark Pollack</name>
+      <roles>
+        <role>founder</role>
+      </roles>
+    </developer>
+    <developer>
+      <id>tzolov</id>
+      <name>Christian Tzolov</name>
+      <email>christian tzolov at broadcom.com</email>
+      <organization>Broadcom</organization>
+      <organizationUrl>http://www.spring.io</organizationUrl>
+      <roles>
+        <role>lead</role>
+      </roles>
+    </developer>
+    <developer>
+      <id>ilayaperumalg</id>
+      <name>Ilayaperumal Gopinathan</name>
+      <organization>Broadcom</organization>
+      <organizationUrl>http://www.spring.io</organizationUrl>
+    </developer>
+    <developer>
+      <id>sobychacko</id>
+      <name>Soby Chacko</name>
+      <organization>Broadcom</organization>
+      <organizationUrl>http://www.spring.io</organizationUrl>
+    </developer>
+    <developer>
+      <id>ericbottard</id>
+      <name>Eric Bottard</name>
+      <organization>Broadcom</organization>
+      <organizationUrl>http://www.spring.io</organizationUrl>
+    </developer>
+    <developer>
+      <id>sdeleuze</id>
+      <name>Sébastien Deleuze</name>
+      <organization>Broadcom</organization>
+      <organizationUrl>http://www.spring.io</organizationUrl>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git://github.com/spring-projects/spring-ai.git/mcp/spring-ai-mcp</connection>
+    <developerConnection>scm:git:ssh://git@github.com/spring-projects/spring-ai.git/mcp/spring-ai-mcp</developerConnection>
+    <url>https://github.com/spring-projects/spring-ai/mcp/spring-ai-mcp</url>
+  </scm>
+  <dependencies>
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+      <version>2.0.0</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>mcp-spring-webflux</artifactId>
+      <version>2.0.1</version>
+      <scope>compile</scope>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>mcp-spring-webmvc</artifactId>
+      <version>2.0.1</version>
+      <scope>compile</scope>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.ai</groupId>
+      <artifactId>spring-ai-model</artifactId>
+      <version>2.0.1</version>
+      <scope>compile</scope>
+    </dependency>
+  </dependencies>
+</project>

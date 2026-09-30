@@ -1,16 +1,16 @@
 package com.springaimcpservercommon.ai.advisor;
 
 import com.springaimcpservercommon.ai.agent.OutputSpec;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -19,12 +19,16 @@ import org.springframework.core.Ordered;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Post-turn advisor that validates the model's output against the declared JSON Schema (LLD-06 §4).
  *
  * <p>Order: {@link Ordered#LOWEST_PRECEDENCE} {@code - 100} — after the tool-calling loop completes
  * but before {@link UsageMeteringAdvisor} so that a validation failure is metered as a complete turn.
+ *
+ * <p>The advisor sits inside Spring AI's tool-calling loop and therefore sees every model round; rounds that ask
+ * for tool calls are passed through and only the final answer is validated.
  *
  * <p>Only active when {@link OutputSpec#mode()} is {@link OutputSpec.Mode#JSON_SCHEMA}.
  * The advisor validates two levels:
@@ -39,13 +43,13 @@ import java.util.Objects;
  * so the agent runtime degrades gracefully per LLD-12 §4.
  */
 @NullMarked
-public final class StructuredOutputValidationAdvisor implements CallAroundAdvisor {
+public final class StructuredOutputValidationAdvisor implements CallAdvisor {
 
     private static final Logger LOG = LoggerFactory.getLogger(StructuredOutputValidationAdvisor.class);
     private static final int ORDER = Ordered.LOWEST_PRECEDENCE - 100;
 
     // Jackson ObjectMapper is instantiated locally — never registered as a bean (ADR-0019).
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
     private final OutputSpec outputSpec;
     private final @Nullable JsonSchemaValidationPort schemaValidator;
@@ -79,44 +83,76 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
     }
 
     @Override
+    public String getName() {
+        return "daiStructuredOutputValidation";
+    }
+
+    @Override
     public int getOrder() {
         return ORDER;
     }
 
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request, CallAroundAdvisorChain chain) {
-        AdvisedResponse response = chain.nextAroundCall(request);
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        ChatClientResponse response = chain.nextCall(request);
         return validate(response);
     }
 
-    private AdvisedResponse validate(AdvisedResponse response) {
-        if (response.response() == null) {
+    private ChatClientResponse validate(ChatClientResponse response) {
+        if (response.chatResponse() == null) {
             return response;
         }
-        var result = response.response().getResult();
+        if (response.chatResponse().hasToolCalls()) {
+            // This advisor runs inside the tool-calling loop, so it also sees the rounds in which the model asks for
+            // tools. Those carry no answer (empty text) and must reach the loop untouched; only the final round is
+            // the output to validate.
+            return response;
+        }
+        var result = response.chatResponse().getResult();
         if (result == null) {
             return response;
         }
-        String text = result.getOutput().getText();
+        Optional<Failure> failure = check(result.getOutput().getText());
+        if (failure.isPresent()) {
+            return blocked(response.context(), failure.get().code(), failure.get().message());
+        }
+        return response;
+    }
+
+    /**
+     * Why an answer was rejected.
+     *
+     * @param code    stable code, e.g. {@code output_schema_violation}
+     * @param message caller-safe explanation
+     */
+    public record Failure(String code, String message) {}
+
+    /**
+     * Validates a complete answer: well-formed JSON object or array and, when a schema and a validator exist,
+     * conformance to the schema. Used by the call advisor and by the streaming path once a stream has ended. Nothing
+     * of the answer is logged (it is user data).
+     *
+     * @param text the complete answer, possibly {@code null}
+     * @return the failure, or empty when the answer is acceptable
+     */
+    public Optional<Failure> check(@Nullable String text) {
         if (text == null || text.isBlank()) {
             LOG.warn("Agent returned blank output in JSON_SCHEMA mode");
-            return blocked(response.adviseContext(), "output_empty",
-                    "The agent returned an empty response. Please try again.");
+            return Optional.of(new Failure("output_empty", "The agent returned an empty response. Please try again."));
         }
-
         // Level 1: well-formedness check
         try {
             var node = MAPPER.readTree(text);
             // Only JSON objects and arrays are valid structured outputs
             if (!node.isObject() && !node.isArray()) {
                 LOG.warn("Agent output is not a JSON object or array in JSON_SCHEMA mode");
-                return blocked(response.adviseContext(), "output_not_json_object",
-                        "The agent response must be a JSON object or array.");
+                return Optional.of(new Failure("output_not_json_object",
+                        "The agent response must be a JSON object or array."));
             }
-        } catch (JsonProcessingException e) {
-            LOG.warn("Agent output is not valid JSON in JSON_SCHEMA mode: {}", e.getMessage());
-            return blocked(response.adviseContext(), "output_invalid_json",
-                    "The agent response is not valid JSON. Please try again.");
+        } catch (JacksonException e) {
+            LOG.warn("Agent output is not valid JSON in JSON_SCHEMA mode ({})", e.getClass().getSimpleName());
+            return Optional.of(new Failure("output_invalid_json",
+                    "The agent response is not valid JSON. Please try again."));
         }
 
         // Level 2: schema conformance (structural)
@@ -126,26 +162,25 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
                 try {
                     List<String> errors = schemaValidator.validate(schema, text);
                     if (!errors.isEmpty()) {
-                        LOG.warn("Agent output failed JSON Schema validation: {}", errors);
-                        return blocked(response.adviseContext(), "output_schema_violation",
-                                "The agent response does not conform to the expected schema.");
+                        LOG.warn("Agent output failed JSON Schema validation ({} error(s))", errors.size());
+                        return Optional.of(new Failure("output_schema_violation",
+                                "The agent response does not conform to the expected schema."));
                     }
                 } catch (Exception e) {
                     // Validator threw unexpectedly — degrade to well-formedness only (LLD-12 §4)
-                    LOG.warn("JSON Schema validation error (skipping schema check): {}", e.getMessage());
+                    LOG.warn("JSON Schema validation error, skipping schema check ({})", e.getClass().getSimpleName());
                 }
             } else {
                 LOG.debug("JSON Schema validation skipped (no validator; well-formedness only; schema: {} chars)",
                         schema.length());
             }
         }
-
-        return response;
+        return Optional.empty();
     }
 
-    private static AdvisedResponse blocked(Map<String, Object> adviseContext, String code, String message) {
+    private static ChatClientResponse blocked(Map<String, Object> adviseContext, String code, String message) {
         AssistantMessage msg = new AssistantMessage("[" + code + "] " + message);
         ChatResponse chatResponse = new ChatResponse(List.of(new Generation(msg)));
-        return new AdvisedResponse(chatResponse, adviseContext);
+        return new ChatClientResponse(chatResponse, adviseContext);
     }
 }

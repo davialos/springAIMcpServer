@@ -67,6 +67,9 @@ public class Conversation {
     @Column(name = "erased_at")
     private @Nullable Instant erasedAt;
 
+    @Column(name = "audit_hold_until")
+    private @Nullable Instant auditHoldUntil;
+
     @Version
     @Column(name = "row_version", nullable = false)
     private long rowVersion;
@@ -88,7 +91,7 @@ public class Conversation {
             throw new IllegalArgumentException("retention must be positive and at most " + MAX_RETENTION.toDays() + " days");
         }
         Conversation c = new Conversation();
-        c.id = Ids.newId();
+        c.id = conversation.id() != null ? conversation.id() : Ids.newId();
         c.conversationKeyHash = Checks.sha256(conversation.conversationKeyHash(), "conversationKeyHash");
         c.workspaceId = Checks.required(conversation.workspaceId(), "workspaceId");
         c.agentResourceId = conversation.agentResourceId();
@@ -139,6 +142,27 @@ public class Conversation {
         status = ConversationStatus.ERASED;
         erasedAt = UtcTimes.micros(now);
         title = null;
+    }
+
+    /**
+     * Marks the conversation erased but keeps it (and its messages) for audit until {@code holdUntil}: it is hidden
+     * from its user and the model, the title stays for auditors, and the purge job removes everything at the hold's
+     * end ({@code ck_conversation_audit_hold}).
+     *
+     * @param now       current time
+     * @param holdUntil end of the audit hold (after {@code now})
+     */
+    public void markErasedForAudit(Instant now, Instant holdUntil) {
+        if (status == ConversationStatus.ERASED) {
+            return;
+        }
+        if (!holdUntil.isAfter(now)) {
+            throw new IllegalArgumentException("holdUntil must be after now");
+        }
+        status = ConversationStatus.ERASED;
+        erasedAt = UtcTimes.micros(now);
+        auditHoldUntil = UtcTimes.micros(holdUntil);
+        retentionUntil = auditHoldUntil;
     }
 
     /**
@@ -208,6 +232,12 @@ public class Conversation {
     }
 
     /** @return erasure time, if erased */
+    /** @return end of the audit hold of an erased conversation, {@code null} when not held */
+    public @Nullable Instant getAuditHoldUntil() {
+        return auditHoldUntil;
+    }
+
+    /** @return when the user erased the conversation, if erased */
     public @Nullable Instant getErasedAt() {
         return erasedAt;
     }

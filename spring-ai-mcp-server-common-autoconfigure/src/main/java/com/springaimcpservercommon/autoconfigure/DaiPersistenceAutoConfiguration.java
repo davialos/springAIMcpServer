@@ -1,7 +1,13 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import io.micrometer.observation.ObservationRegistry;
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
+import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
+import com.springaimcpservercommon.ai.runtime.TurnRecorder;
+import com.springaimcpservercommon.ai.tool.ProposalService;
+import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
 import com.springaimcpservercommon.ai.agent.LimitSpec;
@@ -18,8 +24,20 @@ import com.springaimcpservercommon.persistence.config.GrantStore;
 import com.springaimcpservercommon.persistence.config.KillSwitchStore;
 import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
 import com.springaimcpservercommon.persistence.identity.RoleMappingStore;
+import com.springaimcpservercommon.persistence.identity.McpClientStore;
+import com.springaimcpservercommon.persistence.identity.PrincipalDirectory;
+import com.springaimcpservercommon.security.port.ApiKeyLookup;
+import com.springaimcpservercommon.security.port.GrantSource;
+import com.springaimcpservercommon.security.port.KillSwitchView;
+import com.springaimcpservercommon.security.port.McpClientRegistryPort;
+import com.springaimcpservercommon.security.port.MembershipSource;
+import com.springaimcpservercommon.security.port.PrincipalDirectoryPort;
+import com.springaimcpservercommon.security.port.ResourceStatusView;
+import com.springaimcpservercommon.security.port.RoleMappingSource;
+import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
 import com.springaimcpservercommon.persistence.usage.BudgetStore;
 import com.springaimcpservercommon.persistence.usage.PriceStore;
@@ -84,7 +102,12 @@ import java.util.stream.Collectors;
  * <p>These resolver beans supersede the no-op defaults registered by {@link DaiWebMvcAutoConfiguration}
  * (via {@code @ConditionalOnMissingBean}), because this configuration runs before it.
  */
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+// After Boot's DataSource auto-configuration: the persistence unit needs the host's DataSource bean, and
+// @ConditionalOnBean only sees beans defined by earlier configurations (by name: spring-boot-jdbc is optional).
+@AutoConfiguration(after = DaiCoreAutoConfiguration.class,
+        afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({ConfigStore.class, DaiPersistenceUnit.class})
 @NullMarked
 public class DaiPersistenceAutoConfiguration {
@@ -115,9 +138,12 @@ public class DaiPersistenceAutoConfiguration {
         DaiProperties.Environment env = props.environment();
         String tier = resolveTier(env.tier());
         String envId = environmentId(env, tier);
-        DaiPersistenceSettings settings = DaiPersistenceSettings.defaults(envId, tier);
-        LOG.info("Starting dynamic_ai persistence unit (schema {}, env {}/{})",
-                settings.schema(), envId, tier);
+        DaiPersistenceSettings defaults = DaiPersistenceSettings.defaults(envId, tier);
+        DaiProperties.Store store = props.store();
+        DaiPersistenceSettings settings = new DaiPersistenceSettings(defaults.schema(), store.migrate(), null, envId,
+                tier, store.validateSchema(), defaults.jdbcBatchSize());
+        LOG.info("Starting dynamic_ai persistence unit (schema {}, env {}/{}, migrate {}, validate {})",
+                settings.schema(), envId, tier, settings.migrate(), settings.validateSchema());
         return DaiPersistenceUnit.start(dataSource, settings);
     }
 
@@ -230,6 +256,28 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * Store-backed proposal creation for tools in PROPOSE mode (F-45, LLD-11): records the reviewable proposal, never
+     * writes to the host. Off until {@code dynamic.ai.agent.write.enabled=true} (the tools then answer
+     * {@code writes_disabled}). Supersedes the refusing default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param store    proposal store
+     * @param registry live catalog (resolves the operation and its record type)
+     * @param props    framework properties
+     * @param versions the host record versions (base version and before-values), when the host has JPA entities
+     * @return the service
+     */
+    @Bean
+    @ConditionalOnMissingBean(ProposalService.class)
+    @ConditionalOnBean({ChangeProposalStore.class, MetadataRegistry.class})
+    public ProposalService storeProposalService(ChangeProposalStore store, MetadataRegistry registry,
+                                                DaiProperties props,
+                                                org.springframework.beans.factory.ObjectProvider<
+                                                        com.springaimcpservercommon.core.versioning.RecordVersions>
+                                                        versions) {
+        return new StoreProposalService(store, registry::current, props.write(), versions::getIfAvailable);
+    }
+
+    /**
      * Token/cost budget store (F-70).
      *
      * @param store the framework's persistence unit
@@ -282,6 +330,19 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * PostgreSQL store for the model's chat memory (OQ-45).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatMemoryStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ChatMemoryStore chatMemoryStore(DaiStore store) {
+        return new ChatMemoryStore(store, java.time.Clock.systemUTC());
+    }
+
+    /**
      * Ledger-backed budget check for the invocation path (F-70). Supersedes the permit-all default of
      * {@link DaiAiAutoConfiguration}; disable enforcement with {@code dynamic.ai.agent.budget.enforce=false}.
      *
@@ -305,18 +366,260 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * Prices model usage from the price history; shared by usage and turn recording.
+     *
+     * @param prices model price history
+     * @return the calculator
+     */
+    @Bean
+    @ConditionalOnMissingBean(ModelCostCalculator.class)
+    @ConditionalOnBean(PriceStore.class)
+    ModelCostCalculator modelCostCalculator(PriceStore prices) {
+        return new ModelCostCalculator(prices, Duration.ofSeconds(60));
+    }
+
+    /**
      * Ledger-backed usage recording: tokens and priced cost of every completed model call (F-70, F-71).
      * Supersedes the no-op default of {@link DaiAiAutoConfiguration}.
      *
      * @param ledger usage ledger
-     * @param prices model price history
+     * @param costs  cost calculator
      * @return the sink
      */
     @Bean
     @ConditionalOnMissingBean(UsageMeteringAdvisor.UsageSink.class)
-    @ConditionalOnBean({UsageLedger.class, PriceStore.class})
-    public UsageMeteringAdvisor.UsageSink ledgerUsageSink(UsageLedger ledger, PriceStore prices) {
-        return new LedgerUsageSink(ledger, prices, Duration.ofSeconds(60), java.time.Clock.systemUTC());
+    @ConditionalOnBean({UsageLedger.class, ModelCostCalculator.class})
+    public UsageMeteringAdvisor.UsageSink ledgerUsageSink(UsageLedger ledger, ModelCostCalculator costs) {
+        return new LedgerUsageSink(ledger, costs, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Store-backed turn recording for the trace viewer (F-72): one turn row and one priced model call row per
+     * finished agent turn, written off the request path. Supersedes the no-op default of
+     * {@link DaiAiAutoConfiguration}.
+     *
+     * @param store telemetry store
+     * @param costs cost calculator
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(TurnRecorder.class)
+    @ConditionalOnBean({TelemetryStore.class, ModelCostCalculator.class})
+    public TurnRecorder storeTurnRecorder(TelemetryStore store, ModelCostCalculator costs) {
+        return new StoreTurnRecorder(store, costs);
+    }
+
+    /**
+     * Store-backed tool-call recording (F-72): one {@code dai_tool_invocation} row per tool call, written off the
+     * request path. Supersedes the no-op default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param store telemetry store
+     * @return the recorder
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(ToolCallRecorder.class)
+    @ConditionalOnBean(TelemetryStore.class)
+    public ToolCallRecorder storeToolCallRecorder(TelemetryStore store) {
+        return new StoreToolCallRecorder(store);
+    }
+
+    /**
+     * Store-backed conversation history (F-44): the redacted user message and answer of every successful turn.
+     * Off unless {@code dynamic.ai.agent.conversations.enabled=true}. Supersedes the no-op default of
+     * {@link DaiAiAutoConfiguration}.
+     *
+     * @param store telemetry store
+     * @param props framework properties (retention, stored size)
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationRecorder.class)
+    @ConditionalOnBean(TelemetryStore.class)
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.conversations", name = "enabled", havingValue = "true")
+    public ConversationRecorder storeConversationRecorder(TelemetryStore store, DaiProperties props) {
+        DaiProperties.Conversations c = props.conversations();
+        return new StoreConversationRecorder(store,
+                new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(), c.maxStoredChars()),
+                c.retention());
+    }
+
+    /**
+     * Deletes conversations past their retention, whether or not recording is currently enabled.
+     *
+     * @param store telemetry store
+     * @param props framework properties (purge interval)
+     * @return the job
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(ConversationRetentionJob.class)
+    @ConditionalOnBean(TelemetryStore.class)
+    ConversationRetentionJob conversationRetentionJob(TelemetryStore store,
+            org.springframework.beans.factory.ObjectProvider<ChatMemoryStore> memoryStore, DaiProperties props) {
+        return new ConversationRetentionJob(store, memoryStore.getIfAvailable(), props.conversations().purgeInterval());
+    }
+
+    // ─── Security ports over the store (see StoreSecurityPorts) ────────────────
+    // Without these no AuthorizationEngine, AuthorityMapper or principal resolver exists, and the admin API, agent
+    // chat and dynamic endpoints are never registered.
+
+    /**
+     * Principal directory store ({@code dai_principal}).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(PrincipalDirectory.class)
+    @ConditionalOnBean(DaiStore.class)
+    public PrincipalDirectory principalDirectory(DaiStore store) {
+        return new PrincipalDirectory(store);
+    }
+
+    /**
+     * MCP client registry store ({@code dai_mcp_client}).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(McpClientStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public McpClientStore mcpClientStore(DaiStore store) {
+        return new McpClientStore(store);
+    }
+
+    /**
+     * Principal directory port over the store; a disabled subject can never be mapped.
+     *
+     * @param directory principal directory store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(PrincipalDirectoryPort.class)
+    @ConditionalOnBean(PrincipalDirectory.class)
+    public PrincipalDirectoryPort storePrincipalDirectoryPort(PrincipalDirectory directory) {
+        return new StoreSecurityPorts.Directory(directory);
+    }
+
+    /**
+     * Workspace membership port over the store.
+     *
+     * @param workspaces workspace store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(MembershipSource.class)
+    @ConditionalOnBean(WorkspaceStore.class)
+    public MembershipSource storeMembershipSource(WorkspaceStore workspaces) {
+        return new StoreSecurityPorts.Memberships(workspaces);
+    }
+
+    /**
+     * Role mapping port over the store (reloaded every 10 s).
+     *
+     * @param store role mapping store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(RoleMappingSource.class)
+    @ConditionalOnBean(RoleMappingStore.class)
+    public RoleMappingSource storeRoleMappingSource(RoleMappingStore store) {
+        return new StoreSecurityPorts.RoleMappings(store, Duration.ofSeconds(10), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Grant port over the store (cached 5 s).
+     *
+     * @param store grant store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(GrantSource.class)
+    @ConditionalOnBean(GrantStore.class)
+    public GrantSource storeGrantSource(GrantStore store) {
+        return new StoreSecurityPorts.Grants(store, Duration.ofSeconds(5), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Kill switch port over the store (reloaded every 2 s, so a switch is effective on every node within seconds).
+     *
+     * @param store kill switch store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(KillSwitchView.class)
+    @ConditionalOnBean(KillSwitchStore.class)
+    public KillSwitchView storeKillSwitchView(KillSwitchStore store) {
+        return new StoreSecurityPorts.KillSwitches(store, Duration.ofSeconds(2), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Resource publication status port over the config store (cached 5 s).
+     *
+     * @param configStore config store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(ResourceStatusView.class)
+    @ConditionalOnBean(ConfigStore.class)
+    public ResourceStatusView storeResourceStatusView(ConfigStore configStore) {
+        return new StoreSecurityPorts.ResourceStatuses(configStore, Duration.ofSeconds(5),
+                java.time.Clock.systemUTC());
+    }
+
+    /**
+     * API key lookup port over the store.
+     *
+     * @param store API key store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyLookup.class)
+    @ConditionalOnBean(ApiKeyStore.class)
+    public ApiKeyLookup storeApiKeyLookup(ApiKeyStore store) {
+        return new StoreSecurityPorts.ApiKeys(store);
+    }
+
+    /**
+     * MCP client registry port over the store.
+     *
+     * @param store MCP client store
+     * @return the port
+     */
+    @Bean
+    @ConditionalOnMissingBean(McpClientRegistryPort.class)
+    @ConditionalOnBean(McpClientStore.class)
+    public McpClientRegistryPort storeMcpClientRegistry(McpClientStore store) {
+        return new StoreSecurityPorts.McpClients(store);
+    }
+
+    /**
+     * Makes kill switches effective for dynamic endpoints: an endpoint or agent with an active switch answers
+     * {@code endpoint-disabled}. Supersedes the permit-all default of {@link DaiWebMvcAutoConfiguration}.
+     *
+     * @param killSwitches kill switch port
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(GenericDynamicHandler.KillSwitchChecker.class)
+    @ConditionalOnBean(KillSwitchView.class)
+    public GenericDynamicHandler.KillSwitchChecker storeWebKillSwitchChecker(KillSwitchView killSwitches) {
+        return resourceId -> killSwitches.findActive(null, resourceId, null, java.time.Instant.now()).isPresent();
+    }
+
+    /**
+     * Makes kill switches effective inside the agent runtime (a switched-off agent refuses the turn). Supersedes
+     * the all-enabled default of {@link DaiAiAutoConfiguration}.
+     *
+     * @param killSwitches kill switch port
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(InvocationGuardAdvisor.KillSwitchChecker.class)
+    @ConditionalOnBean(KillSwitchView.class)
+    public InvocationGuardAdvisor.KillSwitchChecker storeAgentKillSwitchChecker(KillSwitchView killSwitches) {
+        return agentId -> killSwitches.findActive(null, agentId, null, java.time.Instant.now()).isEmpty();
     }
 
     private static String environmentId(DaiProperties.Environment env, String tier) {
@@ -340,8 +643,11 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(AgentSnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    public AgentSnapshotCache agentSnapshotCache(ConfigStore configStore) {
-        return new AgentSnapshotCache(configStore);
+    public AgentSnapshotCache agentSnapshotCache(ConfigStore configStore, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
+        AgentSnapshotCache cache = new AgentSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+        cache.observe(observations.getIfAvailable());
+        return cache;
     }
 
     @Bean
@@ -379,8 +685,11 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(QuerySnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore) {
-        return new QuerySnapshotCache(configStore);
+    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
+        QuerySnapshotCache cache = new QuerySnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+        cache.observe(observations.getIfAvailable());
+        return cache;
     }
 
     /**
@@ -397,6 +706,160 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(QuerySnapshotCache.class)
     public DaiQueryAutoConfiguration.QueryDefinitionLoader queryDefinitionLoader(QuerySnapshotCache cache) {
         return cache::findById;
+    }
+
+    /**
+     * Published tool bindings of the current generation (LLD-07 §2); polled by the maintenance runner.
+     *
+     * @param configStore the config store
+     * @param props       framework properties (poll interval)
+     * @return the cache
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBindingSnapshotCache.class)
+    @ConditionalOnBean(ConfigStore.class)
+    ToolBindingSnapshotCache toolBindingSnapshotCache(ConfigStore configStore, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
+        ToolBindingSnapshotCache cache = new ToolBindingSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+        cache.observe(observations.getIfAvailable());
+        return cache;
+    }
+
+    /**
+     * Loads the tool bindings an agent references. Without this bean no {@code ToolBridge} exists and agents have no
+     * tools.
+     *
+     * @param cache published bindings
+     * @return the loader
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.ToolBindingLoader.class)
+    @ConditionalOnBean(ToolBindingSnapshotCache.class)
+    ToolBridge.ToolBindingLoader toolBindingLoader(ToolBindingSnapshotCache cache) {
+        return (bindingId, revision) -> cache.find(bindingId);
+    }
+
+    /**
+     * Delegates for operation-backed tools: the same host-operation invocation the dynamic endpoints use, resolved
+     * lazily so this bean does not depend on the web layer's declaration order.
+     *
+     * @param handlers the operation backing handler
+     * @return the factory
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.OperationCallbackFactory.class)
+    @ConditionalOnBean(ConfigStore.class)
+    ToolBridge.OperationCallbackFactory operationCallbackFactory(
+            org.springframework.beans.factory.ObjectProvider<DispatchingBackingExecutor.OperationBackingHandler> handlers) {
+        return (operation, binding, principal) ->
+                BackingToolCallback.forOperation(operation, binding, principal, handlers.getObject());
+    }
+
+    /**
+     * Delegates for query-backed tools: the same compiled dynamic query the query endpoints run.
+     *
+     * @param handlers the query backing handler
+     * @param loaders  loads the published query (for the tool's input schema)
+     * @return the factory
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.QueryCallbackFactory.class)
+    @ConditionalOnBean(ConfigStore.class)
+    ToolBridge.QueryCallbackFactory queryCallbackFactory(
+            org.springframework.beans.factory.ObjectProvider<DispatchingBackingExecutor.QueryBackingHandler> handlers,
+            org.springframework.beans.factory.ObjectProvider<DaiQueryAutoConfiguration.QueryDefinitionLoader> loaders) {
+        return (queryId, binding, principal) -> {
+            DaiQueryAutoConfiguration.QueryDefinitionLoader loader = loaders.getIfAvailable();
+            return BackingToolCallback.forQuery(queryId, loader == null ? null : loader.load(queryId), binding,
+                    principal, handlers.getObject());
+        };
+    }
+
+    /**
+     * Background maintenance of this node (OQ-46): partition maintenance and retention on the cron, node heartbeat
+     * with the applied generation, snapshot polling, stale-approval expiry, silent-node pruning and reconciliation
+     * of proposals stuck in APPLYING. Off with {@code dynamic.ai.agent.store.maintenance.enabled=false}.
+     *
+     * <p>Declared after the stores and snapshot caches so its conditions see them.
+     *
+     * @param store     the persistence unit
+     * @param config    config store (heartbeat, node pruning, approval expiry)
+     * @param proposals proposal store (expiry, purge, apply reconciliation)
+     * @param telemetry telemetry store (conversation purge inside partition maintenance)
+     * @param views     snapshot caches to poll
+     * @param props     framework properties
+     * @return the runner
+     */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    @ConditionalOnMissingBean(MaintenanceRunner.class)
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.store.maintenance", name = "enabled", havingValue = "true",
+            matchIfMissing = true)
+    @ConditionalOnBean({DaiStore.class, ConfigStore.class, ChangeProposalStore.class, TelemetryStore.class})
+    MaintenanceRunner maintenanceRunner(DaiStore store, ConfigStore config, ChangeProposalStore proposals,
+                                        TelemetryStore telemetry,
+                                        org.springframework.beans.factory.ObjectProvider<ApiKeyStore> apiKeys,
+                                        org.springframework.beans.factory.ObjectProvider<SnapshotView> views,
+                                        DaiProperties props) {
+        DaiProperties.Maintenance settings = props.store().maintenance();
+        java.time.Clock clock = java.time.Clock.systemUTC();
+        String nodeId = settings.nodeId() != null ? settings.nodeId() : defaultNodeId();
+        var partitions = new com.springaimcpservercommon.persistence.maintenance.PartitionMaintenance(
+                store, proposals, telemetry, clock, nodeId, Map.of());
+        java.util.List<SnapshotView> snapshotViews = views.orderedStream().toList();
+        String app = props.environment().applicationName() != null ? props.environment().applicationName()
+                : "application";
+        String libraryVersion = MaintenanceRunner.class.getPackage().getImplementationVersion();
+        var steps = new MaintenanceRunner.Steps(
+                () -> snapshotViews.forEach(SnapshotView::refreshNow),
+                () -> snapshotViews.stream().mapToLong(SnapshotView::loadedGeneration).filter(g -> g > 0).min()
+                        .orElse(0L),
+                config::heartbeat,
+                () -> config.pruneNodes(settings.nodeRetention()),
+                () -> config.expireApprovals(clock.instant().minus(settings.approvalTtl())),
+                () -> failStuckApplies(proposals, settings.applyTimeout()),
+                partitions::run,
+                () -> {
+                    ApiKeyStore keys = apiKeys.getIfAvailable();
+                    return keys == null ? 0 : keys.countExpiringWithin(API_KEY_EXPIRY_WARNING);
+                });
+        return new MaintenanceRunner(steps, new MaintenanceRunner.Identity(nodeId, app, null,
+                libraryVersion == null ? "unknown" : libraryVersion), settings, clock);
+    }
+
+    /** How far ahead the maintenance runner warns about API keys that are about to expire. */
+    static final java.time.Duration API_KEY_EXPIRY_WARNING = java.time.Duration.ofDays(14);
+
+    /**
+     * Proposals in APPLYING longer than the timeout have an unknown outcome (the node applying them may have
+     * crashed after the host write). They are failed with a fixed message so an operator verifies the host state;
+     * a write is never retried automatically (ADR-0009).
+     */
+    static int failStuckApplies(ChangeProposalStore proposals, Duration timeout) {
+        int failed = 0;
+        for (java.util.UUID id : proposals.applyingSince(timeout, MaintenanceRunner.APPLY_BATCH)) {
+            try {
+                proposals.markFailed(id, "APPLY_TIMEOUT",
+                        "The apply did not finish in time; check the host state before proposing again.");
+                failed++;
+            } catch (RuntimeException e) {
+                // finished or failed concurrently on another node: nothing to reconcile
+                LOG.debug("Proposal {} left APPLYING before reconciliation ({})", id, e.getClass().getSimpleName());
+            }
+        }
+        return failed;
+    }
+
+    private static String defaultNodeId() {
+        String host;
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (java.io.IOException | RuntimeException e) {
+            host = "node";
+        }
+        String suffix = Long.toString(java.util.concurrent.ThreadLocalRandom.current().nextLong(0x100000, 0xFFFFFF), 16);
+        String id = host + "-" + suffix;
+        return id.length() > 255 ? id.substring(id.length() - 255) : id;
     }
 
     /**
@@ -453,11 +916,20 @@ public class DaiPersistenceAutoConfiguration {
 
     // ─── Snapshot-backed resolver implementations ────────────────────────────
 
+    /** What the maintenance runner needs from a snapshot cache. */
+    interface SnapshotView {
+        /** Checks the store for a newer generation now (ignores the throttle) and loads it. */
+        void refreshNow();
+
+        /** @return the generation currently served, 0 when nothing is loaded */
+        long loadedGeneration();
+    }
+
     /**
      * Shared snapshot cache: loads the config store snapshot once per generation and indexes agents
      * by both slug and resource UUID. Thread-safe; resolvers hold a reference to the same instance.
      */
-    static final class AgentSnapshotCache {
+    static final class AgentSnapshotCache implements SnapshotView {
 
         private final ConfigStore configStore;
         /** last generation we loaded; 0 = nothing cached. */
@@ -465,8 +937,34 @@ public class DaiPersistenceAutoConfiguration {
         private volatile Map<String, AgentDefinition> bySlug = Map.of();
         private volatile Map<UUID, AgentDefinition> byId = Map.of();
 
-        AgentSnapshotCache(ConfigStore configStore) {
+        private final long maxAgeNanos;
+        private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
+        private volatile boolean everChecked;
+        private volatile @Nullable ObservationRegistry observations;
+
+        /** Sets the host's registry for the {@code dai.snapshot.apply} span. */
+        void observe(@Nullable ObservationRegistry registry) {
+            this.observations = registry;
+        }
+
+        /**
+         * @param configStore the config store
+         * @param maxAge      longest a lookup trusts the cached generation before asking the store again
+         *                    (the maintenance runner also polls, so idle nodes stay current)
+         */
+        AgentSnapshotCache(ConfigStore configStore, Duration maxAge) {
             this.configStore = configStore;
+            this.maxAgeNanos = maxAge.toNanos();
+        }
+
+        @Override
+        public long loadedGeneration() {
+            return cachedGeneration.get();
+        }
+
+        @Override
+        public void refreshNow() {
+            refresh(true);
         }
 
         @Nullable AgentDefinition findBySlug(String slug) {
@@ -480,12 +978,25 @@ public class DaiPersistenceAutoConfiguration {
         }
 
         private void refresh() {
+            refresh(false);
+        }
+
+        private void refresh(boolean force) {
+            long now = System.nanoTime();
+            if (!force && everChecked && now - checkedAtNanos.get() < maxAgeNanos) return;
+            checkedAtNanos.set(now);
+            everChecked = true;
             long latest = configStore.latestGeneration().orElse(0L);
             if (latest <= cachedGeneration.get()) return;
             synchronized (this) {
                 if (latest <= cachedGeneration.get()) return;
+                SnapshotObservations.Span span = SnapshotObservations.open(observations, "agents", latest);
+                try {
                 Optional<PublishedSnapshot> snap = configStore.loadSnapshot(latest);
-                if (snap.isEmpty()) return;
+                if (snap.isEmpty()) {
+                    span.outcome("missing");
+                    return;
+                }
 
                 ConcurrentHashMap<String, AgentDefinition> slugMap = new ConcurrentHashMap<>();
                 ConcurrentHashMap<UUID, AgentDefinition> idMap = new ConcurrentHashMap<>();
@@ -507,6 +1018,12 @@ public class DaiPersistenceAutoConfiguration {
                 byId = Map.copyOf(idMap);
                 cachedGeneration.set(latest);
                 LOG.debug("Agent snapshot refreshed: generation {}, {} agents indexed", latest, slugMap.size());
+                } catch (RuntimeException e) {
+                    span.fail(e);
+                    throw e;
+                } finally {
+                    span.close();
+                }
             }
         }
     }
@@ -515,14 +1032,40 @@ public class DaiPersistenceAutoConfiguration {
      * Shared snapshot cache for published query definitions. Generation-based caching with
      * double-checked locking; indexes by resource UUID.
      */
-    static final class QuerySnapshotCache {
+    static final class QuerySnapshotCache implements SnapshotView {
 
         private final ConfigStore configStore;
         private final AtomicLong cachedGeneration = new AtomicLong(0L);
         private volatile Map<UUID, QueryDefinition> byId = Map.of();
 
-        QuerySnapshotCache(ConfigStore configStore) {
+        private final long maxAgeNanos;
+        private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
+        private volatile boolean everChecked;
+        private volatile @Nullable ObservationRegistry observations;
+
+        /** Sets the host's registry for the {@code dai.snapshot.apply} span. */
+        void observe(@Nullable ObservationRegistry registry) {
+            this.observations = registry;
+        }
+
+        /**
+         * @param configStore the config store
+         * @param maxAge      longest a lookup trusts the cached generation before asking the store again
+         *                    (the maintenance runner also polls, so idle nodes stay current)
+         */
+        QuerySnapshotCache(ConfigStore configStore, Duration maxAge) {
             this.configStore = configStore;
+            this.maxAgeNanos = maxAge.toNanos();
+        }
+
+        @Override
+        public long loadedGeneration() {
+            return cachedGeneration.get();
+        }
+
+        @Override
+        public void refreshNow() {
+            refresh(true);
         }
 
         @Nullable QueryDefinition findById(UUID id) {
@@ -531,12 +1074,25 @@ public class DaiPersistenceAutoConfiguration {
         }
 
         private void refresh() {
+            refresh(false);
+        }
+
+        private void refresh(boolean force) {
+            long now = System.nanoTime();
+            if (!force && everChecked && now - checkedAtNanos.get() < maxAgeNanos) return;
+            checkedAtNanos.set(now);
+            everChecked = true;
             long latest = configStore.latestGeneration().orElse(0L);
             if (latest <= cachedGeneration.get()) return;
             synchronized (this) {
                 if (latest <= cachedGeneration.get()) return;
+                SnapshotObservations.Span span = SnapshotObservations.open(observations, "queries", latest);
+                try {
                 Optional<PublishedSnapshot> snap = configStore.loadSnapshot(latest);
-                if (snap.isEmpty()) return;
+                if (snap.isEmpty()) {
+                    span.outcome("missing");
+                    return;
+                }
 
                 ConcurrentHashMap<UUID, QueryDefinition> idMap = new ConcurrentHashMap<>();
                 for (PublishedResource pr : snap.get().resources()) {
@@ -554,6 +1110,12 @@ public class DaiPersistenceAutoConfiguration {
                 byId = Map.copyOf(idMap);
                 cachedGeneration.set(latest);
                 LOG.debug("Query snapshot refreshed: generation {}, {} queries indexed", latest, idMap.size());
+                } catch (RuntimeException e) {
+                    span.fail(e);
+                    throw e;
+                } finally {
+                    span.close();
+                }
             }
         }
     }

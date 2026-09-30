@@ -223,6 +223,26 @@ public final class ApiKeyStore {
     }
 
     /**
+     * Counts keys that are still usable but expire within {@code horizon}: an operator's early warning, because a
+     * service that presents an expired key is refused (401) with no other sign. Read-only.
+     *
+     * @param horizon how far ahead to look (positive)
+     * @return the number of unrevoked keys expiring after now and within the horizon
+     */
+    public int countExpiringWithin(java.time.Duration horizon) {
+        if (horizon.isNegative() || horizon.isZero()) {
+            throw new IllegalArgumentException("horizon must be positive");
+        }
+        Instant now = clock.instant();
+        return store.readOnlyTransactions().execute(status -> store.entityManager().createQuery(
+                        "select count(k) from ApiKey k where k.revokedAt is null and k.expiresAt > :now"
+                                + " and k.expiresAt <= :until", Long.class)
+                .setParameter("now", now)
+                .setParameter("until", now.plus(horizon))
+                .getSingleResult().intValue());
+    }
+
+    /**
      * Lists all keys of a service account, including revoked and expired ones.
      *
      * @param serviceAccountId service account

@@ -2,12 +2,18 @@ package com.springaimcpservercommon.autoconfigure;
 
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
+import com.springaimcpservercommon.core.environment.Capability;
+import com.springaimcpservercommon.security.permission.Permission;
+import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -77,35 +83,71 @@ public final class CatalogAdminController {
             int entityCount,
             int operationCount) {}
 
-    private final MetadataRegistry metadataRegistry;
-
     /**
-     * @param metadataRegistry live effective catalog
+     * A page of catalog rows.
+     *
+     * @param items   rows
+     * @param limit   page size
+     * @param offset  page offset
+     * @param hasMore whether another page exists
+     * @param <T>     row type
      */
-    public CatalogAdminController(MetadataRegistry metadataRegistry) {
+    public record PageView<T>(List<T> items, int limit, int offset, boolean hasMore) {}
+
+    static final int MAX_QUERY = 100;
+
+    private final MetadataRegistry metadataRegistry;
+    private final AdminApi api;
+
+    CatalogAdminController(MetadataRegistry metadataRegistry, AdminApi api) {
         this.metadataRegistry = Objects.requireNonNull(metadataRegistry, "metadataRegistry");
+        this.api = Objects.requireNonNull(api, "api");
     }
 
     /**
-     * Returns catalog generation metadata and counts.
+     * Catalog summary (generation, fingerprint, counts). Allowed in every environment for callers with
+     * {@code catalog:read}; the detail endpoints below are introspection and are off in production (LLD-12 §2.2).
      *
-     * @return catalog info
+     * @param request current request
+     * @return 200 with the summary
      */
     @GetMapping
-    public ResponseEntity<CatalogInfo> catalogInfo() {
+    public ResponseEntity<?> catalogInfo(HttpServletRequest request) {
+        var gate = api.gate(request, Permission.CATALOG_READ, null);
+        if (!gate.open()) {
+            return gate.denied();
+        }
         EffectiveCatalog c = metadataRegistry.current();
         return ResponseEntity.ok(new CatalogInfo(
                 c.generation(), c.scanFingerprint(), c.entities().size(), c.operations().size()));
     }
 
     /**
-     * Returns all effective entities ordered by reference.
+     * Entities of the effective catalog, searchable and paged.
      *
-     * @return entity summaries
+     * @param q       optional case-insensitive filter on ref, name and description (max 100 characters)
+     * @param limit   page size (1..200, default 50)
+     * @param offset  page offset
+     * @param request current request
+     * @return 200 with a page; 403 {@code capability-disabled} when introspection is off
      */
     @GetMapping("/entities")
-    public ResponseEntity<List<EntitySummary>> entities() {
-        List<EntitySummary> result = metadataRegistry.current().entities().values().stream()
+    public ResponseEntity<?> entities(@RequestParam(required = false) @Nullable String q,
+                                      @RequestParam(required = false) @Nullable Integer limit,
+                                      @RequestParam(required = false) @Nullable Integer offset,
+                                      HttpServletRequest request) {
+        var gate = api.gate(request, Permission.CATALOG_READ, null);
+        if (!gate.open()) {
+            return gate.denied();
+        }
+        ResponseEntity<String> disabled = api.capabilityDenied(Capability.INTROSPECTION, request);
+        if (disabled != null) {
+            return disabled;
+        }
+        String needle = needle(q);
+        var page = AdminApi.page(limit, offset);
+        List<EntitySummary> all = metadataRegistry.current().entities().values().stream()
+                .filter(e -> needle == null || matches(needle, e.ref().toString(), e.name(), e.description()))
                 .map(e -> new EntitySummary(
                         e.ref().toString(),
                         e.name(),
@@ -114,17 +156,35 @@ public final class CatalogAdminController {
                         e.maxLimit(),
                         e.classification().name()))
                 .toList();
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(slice(all, page.offset(), page.limit()));
     }
 
     /**
-     * Returns all effective operations ordered by reference.
+     * Operations of the effective catalog, searchable and paged.
      *
-     * @return operation summaries
+     * @param q       optional case-insensitive filter on ref, tool name and description (max 100 characters)
+     * @param limit   page size (1..200, default 50)
+     * @param offset  page offset
+     * @param request current request
+     * @return 200 with a page; 403 {@code capability-disabled} when introspection is off
      */
     @GetMapping("/operations")
-    public ResponseEntity<List<OperationSummary>> operations() {
-        List<OperationSummary> result = metadataRegistry.current().operations().values().stream()
+    public ResponseEntity<?> operations(@RequestParam(required = false) @Nullable String q,
+                                        @RequestParam(required = false) @Nullable Integer limit,
+                                        @RequestParam(required = false) @Nullable Integer offset,
+                                        HttpServletRequest request) {
+        var gate = api.gate(request, Permission.CATALOG_READ, null);
+        if (!gate.open()) {
+            return gate.denied();
+        }
+        ResponseEntity<String> disabled = api.capabilityDenied(Capability.INTROSPECTION, request);
+        if (disabled != null) {
+            return disabled;
+        }
+        String needle = needle(q);
+        var page = AdminApi.page(limit, offset);
+        List<OperationSummary> all = metadataRegistry.current().operations().values().stream()
+                .filter(o -> needle == null || matches(needle, o.ref().toString(), o.toolName(), o.description()))
                 .map(o -> new OperationSummary(
                         o.ref().toString(),
                         o.toolName(),
@@ -133,6 +193,32 @@ public final class CatalogAdminController {
                         o.readOnly(),
                         o.classification().name()))
                 .toList();
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(slice(all, page.offset(), page.limit()));
+    }
+
+    private static @Nullable String needle(@Nullable String q) {
+        if (q == null || q.isBlank()) {
+            return null;
+        }
+        String v = q.strip();
+        if (v.length() > MAX_QUERY) {
+            throw new IllegalArgumentException("q must be at most " + MAX_QUERY + " characters");
+        }
+        return v.toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean matches(String needle, String... fields) {
+        for (String f : fields) {
+            if (f != null && f.toLowerCase(Locale.ROOT).contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static <T> PageView<T> slice(List<T> all, int offset, int limit) {
+        int from = Math.min(offset, all.size());
+        int to = Math.min(from + limit, all.size());
+        return new PageView<>(all.subList(from, to), limit, offset, to < all.size());
     }
 }

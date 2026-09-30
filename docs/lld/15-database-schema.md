@@ -478,11 +478,13 @@ to be part of any unique index on a partitioned table.
 | Table | Purpose | PK | Notable columns | FKs (enforced) | Indexes (why) |
 |---|---|---|---|---|---|
 | `dai_conversation` | Chat-memory container (LLD-06 §7); **not partitioned** — purged by `retention_until`, not partition drop | `id` | `conversation_key_hash` (UK, SHA-256 of principal+agent+client session — a guessed id alone grants nothing), `status`, `retention_until` | `workspace_id → dai_workspace`, `agent_resource_id → dai_resource`, `principal_id → dai_principal` | `ix_conversation_principal` (my conversations); `ix_conversation_agent WHERE agent_resource_id IS NOT NULL`; `ix_conversation_retention (retention_until) WHERE status <> 'ERASED'` — the purge job's scan |
+| | *V10:* `audit_hold_until` — erased by the user but kept for audit until then (`retention_until` equals it, so the purge job removes it); `ck_conversation_audit_hold` (only on ERASED); `ix_conversation_workspace` for the auditor listing | | | | |
 | `dai_conversation_message` | One message in a conversation; **not partitioned** (bounded by its parent's retention) | `id` | `seq`, `role`, `content` (stored **after** redaction), `redacted`, `tool_call_id` | `conversation_id → dai_conversation` (cascade) | `uq_conversation_message_seq (conversation_id, seq)` — the only access path (fetch by conversation, ordered) |
 | `dai_agent_turn` | One user turn → final answer | `(id, started_at)` | `outcome`, `finish_reason`, `error_code`, `time_to_first_token_ms`, `trace_id` | `workspace_id → dai_workspace`, `principal_id → dai_principal` | `ix_agent_turn_workspace/_principal/_agent` (all `... started_at DESC`) — dashboards and "my recent turns"; `ix_agent_turn_conversation`; `ix_agent_turn_trace` — jump from a trace id to the turn |
 | `dai_model_call` | Every request to an LLM provider (LLD-10 §2/§5) | `(id, started_at)` | `purpose`, `provider`, `model`, tokens, `cost_micros`, `outcome`, `fallback_of_id` | `workspace_id → dai_workspace` | `ix_model_call_turn WHERE turn_id IS NOT NULL`; `ix_model_call_workspace`; `ix_model_call_model (provider, model, started_at DESC)` — per-model cost/latency dashboards; `ix_model_call_failures (started_at DESC) WHERE outcome <> 'SUCCESS'` — the error-rate alert query (LLD-10 §8) touches only failing rows |
 | `dai_mcp_session` | Stateful Streamable-HTTP MCP session; **not partitioned** (bounded — one row per connection, closed sessions are small) | `id` | `session_id_hash` (UK, SHA-256 — the raw `Mcp-Session-Id` is never stored), `transport`, `end_reason` | `mcp_client_id → dai_mcp_client`, `workspace_id → dai_workspace`, `principal_id → dai_principal` | `ix_mcp_session_principal`; `ix_mcp_session_open (last_seen_at) WHERE ended_at IS NULL` — the idle-timeout sweep |
-| `dai_mcp_request` | Every MCP JSON-RPC call, stateful or stateless | `(id, received_at)` | `jsonrpc_method`, `tool_name`, `status` | `mcp_client_id → dai_mcp_client`, `principal_id → dai_principal`, `workspace_id → dai_workspace` | `ix_mcp_request_session WHERE mcp_session_id IS NOT NULL`; `ix_mcp_request_principal`; `ix_mcp_request_denied (received_at DESC) WHERE status IN ('DENIED','RATE_LIMITED')` — security dashboard |
+| `dai_mcp_request` | Every MCP JSON-RPC call, stateful or stateless | `(id, received_at)` | `jsonrpc_method`, `tool_name`, `status` | `mcp_client_id → dai_mcp_client`, `principal_id → dai_principal`, `workspace_id → dai_workspace` | `ix_mcp_request_session WHERE mcp_session_id IS NOT NULL`; `ix_mcp_request_principal`; `ix_mcp_request_denied (received_at DESC) WHERE status IN ('DENIED','RATE_LIMITED')` — security dashboard; `ix_mcp_request_workspace (workspace_id, received_at DESC)` (V7); `ix_mcp_request_trace (trace_id) WHERE trace_id IS NOT NULL` (V8) — jump from a trace id to the request |
+| `dai_chat_memory_message` | The message window the model reads for a conversation (V9, OQ-45): shared by all replicas, redacted, sliding TTL | `id` | `memory_key` (`sha256:` of workspace:agent:principal:conversation), `seq`, `role`, `expires_at` | none (key is a hash, not a foreign key) | `uq_chat_memory_message_seq (memory_key, seq)`; `ix_chat_memory_message_expiry` — purge |
 | `dai_tool_invocation` | Central "what did the AI do, on whose behalf" record — every host action or query executed or proposed via AI/MCP | `(id, started_at)` | `channel`, `tool_name`, `element_ref`, `access_mode`, `status`, `args_hash`, `result_hash`, `write_violation`, `proposal_id` | `workspace_id → dai_workspace`, `principal_id → dai_principal`, `binding_revision_id → dai_resource_revision` | `ix_tool_invocation_turn/_mcp_request` (origin lookup); `ix_tool_invocation_principal`; `ix_tool_invocation_tool (workspace_id, tool_name, started_at DESC)` — per-tool usage dashboards; `ix_tool_invocation_violation (started_at DESC) WHERE write_violation` — feeds the write-guard auto-disable counter (LLD-07 §4a); `ix_tool_invocation_proposal WHERE proposal_id IS NOT NULL` |
 | `dai_v_turn_usage` (view) | Per-turn token/cost rollup, derived from `dai_model_call` (single owner of token facts) | — | `GROUP BY` turn | — | inherits base-table indexes |
 
@@ -644,8 +646,9 @@ host's point of view; the application reconciles `dai_partitioned_table.retentio
 values at startup. A DBA should not hand-edit this table without also updating the host's configuration, or
 the next startup will silently overwrite the edit.
 
-**The maintenance job** (`dynamic.ai.agent.store.maintenance.cron`, default `0 17 3 * * *` — 03:17:00 daily)
-runs on every node but does its work on exactly one, coordinated with `pg_try_advisory_lock` keyed on a fixed
+**The maintenance job** (`dynamic.ai.agent.store.maintenance.cron`, default `0 17 3 * * *` — 03:17:00 UTC daily;
+scheduled by `MaintenanceRunner` on its own `dai-maintenance` thread, separate from the heartbeat thread)
+runs on every node but does its work on exactly one, coordinated with `pg_try_advisory_xact_lock` keyed on a fixed
 constant: a node that fails to acquire the lock records a `SKIPPED` `dai_job_run` and returns immediately.
 The node holding the lock:
 1. For each row in `dai_partitioned_table`, calls `dai_ensure_monthly_partitions(table_name, 1, months_ahead)`
@@ -763,7 +766,10 @@ current, implemented contract for version **0.1.0-SNAPSHOT**.
 | `dynamic.ai.agent.store.retention.audit-months` | `14` | Reconciled into `dai_partitioned_table.retention_months` for `dai_audit_event`/`dai_audit_evidence` |
 | `dynamic.ai.agent.store.retention.conversation-days` | `30` | Drives `dai_conversation.retention_until` at creation/update time |
 | `dynamic.ai.agent.store.retention.proposal-days` | `7` | Drives `dai_change_proposal.retention_until` at creation time |
-| `dynamic.ai.agent.store.maintenance.cron` | `0 17 3 * * *` | Partition creation, retention drop, and non-partitioned purge (§10) |
+| `dynamic.ai.agent.store.maintenance.enabled` | `true` | Runs the maintenance runner on this node; `false` leaves partitioning, retention, heartbeat and sweeps to the operator (OQ-31) |
+| `dynamic.ai.agent.store.maintenance.cron` | `0 17 3 * * *` | Partition creation, retention drop, and non-partitioned purge (§10); Spring six-field cron evaluated in UTC |
+| `dynamic.ai.agent.store.maintenance.{snapshot-poll-interval,heartbeat-interval,sweep-interval}` | `5s` / `15s` / `5m` | Generation poll, `dai_node_state` heartbeat, and the sweeps (silent nodes after `node-retention` 24h, approvals after `approval-ttl` 30d, proposals stuck in APPLYING after `apply-timeout` 10m) |
+| `dynamic.ai.agent.store.maintenance.node-id` | host name + random suffix | Id of this node in `dai_node_state` and `dai_job_run` |
 | `dynamic.ai.agent.audit.evidence.enabled` | `false` | Opt-in evidence tier (ADR-0018); gates whether `dai_audit_evidence`/`dai_evidence_subject_key` ever receive writes |
 | `dynamic.ai.agent.security.api-key.pepper-secret-ref` | unset | Reference (via `SecretResolver`) to the HMAC pepper used for `dai_api_key.key_hash` when `hash_algorithm = hmac-sha256` |
 
@@ -868,5 +874,5 @@ OQ-29 (minimum PostgreSQL version — resolved to 15 in this doc, recommendation
 (dedicated database vs. host database — both documented here and in the integration guide, still a
 per-deployment decision), OQ-31 (retention defaults and who runs partition maintenance — documented in §10/§12
 as "built-in job, advisory-locked, any node"; still open whether a deploying team may disable the built-in job
-entirely and run 100% DBA-driven maintenance — today the job is not configurable to "off" and this should be
-tracked as a follow-up, not assumed).
+entirely and run 100% DBA-driven maintenance — resolved: `store.maintenance.enabled=false` turns the runner off;
+the DBA then owns partitions, retention and the sweeps).

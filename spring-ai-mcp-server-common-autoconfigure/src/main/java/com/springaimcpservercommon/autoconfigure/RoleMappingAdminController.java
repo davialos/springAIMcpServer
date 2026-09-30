@@ -102,7 +102,17 @@ public final class RoleMappingAdminController {
     private final AdminAudit audit;
     private final AdminApi api;
 
+    private final Runnable identityChanged;
+
     RoleMappingAdminController(RoleMappingStore store, AdminAudit audit, AdminApi api) {
+        this(store, audit, api, () -> { });
+    }
+
+    /**
+     * @param identityChanged called after a change that alters callers' roles (drops the principal-mapping cache)
+     */
+    RoleMappingAdminController(RoleMappingStore store, AdminAudit audit, AdminApi api, Runnable identityChanged) {
+        this.identityChanged = Objects.requireNonNull(identityChanged, "identityChanged");
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -170,6 +180,7 @@ public final class RoleMappingAdminController {
         }
         RoleMappingView created = store.create(rule, description, caller.principalId());
         record(caller, "ROLE_MAPPING_CREATED", created);
+        identityChanged.run();
         return etag(HttpStatus.CREATED, created);
     }
 
@@ -211,6 +222,7 @@ public final class RoleMappingAdminController {
         }
         RoleMappingView updated = store.update(id, version, rule, description, caller.principalId());
         record(caller, "ROLE_MAPPING_UPDATED", updated);
+        identityChanged.run();
         return etag(HttpStatus.OK, updated);
     }
 
@@ -261,6 +273,7 @@ public final class RoleMappingAdminController {
         }
         store.delete(id);
         record(caller, "ROLE_MAPPING_DELETED", current);
+        identityChanged.run();
         return ResponseEntity.noContent().build();
     }
 
@@ -279,6 +292,8 @@ public final class RoleMappingAdminController {
         }
         RoleMappingView updated = store.setEnabled(id, enabled, caller.principalId());
         record(caller, enabled ? "ROLE_MAPPING_ENABLED" : "ROLE_MAPPING_DISABLED", updated);
+        identityChanged.run();
+        identityChanged.run();
         return etag(HttpStatus.OK, updated);
     }
 

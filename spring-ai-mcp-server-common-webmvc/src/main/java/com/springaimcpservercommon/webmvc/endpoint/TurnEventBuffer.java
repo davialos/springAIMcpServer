@@ -26,21 +26,27 @@ public interface TurnEventBuffer {
      * <p>When the buffer is at capacity for this turn, the oldest event is discarded so that
      * later events (closer to the current end) are preserved.
      *
-     * @param turnId the turn identifier
-     * @param seq    monotonically increasing sequence number (matches the SSE {@code id} suffix)
-     * @param event  the event to buffer
+     * <p>The first append of a turn binds the turn to its owner; later appends for the same turn must use
+     * the same owner.
+     *
+     * @param turnId  the turn identifier
+     * @param ownerId principal that started the turn; only this principal may read the events back
+     * @param seq     monotonically increasing sequence number (matches the SSE {@code id} suffix)
+     * @param event   the event to buffer
      */
-    void append(UUID turnId, int seq, StreamEvent event);
+    void append(UUID turnId, UUID ownerId, int seq, StreamEvent event);
 
     /**
      * Returns all buffered events for the given turn with sequence number {@code > afterSeq}.
      *
      * @param turnId   the turn identifier
+     * @param ownerId  principal asking; must be the principal that started the turn
      * @param afterSeq exclusive lower bound on sequence number; {@code -1} to retrieve all events
      * @return immutable list of matching events (empty if none match), or {@code null} when the
-     *         turn is unknown or has expired beyond the replay window
+     *         turn is unknown, has expired beyond the replay window, or belongs to another principal
+     *         (callers must not be able to tell these cases apart)
      */
-    @Nullable List<BufferedEvent> since(UUID turnId, int afterSeq);
+    @Nullable List<BufferedEvent> since(UUID turnId, UUID ownerId, int afterSeq);
 
     /**
      * Marks the turn as complete. The buffer retains events for replay until the configured TTL

@@ -5,16 +5,30 @@ import com.springaimcpservercommon.ai.advisor.JsonSchemaValidationPort;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
+import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
+import com.springaimcpservercommon.ai.runtime.TurnRecorder;
 import com.springaimcpservercommon.ai.tool.AgentCatalogPort;
 import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
+import com.springaimcpservercommon.ai.tool.ToolCallRecorder;
+import com.springaimcpservercommon.ai.tool.ToolSource;
+import com.springaimcpservercommon.ai.tool.WriteMode;
+import com.springaimcpservercommon.annotations.Classification;
+import com.springaimcpservercommon.security.authz.AuthorizationEngine;
+import com.springaimcpservercommon.security.authz.AuthorizationOutcome;
+import com.springaimcpservercommon.security.authz.AuthorizationRequest;
+import com.springaimcpservercommon.security.authz.ResourceRef;
+import com.springaimcpservercommon.security.permission.Permission;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import io.micrometer.observation.ObservationRegistry;
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import org.jspecify.annotations.NullMarked;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.memory.ChatMemoryRepository;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -22,6 +36,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Auto-configuration for the Spring AI agent runtime integration.
@@ -34,6 +51,8 @@ import org.springframework.context.annotation.Configuration;
  */
 @AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiSecurityAutoConfiguration.class,
                              DaiPersistenceAutoConfiguration.class})
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(ToolBridge.class)
 @NullMarked
 public class DaiAiAutoConfiguration {
@@ -64,6 +83,60 @@ public class DaiAiAutoConfiguration {
     }
 
     /**
+     * Default no-op turn recorder. Superseded by the store-backed recorder from
+     * {@link DaiPersistenceAutoConfiguration} when the {@code dynamic_ai} store is present.
+     *
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(TurnRecorder.class)
+    public TurnRecorder turnRecorder() {
+        return TurnRecorder.NOOP;
+    }
+
+    /**
+     * Default no-op tool-call recorder. Superseded by the store-backed recorder from
+     * {@link DaiPersistenceAutoConfiguration} when the {@code dynamic_ai} store is present.
+     *
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolCallRecorder.class)
+    public ToolCallRecorder toolCallRecorder() {
+        return ToolCallRecorder.NOOP;
+    }
+
+    /**
+     * Default no-op conversation recorder. Superseded by the store-backed recorder from
+     * {@link DaiPersistenceAutoConfiguration} when {@code dynamic.ai.agent.conversations.enabled=true}.
+     *
+     * @return the recorder
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationRecorder.class)
+    public ConversationRecorder conversationRecorder() {
+        return ConversationRecorder.NOOP;
+    }
+
+    /**
+     * Default {@link ModelRouter}: the host's {@code ChatModel} bean of the agent's provider. The models are
+     * looked up when the router is created, not through a bean condition, because Spring AI's provider
+     * auto-configurations sort after this one; a host without any {@code ChatModel} gets a router that answers
+     * every turn with {@code model-unavailable}, which is clearer than an agent endpoint that does not exist.
+     *
+     * @param beans the bean factory, to find every {@code ChatModel} by name
+     * @param props framework properties (provider breaker)
+     * @return the router
+     */
+    @Bean
+    @ConditionalOnMissingBean(ModelRouter.class)
+    public ModelRouter modelRouter(org.springframework.beans.factory.ListableBeanFactory beans, DaiProperties props) {
+        DaiProperties.Model model = props.model();
+        return new DefaultModelRouter(beans.getBeansOfType(org.springframework.ai.chat.model.ChatModel.class),
+                model.failureThreshold(), model.breakerOpenFor(), java.time.Clock.systemUTC());
+    }
+
+    /**
      * Default kill-switch checker — all agents are enabled by default.
      * The persistence module or the admin control-plane replaces this with a
      * database-backed kill-switch view.
@@ -77,28 +150,54 @@ public class DaiAiAutoConfiguration {
     }
 
     /**
-     * Default tool permission checker — permits all invocations.
-     * Replace with an {@link com.springaimcpservercommon.security.authz.AuthorizationEngine}-backed
-     * implementation for per-call security enforcement.
+     * Per-call tool permission check (LLD-07 §3): the caller must hold {@code tool:invoke} (or {@code agent:invoke}
+     * for an agent-backed tool) on the binding and, for a PROPOSE tool, also {@code data:write-propose}. Grants may
+     * change mid-conversation, so this runs on every call. Default deny: without an
+     * {@link AuthorizationEngine} nothing is permitted.
      *
+     * @param engines the authorization engine, when the security layer is present
      * @return the checker
      */
     @Bean
     @ConditionalOnMissingBean(SecuredToolCallback.ToolPermissionChecker.class)
-    public SecuredToolCallback.ToolPermissionChecker toolPermissionChecker() {
-        return (principal, binding) -> true;
+    public SecuredToolCallback.ToolPermissionChecker toolPermissionChecker(ObjectProvider<AuthorizationEngine> engines) {
+        return (principal, binding) -> {
+            AuthorizationEngine engine = engines.getIfAvailable();
+            if (engine == null) {
+                return false;
+            }
+            ResourceRef resource = ResourceRef.of(binding.workspaceId(), binding.id(), Classification.PUBLIC);
+            List<Permission> required = new ArrayList<>();
+            required.add(binding.source() instanceof ToolSource.AgentSource ? Permission.AGENT_INVOKE
+                    : Permission.TOOL_INVOKE);
+            if (binding.writeMode() == WriteMode.PROPOSE) {
+                required.add(Permission.DATA_WRITE_PROPOSE);
+            }
+            for (Permission permission : required) {
+                AuthorizationRequest request = AuthorizationRequest.onResource(principal, permission, resource)
+                        .withToolName(binding.toolName());
+                if (!(engine.decide(request) instanceof AuthorizationOutcome.Permit)) {
+                    return false;
+                }
+            }
+            return true;
+        };
     }
 
     /**
-     * Default no-op proposal service. Replaced by the persistence module when write-proposal
-     * persistence is enabled. Returns a synthetic UUID without persisting.
+     * Default proposal service: refuses. A proposal that was never stored must not be reported to the model or the
+     * user as created, so without the store-backed service (registered by {@link DaiPersistenceAutoConfiguration})
+     * a PROPOSE tool answers {@code proposal_unavailable}.
      *
      * @return the service
      */
     @Bean
     @ConditionalOnMissingBean(ProposalService.class)
     public ProposalService proposalService() {
-        return (toolName, toolInput, bindingId, principal) -> com.springaimcpservercommon.core.id.Ids.newId();
+        return request -> {
+            throw new ProposalService.ProposalRefusedException("proposal_unavailable",
+                    "Changes cannot be proposed here: no proposal store is configured.");
+        };
     }
 
     /**
@@ -117,15 +216,6 @@ public class DaiAiAutoConfiguration {
      *
      * @param agentCatalogProvider  optional port for loading agent definitions by id
      * @param agentInvokerProvider  lazy reference to the agent invoker (breaks the cycle)
-     * @return the factory
-     */
-    /**
-     * Sub-agent callback factory — active only when an {@link AgentCatalogPort} bean is present.
-     * Uses {@code ObjectProvider<AgentInvoker>} to avoid the circular bean dependency:
-     * {@code ToolBridge → AgentCallbackFactory → ObjectProvider<AgentInvoker>} (lazy).
-     *
-     * @param agentCatalogProvider optional port for loading agent definitions
-     * @param agentInvokerProvider lazy reference to the AgentInvoker
      * @return the factory, or a no-op factory when no AgentCatalogPort is registered
      */
     @Bean
@@ -156,6 +246,8 @@ public class DaiAiAutoConfiguration {
      * @param agentFactoryProvider optional sub-agent callback factory
      * @param permissionChecker    runtime per-call permission check
      * @param proposalService      creates ChangeProposal records for PROPOSE-mode tools
+     * @param toolCallRecorder     receives one record per tool call
+     * @param observationRegistry  the host's registry for the {@code dai.tool} spans, when it has one
      * @return the bridge
      */
     @Bean
@@ -168,33 +260,39 @@ public class DaiAiAutoConfiguration {
                                   ToolBridge.QueryCallbackFactory queryFactory,
                                   ObjectProvider<ToolBridge.AgentCallbackFactory> agentFactoryProvider,
                                   SecuredToolCallback.ToolPermissionChecker permissionChecker,
-                                  ProposalService proposalService) {
+                                  ProposalService proposalService,
+                                  ToolCallRecorder toolCallRecorder,
+                                  ObjectProvider<ObservationRegistry> observationRegistry) {
         return new ToolBridge(bindingLoader, operationFactory, queryFactory,
                 agentFactoryProvider.getIfAvailable(),
-                permissionChecker, proposalService);
+                permissionChecker, proposalService, toolCallRecorder, java.time.Clock.systemUTC(),
+                observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
 
     /**
-     * Observation registry fallback when Micrometer is not otherwise configured.
+     * Chat memory the model reads. With a {@link ChatMemoryStore} (a persistence unit exists) and
+     * {@code dynamic.ai.agent.memory.persistent=true} (default) the window lives in PostgreSQL, so every replica
+     * shares it and it survives restarts (OQ-45, ADR-0021); otherwise it is this node's heap. The repository is
+     * wrapped here and deliberately not exposed as a {@code ChatMemoryRepository} bean, so it cannot collide with
+     * the host's own Spring AI memory configuration.
      *
-     * @return a no-op registry
-     */
-    @Bean
-    @ConditionalOnMissingBean(ObservationRegistry.class)
-    public ObservationRegistry observationRegistry() {
-        return ObservationRegistry.NOOP;
-    }
-
-    /**
-     * Default in-memory chat memory store. Replace with a PostgreSQL-backed implementation
-     * (via the persistence module) for multi-replica deployments (ADR-0021).
-     *
-     * @return the memory store
+     * @param storeProvider optional PostgreSQL memory store
+     * @param props         framework properties
+     * @return the memory
      */
     @Bean
     @ConditionalOnMissingBean(ChatMemory.class)
-    public ChatMemory chatMemory() {
-        return new InMemoryChatMemory();
+    public ChatMemory chatMemory(ObjectProvider<ChatMemoryStore> storeProvider, DaiProperties props) {
+        ChatMemoryRepository repository = new InMemoryChatMemoryRepository();
+        ChatMemoryStore store = storeProvider.getIfAvailable();
+        DaiProperties.Memory memory = props.memory();
+        if (store != null && memory.persistent()) {
+            repository = new StoreChatMemoryRepository(store,
+                    new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(),
+                            memory.maxStoredChars()),
+                    memory.retention());
+        }
+        return MessageWindowChatMemory.builder().chatMemoryRepository(repository).build();
     }
 
     /**
@@ -206,7 +304,7 @@ public class DaiAiAutoConfiguration {
      * {@link NetworkntJsonSchemaValidationPort} is only loaded when the condition passes.
      */
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(name = "com.networknt.schema.JsonSchemaFactory")
+    @ConditionalOnClass(name = "com.networknt.schema.SchemaRegistry")
     static class NetworkntSchemaConfiguration {
 
         /**
@@ -246,6 +344,8 @@ public class DaiAiAutoConfiguration {
      * @param killSwitchChecker        runtime kill-switch check
      * @param budgetChecker            token-budget pre-check
      * @param usageSink                token usage accounting
+     * @param turnRecorder             per-turn telemetry (trace viewer)
+     * @param conversationRecorder     conversation history (F-44)
      * @param observationRegistry      Micrometer registry
      * @param chatMemory               conversation history store
      * @param schemaValidatorProvider  optional JSON Schema conformance validator
@@ -261,7 +361,9 @@ public class DaiAiAutoConfiguration {
             InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
             InvocationGuardAdvisor.BudgetChecker budgetChecker,
             UsageMeteringAdvisor.UsageSink usageSink,
-            ObservationRegistry observationRegistry,
+            TurnRecorder turnRecorder,
+            ConversationRecorder conversationRecorder,
+            ObjectProvider<ObservationRegistry> observationRegistry,
             ChatMemory chatMemory,
             ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider) {
         return new DefaultAgentInvoker(
@@ -271,7 +373,9 @@ public class DaiAiAutoConfiguration {
                 killSwitchChecker,
                 budgetChecker,
                 usageSink,
-                observationRegistry,
+                turnRecorder,
+                conversationRecorder,
+                observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP),
                 chatMemory,
                 schemaValidatorProvider.getIfAvailable());
     }

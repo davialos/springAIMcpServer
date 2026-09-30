@@ -4,6 +4,7 @@ import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.StreamEvent;
+import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
@@ -94,6 +95,33 @@ public class AgentChatController {
             String message,
             @Nullable String clientRequestId) {}
 
+    /**
+     * Tunable limits of the chat endpoints.
+     *
+     * @param streamIdleTimeout longest silence between two stream events before the stream ends with a
+     *                          {@code model-timeout} error event
+     * @param maxMessageChars   longest accepted user message in characters; an agent's own
+     *                          {@code maxInputChars} guardrail applies too when it is smaller
+     */
+    public record Settings(Duration streamIdleTimeout, int maxMessageChars) {
+        /** Defaults: 20 s stream idle timeout, 32000 characters per message. */
+        public static final Settings DEFAULTS = new Settings(Duration.ofSeconds(20), 32_000);
+
+        /** Validates the limits. */
+        public Settings {
+            Objects.requireNonNull(streamIdleTimeout, "streamIdleTimeout");
+            if (streamIdleTimeout.isNegative() || streamIdleTimeout.isZero()) {
+                throw new IllegalArgumentException("streamIdleTimeout must be positive");
+            }
+            if (maxMessageChars < 1) {
+                throw new IllegalArgumentException("maxMessageChars must be positive");
+            }
+        }
+    }
+
+    private static final java.util.regex.Pattern CLIENT_REQUEST_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,64}");
+
     private final AgentResolver agentResolver;
     private final AgentInvoker agentInvoker;
     private final GenericDynamicHandler.DaiPrincipalResolver principalResolver;
@@ -102,6 +130,8 @@ public class AgentChatController {
     private final GenericDynamicHandler.KillSwitchChecker killSwitchChecker;
     private final @Nullable TurnEventBuffer turnEventBuffer;
     private final InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker;
+    private final Settings settings;
+    private final ClientRequestRegistry clientRequests = new ClientRequestRegistry();
 
     /**
      * Creates the controller with all required ports, without SSE replay.
@@ -170,6 +200,33 @@ public class AgentChatController {
                                 GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
                                 @Nullable TurnEventBuffer turnEventBuffer,
                                 InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker) {
+        this(agentResolver, agentInvoker, principalResolver, authorizationEngine,
+             rateLimiter, killSwitchChecker, turnEventBuffer, budgetChecker, Settings.DEFAULTS);
+    }
+
+    /**
+     * Creates the controller with all ports, optional SSE replay, optional budget pre-check and explicit limits.
+     *
+     * @param agentResolver       looks up the published agent by slug
+     * @param agentInvoker        executes agent turns (sync and stream)
+     * @param principalResolver   maps the HTTP request to a {@link DaiPrincipal}
+     * @param authorizationEngine authorizes the invocation
+     * @param rateLimiter         per-principal rate limit enforcement
+     * @param killSwitchChecker   checks the agent kill switch
+     * @param turnEventBuffer     optional ring buffer enabling SSE replay; {@code null} disables replay
+     * @param budgetChecker       optional token/cost budget pre-check; {@code null} disables the early check
+     * @param settings            stream idle timeout and message size limit
+     */
+    public AgentChatController(AgentResolver agentResolver,
+                                AgentInvoker agentInvoker,
+                                GenericDynamicHandler.DaiPrincipalResolver principalResolver,
+                                AuthorizationEngine authorizationEngine,
+                                GenericDynamicHandler.RateLimiter rateLimiter,
+                                GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
+                                @Nullable TurnEventBuffer turnEventBuffer,
+                                InvocationGuardAdvisor.@Nullable BudgetChecker budgetChecker,
+                                Settings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
         this.agentResolver = Objects.requireNonNull(agentResolver, "agentResolver");
         this.agentInvoker = Objects.requireNonNull(agentInvoker, "agentInvoker");
         this.principalResolver = Objects.requireNonNull(principalResolver, "principalResolver");
@@ -184,6 +241,9 @@ public class AgentChatController {
 
     /**
      * Synchronous agent turn. Blocks until the model produces its final answer.
+     *
+     * <p>A non-blank {@code clientRequestId} makes the call idempotent per (caller, agent): a repeat while
+     * the earlier one is running or has succeeded answers {@code 409 conflict}; a failed attempt can be retried.
      *
      * @return {@code 200 application/json} with the turn result, or a problem response on error
      */
@@ -208,10 +268,19 @@ public class AgentChatController {
         DaiPrincipal principal = preCheck.principal();
         Authentication auth = preCheck.authentication();
 
+        UUID turnId = Ids.newId();
+        String clientRequestId = clientRequestId(body);
+        if (clientRequestId != null) {
+            UUID earlier = clientRequests.register(principal.principalId(), agent.id(), clientRequestId, turnId);
+            if (earlier != null) {
+                return duplicateRequest(earlier, false, slug, httpRequest);
+            }
+        }
+
         try {
             var request = new AgentInvoker.AgentChatRequest(
                     body.conversationId(), body.message(),
-                    body.clientRequestId() != null ? body.clientRequestId() : UUID.randomUUID().toString());
+                    clientRequestId != null ? clientRequestId : UUID.randomUUID().toString(), turnId);
 
             AgentInvoker.SyncChatResult result = agentInvoker.invoke(agent, request, principal, auth);
             return ResponseEntity.ok()
@@ -219,6 +288,7 @@ public class AgentChatController {
                     .body(syncResultToJson(result));
 
         } catch (AgentInvoker.AgentInvocationException e) {
+            releaseRequest(clientRequestId, principal, agent);
             LOG.warn("Agent {} invocation rejected for principal {}: {} {}",
                     slug, principal.principalId(), e.code(), e.getMessage());
             String problem = ProblemDetailFactory.build(
@@ -227,6 +297,7 @@ public class AgentChatController {
                     .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
                     .body(problem);
         } catch (Exception e) {
+            releaseRequest(clientRequestId, principal, agent);
             LOG.error("Unexpected error in sync chat for agent {}", slug, e);
             String problem = ProblemDetailFactory.build(
                     ProblemCode.INTERNAL_ERROR, "An unexpected error occurred.", null,
@@ -243,7 +314,11 @@ public class AgentChatController {
      * Streaming agent turn. Returns a cold SSE stream per LLD-13.
      *
      * <p>Pre-checks run synchronously before any response is sent. After the stream opens
-     * (200 OK), errors are delivered as terminal {@link StreamEvent.ErrorEvent} events.
+     * (200 OK), errors are delivered as terminal {@link StreamEvent.ErrorEvent} events, including
+     * {@code model-timeout} when no event arrives within {@link Settings#streamIdleTimeout()}. Every
+     * event, including the terminal error, is buffered for replay and carries the SSE id
+     * {@code turnId:seq}. A non-blank {@code clientRequestId} makes the call idempotent: a repeat answers
+     * {@code 409} naming the turn to resume with the replay endpoint.
      *
      * @return {@code 200 text/event-stream} on success, or a problem response on pre-check failure
      */
@@ -267,40 +342,66 @@ public class AgentChatController {
         AgentDefinition agent = preCheck.agent();
         DaiPrincipal principal = preCheck.principal();
         Authentication auth = preCheck.authentication();
-        UUID turnId = UUID.randomUUID();
+        UUID turnId = Ids.newId();
 
+        String clientRequestId = clientRequestId(body);
+        if (clientRequestId != null) {
+            UUID earlier = clientRequests.register(principal.principalId(), agent.id(), clientRequestId, turnId);
+            if (earlier != null) {
+                return duplicateRequest(earlier, true, slug, httpRequest);
+            }
+        }
+
+        // The invoker uses this id for turn.start and telemetry, so SSE ids, the replay URL and the trace agree.
         var chatRequest = new AgentInvoker.AgentChatRequest(
                 body.conversationId(), body.message(),
-                body.clientRequestId() != null ? body.clientRequestId() : UUID.randomUUID().toString());
+                clientRequestId != null ? clientRequestId : UUID.randomUUID().toString(), turnId);
 
         // Sequence counter for SSE event ids
         AtomicInteger seq = new AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicBoolean failed = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        // Content stream: agent events mapped to SSE (and optionally buffered for replay)
-        Flux<ServerSentEvent<String>> content = agentInvoker
+        // Typed events; timeout and errors become terminal error events so they are buffered and replayable
+        Flux<StreamEvent> events = agentInvoker
                 .stream(agent, chatRequest, principal, auth)
-                .map(event -> {
-                    int currentSeq = seq.getAndIncrement();
-                    if (turnEventBuffer != null) {
-                        turnEventBuffer.append(turnId, currentSeq, event);
-                    }
-                    return toSse(event, turnId, currentSeq);
-                })
                 .timeout(
-                        Duration.ofSeconds(20),   // first-token timeout
-                        Flux.just(errorEvent(turnId, "model-timeout", "The model did not respond in time.", false, seq.get())))
+                        settings.streamIdleTimeout(),
+                        Flux.defer(() -> Flux.just(errorEvent(turnId, "model-timeout",
+                                "The model did not respond in time.", false))))
                 .onBackpressureBuffer(MAX_BUFFERED_EVENTS,
                         dropped -> LOG.warn("Agent {} stream: client too slow, dropping event for turn {}",
                                 agent.slug(), turnId))
                 .onErrorResume(e -> {
                     LOG.error("Agent {} stream error for turn {}", agent.slug(), turnId, e);
                     return Flux.just(errorEvent(turnId, "stream-error",
-                            "An error occurred while streaming the response.", false, seq.get()));
+                            "An error occurred while streaming the response.", false));
+                });
+
+        // Completes when the content stream ends, so heartbeats stop without subscribing to the content twice
+        // (a second subscription would start a second agent turn).
+        reactor.core.publisher.Sinks.Empty<Void> contentDone = reactor.core.publisher.Sinks.empty();
+
+        // SSE content: sequence, buffer for replay, map to SSE
+        Flux<ServerSentEvent<String>> content = events
+                .map(event -> {
+                    if (event instanceof StreamEvent.ErrorEvent) {
+                        failed.set(true);
+                    }
+                    int currentSeq = seq.getAndIncrement();
+                    if (turnEventBuffer != null) {
+                        turnEventBuffer.append(turnId, principal.principalId(), currentSeq, event);
+                    }
+                    return toSse(event, turnId, currentSeq);
                 })
                 .doFinally(signal -> {
                     if (turnEventBuffer != null) {
                         turnEventBuffer.complete(turnId);
                     }
+                    if (failed.get() || signal == reactor.core.publisher.SignalType.CANCEL
+                            || signal == reactor.core.publisher.SignalType.ON_ERROR) {
+                        releaseRequest(clientRequestId, principal, agent);
+                    }
+                    contentDone.tryEmitEmpty();
                 });
 
         // Heartbeat stream: SSE comments, bounded by content lifecycle
@@ -309,7 +410,7 @@ public class AgentChatController {
                 .map(tick -> ServerSentEvent.<String>builder()
                         .comment("keep-alive")
                         .build())
-                .takeUntilOther(content.ignoreElements()); // STOPS when content completes or errors
+                .takeUntilOther(contentDone.asMono()); // STOPS when content completes, errors or is cancelled
 
         // Full stream: content merged with heartbeats
         Flux<ServerSentEvent<String>> stream = content.mergeWith(heartbeat);
@@ -362,15 +463,15 @@ public class AgentChatController {
             principal = principalResolver.resolve(httpRequest);
             auth = SecurityContextHolder.getContext().getAuthentication();
         } catch (Exception e) {
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(401)
                     .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
-                    .body(ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
+                    .body(ProblemDetailFactory.build(ProblemCode.UNAUTHENTICATED,
                             "Authentication required", null, httpRequest.getRequestURI()));
         }
         if (auth == null) {
-            return ResponseEntity.status(403)
+            return ResponseEntity.status(401)
                     .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
-                    .body(ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
+                    .body(ProblemDetailFactory.build(ProblemCode.UNAUTHENTICATED,
                             "Authentication required", null, httpRequest.getRequestURI()));
         }
 
@@ -380,7 +481,7 @@ public class AgentChatController {
                 com.springaimcpservercommon.annotations.Classification.PUBLIC);
         var authReq = com.springaimcpservercommon.security.authz.AuthorizationRequest.onResource(
                 principal,
-                com.springaimcpservercommon.security.permission.Permission.ENDPOINT_INVOKE,
+                com.springaimcpservercommon.security.permission.Permission.AGENT_INVOKE,
                 resource);
         if (authorizationEngine.decide(authReq) instanceof AuthorizationOutcome.Deny) {
             return ResponseEntity.status(403)
@@ -404,7 +505,7 @@ public class AgentChatController {
         int afterSeq = parseAfterSeq(lastEventId, turnId);
 
         // 6. Look up buffered events
-        java.util.List<TurnEventBuffer.BufferedEvent> events = turnEventBuffer.since(turnId, afterSeq);
+        java.util.List<TurnEventBuffer.BufferedEvent> events = turnEventBuffer.since(turnId, principal.principalId(), afterSeq);
         if (events == null) {
             return ResponseEntity.status(404)
                     .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
@@ -456,22 +557,20 @@ public class AgentChatController {
             auth = SecurityContextHolder.getContext().getAuthentication();
         } catch (Exception e) {
             return PreCheckResult.problem(
-                    ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
-                            "Authentication required", null, httpRequest.getRequestURI()),
-                    403);
+                    ProblemDetailFactory.build(ProblemCode.UNAUTHENTICATED,
+                            "Authentication required", null, httpRequest.getRequestURI()), 1);
         }
         if (auth == null) {
             return PreCheckResult.problem(
-                    ProblemDetailFactory.build(ProblemCode.ACCESS_DENIED,
-                            "Authentication required", null, httpRequest.getRequestURI()),
-                    403);
+                    ProblemDetailFactory.build(ProblemCode.UNAUTHENTICATED,
+                            "Authentication required", null, httpRequest.getRequestURI()), 1);
         }
 
         // 4. Authorization
         var resource = ResourceRef.of(agent.workspaceId(), agent.id(),
                 com.springaimcpservercommon.annotations.Classification.PUBLIC);
         var authReq = AuthorizationRequest.onResource(principal,
-                com.springaimcpservercommon.security.permission.Permission.ENDPOINT_INVOKE, resource);
+                com.springaimcpservercommon.security.permission.Permission.AGENT_INVOKE, resource);
         var outcome = authorizationEngine.decide(authReq);
         if (outcome instanceof AuthorizationOutcome.Deny) {
             return PreCheckResult.problem(
@@ -506,11 +605,30 @@ public class AgentChatController {
         }
 
         // 6. Validate body
-        if (body.message() == null || body.message().isBlank()) {
+        java.util.List<ProblemDetailFactory.FieldViolation> violations = new java.util.ArrayList<>();
+        String message = body.message();
+        if (message == null || message.isBlank()) {
+            violations.add(new ProblemDetailFactory.FieldViolation("message", "must not be blank"));
+        }
+        String requestId = body.clientRequestId();
+        if (requestId != null && !requestId.isBlank() && !CLIENT_REQUEST_ID.matcher(requestId.strip()).matches()) {
+            violations.add(new ProblemDetailFactory.FieldViolation("clientRequestId",
+                    "must be 1-64 characters of A-Z, a-z, 0-9, '_' or '-'"));
+        }
+        if (!violations.isEmpty()) {
             return PreCheckResult.problem(
-                    ProblemDetailFactory.buildValidation(httpRequest.getRequestURI(),
-                            java.util.List.of(new ProblemDetailFactory.FieldViolation("message", "must not be blank"))),
-                    400);
+                    ProblemDetailFactory.buildValidation(httpRequest.getRequestURI(), violations), 400);
+        }
+        int limit = settings.maxMessageChars();
+        int agentLimit = agent.guardrails().maxInputChars();
+        if (agentLimit > 0) {
+            limit = Math.min(limit, agentLimit);
+        }
+        if (message.length() > limit) {
+            return PreCheckResult.problem(
+                    ProblemDetailFactory.build(ProblemCode.REQUEST_TOO_LARGE, "Message too long",
+                            "The message may have at most " + limit + " characters.", httpRequest.getRequestURI()),
+                    ProblemCode.REQUEST_TOO_LARGE.httpStatus());
         }
 
         return PreCheckResult.ok(agent, principal, auth);
@@ -532,15 +650,15 @@ public class AgentChatController {
             return new PreCheckResult(null, null, null, json, status);
         }
 
-        AgentDefinition agent() {
+        public AgentDefinition agent() {
             return Objects.requireNonNull(agent, "agent");
         }
 
-        DaiPrincipal principal() {
+        public DaiPrincipal principal() {
             return Objects.requireNonNull(principal, "principal");
         }
 
-        Authentication authentication() {
+        public Authentication authentication() {
             return Objects.requireNonNull(authentication, "authentication");
         }
     }
@@ -571,15 +689,32 @@ public class AgentChatController {
                 .build();
     }
 
-    private static ServerSentEvent<String> errorEvent(UUID turnId, String code, String title,
-                                                       boolean retryable, int seq) {
-        var event = new StreamEvent.ErrorEvent(
-                "https://dynamic-ai/problems/" + code, title, code, retryable, turnId);
-        return ServerSentEvent.<String>builder()
-                .id(turnId + ":" + seq)
-                .event("error")
-                .data(event.toJson())
-                .build();
+    private static StreamEvent.ErrorEvent errorEvent(UUID turnId, String code, String title, boolean retryable) {
+        return new StreamEvent.ErrorEvent("https://dynamic-ai/problems/" + code, title, code, retryable, turnId);
+    }
+
+    /** The validated, stripped {@code clientRequestId}, or {@code null} when the client sent none. */
+    private static @Nullable String clientRequestId(ChatRequest body) {
+        String id = body.clientRequestId();
+        return id == null || id.isBlank() ? null : id.strip();
+    }
+
+    private void releaseRequest(@Nullable String clientRequestId, DaiPrincipal principal, AgentDefinition agent) {
+        if (clientRequestId != null) {
+            clientRequests.release(principal.principalId(), agent.id(), clientRequestId);
+        }
+    }
+
+    private static ResponseEntity<String> duplicateRequest(UUID earlierTurn, boolean resumable, String slug,
+                                                            HttpServletRequest httpRequest) {
+        String detail = resumable
+                ? "This clientRequestId already started turn " + earlierTurn + ". Resume it with GET "
+                        + "/dynamic-ai/api/agents/" + slug + "/turns/" + earlierTurn + "/events."
+                : "This clientRequestId already started turn " + earlierTurn + ", which is running or has completed.";
+        return ResponseEntity.status(ProblemCode.CONFLICT.httpStatus())
+                .contentType(MediaType.parseMediaType(CONTENT_TYPE_PROBLEM))
+                .body(ProblemDetailFactory.build(ProblemCode.CONFLICT, "Duplicate request", detail,
+                        httpRequest.getRequestURI()));
     }
 
     private static String syncResultToJson(AgentInvoker.SyncChatResult result) {

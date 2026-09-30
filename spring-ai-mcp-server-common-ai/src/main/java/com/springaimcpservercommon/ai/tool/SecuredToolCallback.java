@@ -303,7 +303,50 @@ public final class SecuredToolCallback implements ToolCallback {
         return new Handled(envelope.toJson(), ToolResultStatus.PROPOSED, null, false, null, false, proposalId);
     }
 
+    /** Virtual-thread-per-call executor for tool bodies, so each call can be abandoned at its timeout (release-it). */
+    private static final java.util.concurrent.ExecutorService TOOL_EXECUTOR =
+            java.util.concurrent.Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("dai-tool-", 0).factory());
+
+    /**
+     * Runs the tool body on its own virtual thread and waits at most {@link ToolBinding#timeout()}. A call that
+     * exceeds it is interrupted and reported to the model as {@code timeout}; the caller's thread is never held
+     * beyond the limit (LLD-12 §4: fail the feature, not the host).
+     */
     private Handled runAsCallerWithEnvelope(String toolInput, ToolContext toolContext) {
+        Map<String, String> mdc = org.slf4j.MDC.getCopyOfContextMap();
+        java.util.concurrent.Future<Handled> future = TOOL_EXECUTOR.submit(() -> {
+            if (mdc != null) {
+                org.slf4j.MDC.setContextMap(mdc);
+            }
+            try {
+                return executeAsCaller(toolInput, toolContext);
+            } finally {
+                org.slf4j.MDC.clear();
+            }
+        });
+        try {
+            return future.get(binding.timeout().toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            future.cancel(true);
+            LOG.warn("Tool {} timed out after {} for principal {}", binding.toolName(), binding.timeout(),
+                    principal.principalId());
+            return failure(ToolResultEnvelope.error(binding.toolName(), "timeout",
+                    "The tool did not answer in time. Try again later or with a narrower request."), "timeout", false);
+        } catch (InterruptedException e) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            return failure(ToolResultEnvelope.error(binding.toolName(), "internal_error",
+                    "An unexpected error occurred. Please try again."), "internal_error", false);
+        } catch (java.util.concurrent.ExecutionException e) {
+            // executeAsCaller handles every exception itself; reaching here means an Error escaped
+            LOG.error("Tool {} failed unexpectedly for principal {}", binding.toolName(), principal.principalId(),
+                    e.getCause());
+            return failure(ToolResultEnvelope.error(binding.toolName(), "internal_error",
+                    "An unexpected error occurred. Please try again."), "internal_error", false);
+        }
+    }
+
+    private Handled executeAsCaller(String toolInput, ToolContext toolContext) {
         SecurityContext previous = SecurityContextHolder.getContext();
         SecurityContext callerContext = SecurityContextHolder.createEmptyContext();
         callerContext.setAuthentication(authentication);

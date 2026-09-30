@@ -59,10 +59,14 @@ class SecuredToolCallbackRecordingTest {
     }
 
     private ToolBinding binding(WriteMode mode, int maxChars) {
+        return binding(mode, maxChars, Duration.ofSeconds(5));
+    }
+
+    private ToolBinding binding(WriteMode mode, int maxChars, Duration timeout) {
         return new ToolBinding(UUID.randomUUID(), 1, UUID.randomUUID(), "find_orders",
                 new ToolSource.OperationSource(
                         CatalogElementRef.operation("com.acme.OrderService", "find", List.of("java.lang.String"))),
-                null, Map.of(), mode, false, Duration.ofSeconds(5), 3, new ResultPolicy(maxChars, true), false);
+                null, Map.of(), mode, false, timeout, 3, new ResultPolicy(maxChars, true), false);
     }
 
     private SecuredToolCallback callback(ToolBinding binding, ToolCallback delegate, boolean permitted,
@@ -345,5 +349,47 @@ class SecuredToolCallbackRecordingTest {
                 request -> UUID.randomUUID(), recorded::add, null, Clock.systemUTC());
 
         assertThat(cb.call("{}")).contains("proposal_unavailable");
+    }
+
+    @Test
+    void aToolThatExceedsItsTimeoutIsAbandonedAndRecordedAsTimeout() {
+        java.util.concurrent.atomic.AtomicBoolean interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        ToolBinding binding = binding(WriteMode.EXECUTE, 0, Duration.ofMillis(100));
+        long started = System.nanoTime();
+        String result = callback(binding, delegate(in -> {
+            try {
+                Thread.sleep(10_000);
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+            }
+            return "{}";
+        }), true).call("{}");
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+        assertThat(result).contains("\"status\":\"error\"").contains("timeout");
+        assertThat(recorded).singleElement().satisfies(c -> {
+            assertThat(c.status()).isEqualTo(ToolResultStatus.ERROR);
+            assertThat(c.errorCode()).isEqualTo("timeout");
+        });
+        for (int i = 0; i < 40 && !interrupted.get(); i++) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        assertThat(interrupted).isTrue();
+    }
+
+    @Test
+    void theToolBodyRunsWithTheCallersSecurityContextOnItsOwnThread() {
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>();
+        callback(binding(WriteMode.EXECUTE, 0), delegate(in -> {
+            seen.set(org.springframework.security.core.context.SecurityContextHolder.getContext()
+                    .getAuthentication().getName());
+            return "{}";
+        }), true).call("{}");
+        assertThat(seen).hasValue("alice");
     }
 }

@@ -3,6 +3,7 @@ package com.springaimcpservercommon.autoconfigure;
 import com.springaimcpservercommon.ai.agent.ModelSelection;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.model.ModelUnavailableException;
+import com.springaimcpservercommon.ai.model.ResolvedModel;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import org.jspecify.annotations.NullMarked;
 import org.springframework.ai.chat.model.ChatModel;
@@ -22,9 +23,9 @@ import java.util.Objects;
  * {@code ollamaChatModel}. There is deliberately no "use whichever model exists" fallback: silently sending a
  * workspace's data to a different provider than configured would defeat data-residency rules (F-77).
  *
- * <p>Known limits (OQ-47): the agent's model name and temperature are not applied (the provider bean's own
- * defaults are used), and there is no circuit breaker or failover on provider errors, only on a missing provider.
- * Hosts can supply their own {@link ModelRouter} bean to change any of this.
+ * <p>{@link #resolveModel} also reports which selection matched, so the invoker applies that selection's model name,
+ * temperature and token limit. Known limit (OQ-47): there is no circuit breaker or failover on provider errors,
+ * only on a missing provider. Hosts can supply their own {@link ModelRouter} bean to change any of this.
  */
 @NullMarked
 final class DefaultModelRouter implements ModelRouter {
@@ -46,11 +47,16 @@ final class DefaultModelRouter implements ModelRouter {
 
     @Override
     public ChatModel resolve(ModelSelection selection, DaiPrincipal principal) {
+        return resolveModel(selection, principal).model();
+    }
+
+    @Override
+    public ResolvedModel resolveModel(ModelSelection selection, DaiPrincipal principal) {
         ModelSelection current = selection;
         while (current != null) {
             ChatModel model = byProvider.get(normalize(current.providerId()));
             if (model != null) {
-                return model;
+                return new ResolvedModel(model, current);
             }
             current = current.fallback();
         }

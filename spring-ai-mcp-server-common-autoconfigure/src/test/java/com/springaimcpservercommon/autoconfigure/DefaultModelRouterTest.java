@@ -63,4 +63,16 @@ class DefaultModelRouterTest {
         assertThatThrownBy(() -> new DefaultModelRouter(Map.of("openAiChatModel", openAi, "openaiChatModel", model())))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void resolveModelReportsTheSelectionThatMatchedSoTheFallbackKeepsItsOwnModelName() {
+        ModelSelection fallback = new ModelSelection("ollama", "llama3.1", 0.1, 512, null);
+        ModelSelection primary = new ModelSelection("anthropic", "claude-x", 0.9, 4096, fallback);
+
+        var resolved = router.resolveModel(primary, null);
+
+        assertThat(resolved.model()).isSameAs(ollama);
+        assertThat(resolved.selection()).isSameAs(fallback);
+        assertThat(router.resolveModel(selection("openai", null), null).selection().providerId()).isEqualTo("openai");
+    }
 }

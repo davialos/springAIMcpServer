@@ -8,7 +8,10 @@ import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.MemorySpec;
 import com.springaimcpservercommon.ai.agent.OutputSpec;
+import com.springaimcpservercommon.ai.agent.ModelSelection;
 import com.springaimcpservercommon.ai.model.ModelRouter;
+import com.springaimcpservercommon.ai.model.ResolvedModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
 import com.springaimcpservercommon.ai.tool.ToolCallScope;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
@@ -143,9 +146,10 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 throw new AgentInvocationException("budget-exhausted",
                         "The usage budget for this agent is exhausted for the current period.", false);
             }
-            ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
+            ResolvedModel resolved = modelRouter.resolveModel(agent.model(), principal);
+            ChatModel chatModel = resolved.model();
             List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
-            ChatClient client = buildChatClient(agent, principal, chatModel);
+            ChatClient client = buildChatClient(agent, principal, resolved);
             String convKey = convKey(principal, agent, conversationId);
 
             ChatResponse response = client.prompt()
@@ -222,9 +226,10 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             "/errors/agent/budget-exhausted", "Usage limit reached",
                             "budget-exhausted", false, turnId));
                 }
-                ChatModel chatModel = modelRouter.resolve(agent.model(), principal);
+                ResolvedModel resolved = modelRouter.resolveModel(agent.model(), principal);
+                ChatModel chatModel = resolved.model();
                 List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
-                ChatClient client = buildChatClient(agent, principal, chatModel);
+                ChatClient client = buildChatClient(agent, principal, resolved);
                 String convKey = convKey(principal, agent, conversationId);
 
                 AtomicInteger seq = new AtomicInteger(0);
@@ -409,7 +414,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     // ─── ChatClient assembly ──────────────────────────────────────────────────
 
-    private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ChatModel chatModel) {
+    private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ResolvedModel resolved) {
+        ChatModel chatModel = resolved.model();
         List<Advisor> advisors = new ArrayList<>();
         advisors.add(new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker));
         if (agent.memory().strategy() == MemorySpec.Strategy.SUMMARY) {
@@ -427,8 +433,21 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
         ChatClient.Builder builder = ChatClient.builder(chatModel)
                 .defaultSystem(agent.systemPrompt())
+                .defaultOptions(chatOptions(resolved.selection()))
                 .defaultAdvisors(advisors);
         return builder.build();
+    }
+
+    /** The per-agent request options of the selection that resolved: model name, temperature, token limit (OQ-47). */
+    static ChatOptions.Builder<?> chatOptions(ModelSelection selection) {
+        ChatOptions.Builder<?> options = ChatOptions.builder().model(selection.modelName());
+        if (selection.temperature() != null) {
+            options.temperature(selection.temperature());
+        }
+        if (selection.maxTokens() != null) {
+            options.maxTokens(selection.maxTokens());
+        }
+        return options;
     }
 
     // ─── Tool callbacks ───────────────────────────────────────────────────────

@@ -301,7 +301,7 @@ public class DaiAiAutoConfiguration {
      * {@link NetworkntJsonSchemaValidationPort} is only loaded when the condition passes.
      */
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(name = "com.networknt.schema.JsonSchemaFactory")
+    @ConditionalOnClass(name = "com.networknt.schema.SchemaRegistry")
     static class NetworkntSchemaConfiguration {
 
         /**

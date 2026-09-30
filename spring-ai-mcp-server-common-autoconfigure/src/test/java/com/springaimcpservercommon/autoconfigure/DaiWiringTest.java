@@ -250,6 +250,13 @@ class DaiWiringTest {
     }
 
     @Test
+    void theJsonSchemaValidatorIsTheNetworkntOneWhenTheLibraryIsPresent() {
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->
+                assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.advisor.JsonSchemaValidationPort.class))
+                        .containsExactly("networkntJsonSchemaValidator"));
+    }
+
+    @Test
     void weNeverRegisterAnObservationRegistryOfOurOwn() {
         // a fallback registry could displace the host's (Spring Boot backs off when one exists)
         runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->

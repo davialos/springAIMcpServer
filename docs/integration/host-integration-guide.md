@@ -804,3 +804,18 @@ dynamic.ai.agent.security.api-keys:
 
 Keys are only accepted on the API and MCP planes, never on the admin plane. Rotating the pepper: supply your own
 `ApiKeyPepperProvider` bean that keeps old versions resolvable until the keys hashed with them have expired.
+
+## Break-glass: enabling authoring in production for a limited time
+
+Authoring, introspection, playground and config UI are off in production. For an incident or an urgent change:
+
+```yaml
+dynamic.ai.agent.environment.production-override:
+  capabilities: AUTHORING          # AUTHORING, INTROSPECTION, PLAYGROUND, CONFIG_CHANGES_UI (never QUERY_PREVIEW)
+  expires-at: 2026-10-01T18:00:00Z # at most 72 hours after startup
+  reason: INC-1234                 # mandatory
+```
+
+It switches itself off at `expires-at` without a restart, logs a warning at startup and on every use, and writes a
+`PRODUCTION_OVERRIDE_USED` audit event (who, which capability, which request) each time it is what allowed a request.
+An invalid override (no reason, no expiry, too long, not overridable) stops the application at startup.

@@ -76,8 +76,9 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean({GenericDynamicHandler.DaiPrincipalResolver.class, AuthorizationEngine.class,
                         EnvironmentSafetyPolicy.class, EnvironmentSignals.class})
     AdminApi adminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine engine,
-                      EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals signals) {
-        return new AdminApi(principalResolver, engine, safetyPolicy, signals);
+                      EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals signals,
+                      org.springframework.beans.factory.ObjectProvider<AdminAudit> audit) {
+        return new AdminApi(principalResolver, engine, safetyPolicy, signals, audit.getIfAvailable());
     }
 
     /**

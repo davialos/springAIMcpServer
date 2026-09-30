@@ -51,12 +51,13 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
 2. (`HostApplicationIT` now also proves annotated host code end to end: a read tool with `principalAttr`/`range` constraints, a saved query over the host entity that cannot reach sensitive columns, and a PROPOSE tool whose write only runs through the host method after the owner confirms.)
 2. (MCP end to end is done, with an MCP client admin API.) MCP gaps in OQ-49: stateful sessions and
    `tools/list_changed`, resources/prompts, `insufficient_scope` step-up, per-client rate limits, SDK transport.
-3. **Break-glass production override is not configurable (OQ-53).** Bind `environment.production-override.*`.
+3. (Break-glass production override is bound and audited, OQ-53.)
 4. **Per-kind spec validation at authoring time (OQ-41)** and **budget reservation (OQ-40).**
 5. **PII redaction of transcripts (OQ-44)** — only credentials are redacted today; matters more now that transcripts
    are retained for audit.
 
 **Smaller / known limits**
+- `StreamSpanNestingTest` (ai module) failed once in a full-reactor run ("expecting [dai.agent.turn, …] to contain dai.agent.turn") and passed on every rerun and alone: a timing-dependent flake in how the test reads the observation ancestry; not yet root-caused.
 - Tool-call messages are not remembered across turns (OQ-45); breaker state has no admin metric beyond
   `GET /dynamic-ai/admin/api/v1/model-providers`; no same-provider retry with backoff (OQ-47).
 - Maintenance: audit/telemetry retention beyond partition drop, MCP idle-session sweep (moot until stateful MCP),

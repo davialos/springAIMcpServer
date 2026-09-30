@@ -23,4 +23,16 @@ public interface EnvironmentSafetyPolicy {
      * @return {@code true} if enabled
      */
     boolean isEnabled(Capability capability, EnvironmentIdentity identity);
+
+    /**
+     * Whether a capability is enabled only because a break-glass {@link ProductionOverride} is active (so that using
+     * it can be audited). Policies without an override answer {@code false}.
+     *
+     * @param capability the capability
+     * @param identity   the environment identity
+     * @return {@code true} when the override, not the normal rules, enables it right now
+     */
+    default boolean enabledByOverride(Capability capability, EnvironmentIdentity identity) {
+        return false;
+    }
 }

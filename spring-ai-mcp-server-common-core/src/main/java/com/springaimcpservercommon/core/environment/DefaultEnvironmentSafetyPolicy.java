@@ -122,6 +122,12 @@ public final class DefaultEnvironmentSafetyPolicy implements EnvironmentSafetyPo
         return override != null && override.enables(capability, clock.instant());
     }
 
+    @Override
+    public boolean enabledByOverride(Capability capability, EnvironmentIdentity identity) {
+        return capability.restrictedInProduction() && identity.productionRules() && capability.overridableInProduction()
+                && override != null && override.enables(capability, clock.instant());
+    }
+
     /**
      * Whether a profile matches one of the production patterns (case-insensitive).
      *

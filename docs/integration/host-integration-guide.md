@@ -281,6 +281,10 @@ claim, or provide a `PrincipalAttributeResolver` bean that flattens them.
 
 ## 6. Annotating host code
 
+> Deeper guidance — keeping all annotation text and limits in central constant classes, AI contract interfaces,
+> complete scenarios for every annotation, a catalog contract test and a review checklist — is in
+> [annotation-best-practices.md](annotation-best-practices.md).
+
 Only annotated elements are ever visible to AI or the dynamic query engine (LLD-02 §1 — opt-in, not
 opt-out). A realistic `Order`/`Customer` example, including a write that becomes a reviewed proposal instead
 of a direct mutation:

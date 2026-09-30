@@ -74,17 +74,21 @@ public class DaiQueryAutoConfiguration {
      *
      * @param entityManagerFactory the host's entity manager factory (injected by Spring)
      * @param props                framework properties
+     * @param observations         the host's observation registry, if any (the {@code dai.query} span)
      * @return the executor
      */
     @Bean
     @ConditionalOnMissingBean(QueryExecutor.class)
     @ConditionalOnBean(EntityManagerFactory.class)
-    public CriteriaQueryExecutor queryExecutor(EntityManagerFactory entityManagerFactory,
-                                                DaiProperties props) {
+    public QueryExecutor queryExecutor(EntityManagerFactory entityManagerFactory, DaiProperties props,
+                                       org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
         DaiProperties.Query q = props.query();
         int maxConcurrent = clamp(q.maxConcurrency(), 1, 200, CriteriaQueryExecutor.DEFAULT_MAX_CONCURRENT);
         int timeoutMs = clampMs(q.timeout(), CriteriaQueryExecutor.DEFAULT_TIMEOUT_MS);
-        return new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent, timeoutMs);
+        QueryExecutor executor = new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent,
+                timeoutMs);
+        io.micrometer.observation.ObservationRegistry registry = observations.getIfAvailable();
+        return registry == null || registry.isNoop() ? executor : new ObservedQueryExecutor(executor, registry);
     }
 
     /**

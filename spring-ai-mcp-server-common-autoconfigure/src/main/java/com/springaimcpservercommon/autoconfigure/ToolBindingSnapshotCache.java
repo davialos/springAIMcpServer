@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import io.micrometer.observation.ObservationRegistry;
 import com.springaimcpservercommon.ai.tool.ToolBinding;
 import com.springaimcpservercommon.persistence.config.ConfigStore;
 import com.springaimcpservercommon.persistence.config.PublishedResource;
@@ -37,6 +38,12 @@ final class ToolBindingSnapshotCache implements DaiPersistenceAutoConfiguration.
     private final AtomicLong loadedGeneration = new AtomicLong(0L);
     private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
     private volatile boolean everChecked;
+    private volatile @Nullable ObservationRegistry observations;
+
+    /** Sets the host's registry for the {@code dai.snapshot.apply} span. */
+    void observe(@Nullable ObservationRegistry registry) {
+        this.observations = registry;
+    }
     private volatile Map<UUID, ToolBinding> byId = Map.of();
     private volatile Map<UUID, List<ToolBinding>> mcpExposedByWorkspace = Map.of();
 
@@ -80,8 +87,11 @@ final class ToolBindingSnapshotCache implements DaiPersistenceAutoConfiguration.
             if (latest <= loadedGeneration.get()) {
                 return;
             }
+            SnapshotObservations.Span span = SnapshotObservations.open(observations, "tool-bindings", latest);
+            try {
             Optional<PublishedSnapshot> snapshot = configStore.loadSnapshot(latest);
             if (snapshot.isEmpty()) {
+                span.outcome("missing");
                 return;
             }
             Map<UUID, ToolBinding> ids = new HashMap<>();
@@ -106,6 +116,12 @@ final class ToolBindingSnapshotCache implements DaiPersistenceAutoConfiguration.
             mcpExposedByWorkspace = Map.copyOf(exposed);
             loadedGeneration.set(latest);
             LOG.debug("Tool binding snapshot refreshed: generation {}, {} bindings", latest, ids.size());
+            } catch (RuntimeException e) {
+                span.fail(e);
+                throw e;
+            } finally {
+                span.close();
+            }
         }
     }
 }

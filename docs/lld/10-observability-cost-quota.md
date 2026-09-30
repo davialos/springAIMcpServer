@@ -36,7 +36,7 @@ Observation API → OTel. Spans: `dai.endpoint`, `dai.query`, `dai.agent.turn`, 
 `dai.snapshot.apply`, plus Spring AI chat/tool spans. Content recording off by default;
 when on, passes through the redaction pipeline.
 
-**Implemented (2026-09-29):** three spans, each also a meter (Micrometer `Observation`, so a host with a `MeterRegistry`
+**Implemented (2026-09-29, extended 2026-09-30):** six spans, each also a meter (Micrometer `Observation`, so a host with a `MeterRegistry`
 gets timers and one with Micrometer Tracing gets spans; without either they cost nothing). The meter names follow the
 `dynamic.ai.agent.*` convention, the span names the `dai.*` one:
 
@@ -44,6 +44,9 @@ gets timers and one with Micrometer Tracing gets spans; without either they cost
 |---|---|---|---|
 | `dai.agent.turn` | `dynamic.ai.agent.turn` | `dai.agent.slug`, `dai.channel`, `dai.streaming`, `dai.turn.outcome`, `dai.turn.finish`, `dai.turn.error_code` | `dai.turn.id`, `dai.model_call.id`, `dai.agent.revision`, `dai.tokens.input/output` |
 | `dai.tool` | `dynamic.ai.agent.tool` | `dai.tool.name`, `dai.tool.access_mode`, `dai.channel`, `dai.tool.status`, `dai.tool.error_code`, `dai.tool.write_violation` | `dai.turn.id`, `dai.model_call.id`, `dai.mcp.request.id` |
+| `dai.endpoint` | `dynamic.ai.agent.endpoint` | `dai.endpoint.method`, `dai.endpoint.route`, `dai.endpoint.status` (`2xx`..`5xx`) | `dai.endpoint.id`, `dai.workspace.id` |
+| `dai.query` | `dynamic.ai.agent.query` | `dai.query.outcome` (`ok`, `truncated`, `error`) | `dai.query.id`, `dai.workspace.id`, `dai.query.rows` (a count, never a row) |
+| `dai.snapshot.apply` | `dynamic.ai.agent.snapshot.apply` | `dai.snapshot.cache` (`agents`, `queries`, `tool-bindings`), `dai.snapshot.outcome` (`applied`, `missing`, `failed`) | `dai.snapshot.generation` |
 | `dai.mcp` | `dynamic.ai.agent.mcp` | `dai.mcp.method` (known methods only, else `other`), `dai.mcp.status`, `dai.mcp.error_code` | `dai.mcp.request.id`, `dai.mcp.tool`, `dai.workspace.id` |
 
 The ids are the primary keys of `dai_agent_turn`, `dai_model_call`, `dai_mcp_request`, so a trace can be followed to the

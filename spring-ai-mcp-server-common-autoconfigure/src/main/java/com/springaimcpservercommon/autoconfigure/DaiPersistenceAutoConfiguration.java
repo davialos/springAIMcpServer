@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import io.micrometer.observation.ObservationRegistry;
 import com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
 import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
@@ -636,8 +637,11 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(AgentSnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    public AgentSnapshotCache agentSnapshotCache(ConfigStore configStore, DaiProperties props) {
-        return new AgentSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+    public AgentSnapshotCache agentSnapshotCache(ConfigStore configStore, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
+        AgentSnapshotCache cache = new AgentSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+        cache.observe(observations.getIfAvailable());
+        return cache;
     }
 
     @Bean
@@ -675,8 +679,11 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(QuerySnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore, DaiProperties props) {
-        return new QuerySnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+    public QuerySnapshotCache querySnapshotCache(ConfigStore configStore, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
+        QuerySnapshotCache cache = new QuerySnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+        cache.observe(observations.getIfAvailable());
+        return cache;
     }
 
     /**
@@ -705,8 +712,11 @@ public class DaiPersistenceAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(ToolBindingSnapshotCache.class)
     @ConditionalOnBean(ConfigStore.class)
-    ToolBindingSnapshotCache toolBindingSnapshotCache(ConfigStore configStore, DaiProperties props) {
-        return new ToolBindingSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+    ToolBindingSnapshotCache toolBindingSnapshotCache(ConfigStore configStore, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.observation.ObservationRegistry> observations) {
+        ToolBindingSnapshotCache cache = new ToolBindingSnapshotCache(configStore, props.store().maintenance().snapshotPollInterval());
+        cache.observe(observations.getIfAvailable());
+        return cache;
     }
 
     /**
@@ -916,6 +926,12 @@ public class DaiPersistenceAutoConfiguration {
         private final long maxAgeNanos;
         private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
         private volatile boolean everChecked;
+        private volatile @Nullable ObservationRegistry observations;
+
+        /** Sets the host's registry for the {@code dai.snapshot.apply} span. */
+        void observe(@Nullable ObservationRegistry registry) {
+            this.observations = registry;
+        }
 
         /**
          * @param configStore the config store
@@ -960,8 +976,13 @@ public class DaiPersistenceAutoConfiguration {
             if (latest <= cachedGeneration.get()) return;
             synchronized (this) {
                 if (latest <= cachedGeneration.get()) return;
+                SnapshotObservations.Span span = SnapshotObservations.open(observations, "agents", latest);
+                try {
                 Optional<PublishedSnapshot> snap = configStore.loadSnapshot(latest);
-                if (snap.isEmpty()) return;
+                if (snap.isEmpty()) {
+                    span.outcome("missing");
+                    return;
+                }
 
                 ConcurrentHashMap<String, AgentDefinition> slugMap = new ConcurrentHashMap<>();
                 ConcurrentHashMap<UUID, AgentDefinition> idMap = new ConcurrentHashMap<>();
@@ -983,6 +1004,12 @@ public class DaiPersistenceAutoConfiguration {
                 byId = Map.copyOf(idMap);
                 cachedGeneration.set(latest);
                 LOG.debug("Agent snapshot refreshed: generation {}, {} agents indexed", latest, slugMap.size());
+                } catch (RuntimeException e) {
+                    span.fail(e);
+                    throw e;
+                } finally {
+                    span.close();
+                }
             }
         }
     }
@@ -1000,6 +1027,12 @@ public class DaiPersistenceAutoConfiguration {
         private final long maxAgeNanos;
         private final AtomicLong checkedAtNanos = new AtomicLong(System.nanoTime());
         private volatile boolean everChecked;
+        private volatile @Nullable ObservationRegistry observations;
+
+        /** Sets the host's registry for the {@code dai.snapshot.apply} span. */
+        void observe(@Nullable ObservationRegistry registry) {
+            this.observations = registry;
+        }
 
         /**
          * @param configStore the config store
@@ -1039,8 +1072,13 @@ public class DaiPersistenceAutoConfiguration {
             if (latest <= cachedGeneration.get()) return;
             synchronized (this) {
                 if (latest <= cachedGeneration.get()) return;
+                SnapshotObservations.Span span = SnapshotObservations.open(observations, "queries", latest);
+                try {
                 Optional<PublishedSnapshot> snap = configStore.loadSnapshot(latest);
-                if (snap.isEmpty()) return;
+                if (snap.isEmpty()) {
+                    span.outcome("missing");
+                    return;
+                }
 
                 ConcurrentHashMap<UUID, QueryDefinition> idMap = new ConcurrentHashMap<>();
                 for (PublishedResource pr : snap.get().resources()) {
@@ -1058,6 +1096,12 @@ public class DaiPersistenceAutoConfiguration {
                 byId = Map.copyOf(idMap);
                 cachedGeneration.set(latest);
                 LOG.debug("Query snapshot refreshed: generation {}, {} queries indexed", latest, idMap.size());
+                } catch (RuntimeException e) {
+                    span.fail(e);
+                    throw e;
+                } finally {
+                    span.close();
+                }
             }
         }
     }

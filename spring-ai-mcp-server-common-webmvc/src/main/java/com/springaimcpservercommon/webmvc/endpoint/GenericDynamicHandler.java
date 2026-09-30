@@ -7,6 +7,7 @@ import com.springaimcpservercommon.security.authz.AuthorizationRequest;
 import com.springaimcpservercommon.security.authz.ResourceRef;
 import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import com.springaimcpservercommon.webmvc.problem.ProblemDetailFactory;
+import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -187,8 +188,30 @@ public final class GenericDynamicHandler implements Controller {
     }
 
     @Override
+    @SuppressWarnings("try") // the scope is held open so the backing work nests under the span
     public @Nullable ModelAndView handleRequest(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
+        Observation observation = Observation.createNotStarted("dynamic.ai.agent.endpoint", observationRegistry)
+                .contextualName("dai.endpoint")
+                .lowCardinalityKeyValue("dai.endpoint.method", request.getMethod())
+                .start();
+        try (Observation.Scope ignored = observation.openScope()) {
+            return dispatch(request, response, observation);
+        } catch (IOException | RuntimeException e) {
+            observation.error(e);
+            throw e;
+        } finally {
+            observation.lowCardinalityKeyValue("dai.endpoint.status", statusClass(response.getStatus()));
+            observation.stop();
+        }
+    }
+
+    private static String statusClass(int status) {
+        return status >= 100 && status < 600 ? (status / 100) + "xx" : "unknown";
+    }
+
+    private @Nullable ModelAndView dispatch(HttpServletRequest request, HttpServletResponse response,
+                                            Observation observation) throws IOException {
         String fullPath = resolveFullPath(request);
         String method = request.getMethod();
 
@@ -200,6 +223,10 @@ public final class GenericDynamicHandler implements Controller {
                     null, fullPath);
             return null;
         }
+
+        observation.lowCardinalityKeyValue("dai.endpoint.route", fullPath);
+        observation.highCardinalityKeyValue("dai.endpoint.id", def.id().toString());
+        observation.highCardinalityKeyValue("dai.workspace.id", def.workspaceId().toString());
 
         // Stage 2: kill-switch
         if (killSwitchChecker.isActive(def.id())) {

@@ -70,6 +70,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private static final int MEMORY_ORDER = Ordered.HIGHEST_PRECEDENCE + 201;
     /** Cap on the answer text kept in memory for a streamed turn that is being recorded. */
     private static final int MAX_RECORDED_ANSWER_CHARS = 200_000;
+    /** Largest structured answer held back for validation on a stream; more fails the turn. */
+    private static final int MAX_STRUCTURED_ANSWER_CHARS = 1_000_000;
 
     private final ModelRouter modelRouter;
     private final @Nullable ToolBridge toolBridge;
@@ -237,6 +239,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 AtomicReference<@Nullable Instant> firstText = new AtomicReference<>();
                 AtomicReference<@Nullable String> failure = new AtomicReference<>();
                 StringBuilder answer = new StringBuilder();
+                // JSON_SCHEMA agents: a partial document is not usable and cannot be validated, so the answer is held
+                // back, validated when the stream ends and then sent whole (or refused) (OQ-51)
+                boolean structured = agent.output().mode() == OutputSpec.Mode.JSON_SCHEMA;
+                StringBuilder held = new StringBuilder();
+                AtomicBoolean heldTooLarge = new AtomicBoolean(false);
 
                 Flux<StreamEvent> content = client.prompt()
                         .user(request.message())
@@ -248,6 +255,19 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         .doOnNext(lastResponse::set)
                         .flatMapIterable(r -> {
                             List<StreamEvent> deltas = extractTextDeltas(r, seq);
+                            if (structured) {
+                                for (StreamEvent e : deltas) {
+                                    if (e instanceof StreamEvent.TextDelta d) {
+                                        firstText.compareAndSet(null, clock.instant());
+                                        if (held.length() + d.text().length() > MAX_STRUCTURED_ANSWER_CHARS) {
+                                            heldTooLarge.set(true);
+                                        } else {
+                                            held.append(d.text());
+                                        }
+                                    }
+                                }
+                                return List.<StreamEvent>of();
+                            }
                             if (!deltas.isEmpty()) {
                                 firstText.compareAndSet(null, clock.instant());
                                 for (StreamEvent e : deltas) {
@@ -266,6 +286,26 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 Flux<StreamEvent> ending = Flux.defer(() -> {
                     ChatResponse last = lastResponse.get();
                     recordStreamUsage(agent, principal, last);
+                    if (structured) {
+                        String text = held.toString();
+                        var failed = heldTooLarge.get()
+                                ? java.util.Optional.of(new StructuredOutputValidationAdvisor.Failure(
+                                        "output_too_large", "The agent response is too large."))
+                                : new StructuredOutputValidationAdvisor(agent.output(), schemaValidator).check(text);
+                        if (failed.isPresent()) {
+                            String code = failed.get().code().replace('_', '-');
+                            failure.set(code);
+                            return Flux.just(new StreamEvent.ErrorEvent("/errors/agent/" + code,
+                                    failed.get().message(), code, false, turnId));
+                        }
+                        synchronized (answer) {
+                            answer.append(text, 0, Math.min(text.length(), MAX_RECORDED_ANSWER_CHARS));
+                        }
+                        List<StreamEvent> events = new ArrayList<>();
+                        events.add(new StreamEvent.TextDelta(seq.incrementAndGet(), text));
+                        events.addAll(buildEndingEvents(last, agent, turnId));
+                        return Flux.fromIterable(events);
+                    }
                     return Flux.fromIterable(buildEndingEvents(last, agent, turnId));
                 });
 

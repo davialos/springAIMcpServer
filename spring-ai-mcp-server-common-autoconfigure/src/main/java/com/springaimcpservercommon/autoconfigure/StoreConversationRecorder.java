@@ -27,8 +27,8 @@ import java.util.Objects;
  * write loses that exchange from the history and nothing else. Nothing is written into a conversation the user
  * has closed or erased: the store refuses, which is logged as a failure and does not affect the turn.
  *
- * <p>This is the history shown to users. It is not the memory the model reads: chat memory is still separate and
- * in-memory (OQ-45).
+ * <p>This is the history shown to users. It is not the memory the model reads: that is
+ * {@link StoreChatMemoryRepository} ({@code dai_chat_memory_message}), which has its own retention (OQ-45).
  */
 @NullMarked
 final class StoreConversationRecorder implements ConversationRecorder, AutoCloseable {

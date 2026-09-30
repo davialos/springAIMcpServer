@@ -36,6 +36,7 @@ import com.springaimcpservercommon.security.port.RoleMappingSource;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
 import com.springaimcpservercommon.persistence.usage.BudgetStore;
 import com.springaimcpservercommon.persistence.usage.PriceStore;
@@ -322,6 +323,19 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * PostgreSQL store for the model's chat memory (OQ-45).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatMemoryStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ChatMemoryStore chatMemoryStore(DaiStore store) {
+        return new ChatMemoryStore(store, java.time.Clock.systemUTC());
+    }
+
+    /**
      * Ledger-backed budget check for the invocation path (F-70). Supersedes the permit-all default of
      * {@link DaiAiAutoConfiguration}; disable enforcement with {@code dynamic.ai.agent.budget.enforce=false}.
      *
@@ -433,8 +447,9 @@ public class DaiPersistenceAutoConfiguration {
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(ConversationRetentionJob.class)
     @ConditionalOnBean(TelemetryStore.class)
-    ConversationRetentionJob conversationRetentionJob(TelemetryStore store, DaiProperties props) {
-        return new ConversationRetentionJob(store, props.conversations().purgeInterval());
+    ConversationRetentionJob conversationRetentionJob(TelemetryStore store,
+            org.springframework.beans.factory.ObjectProvider<ChatMemoryStore> memoryStore, DaiProperties props) {
+        return new ConversationRetentionJob(store, memoryStore.getIfAvailable(), props.conversations().purgeInterval());
     }
 
     // ─── Security ports over the store (see StoreSecurityPorts) ────────────────

@@ -29,6 +29,7 @@ import java.util.UUID;
  * @param chat            agent chat endpoint limits (LLD-13)
  * @param conversations   conversation history recording and retention (F-44)
  * @param store           background maintenance of the {@code dynamic_ai} store (LLD-15 §10, LLD-09 §4)
+ * @param memory          the model's chat memory (OQ-45)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -43,7 +44,33 @@ public record DaiProperties(
         @DefaultValue Review review,
         @DefaultValue Chat chat,
         @DefaultValue Conversations conversations,
-        @DefaultValue Store store) {
+        @DefaultValue Store store,
+        @DefaultValue Memory memory) {
+
+    /**
+     * The model's chat memory (OQ-45). With a persistence unit present the memory lives in PostgreSQL so every
+     * replica reads the same window (ADR-0021); it holds what the model is shown, redacted like transcripts, and
+     * expires on its own clock, independent of conversation history.
+     *
+     * @param persistent     keep the memory in {@code dai_chat_memory_message}; {@code false} keeps it in this node's
+     *                       heap (lost on restart, not shared across replicas)
+     * @param retention      how long a memory lives after its last write (positive, at most 3660 days)
+     * @param maxStoredChars longest stored message; longer ones are cut
+     */
+    public record Memory(
+            @DefaultValue("true") boolean persistent,
+            @DefaultValue("24h") Duration retention,
+            @DefaultValue("100000") int maxStoredChars) {
+        /** Validates the settings. */
+        public Memory {
+            if (retention.isNegative() || retention.isZero() || retention.toDays() > 3660) {
+                throw new IllegalArgumentException("dynamic.ai.agent.memory.retention must be 1ms..3660d");
+            }
+            if (maxStoredChars < 100) {
+                throw new IllegalArgumentException("dynamic.ai.agent.memory.max-stored-chars must be >= 100");
+            }
+        }
+    }
 
     /**
      * Store settings.

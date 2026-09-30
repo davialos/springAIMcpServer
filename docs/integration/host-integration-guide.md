@@ -683,8 +683,22 @@ credential (private key, API or cloud token, JWT, URL with credentials, password
 placeholder, never stored in part. Refused, failed and cancelled turns store nothing. PII detectors are not
 implemented yet. The stored conversation uses the conversation id the client sends and is found again through a
 hash of (principal, agent, conversation id), so another user cannot read or append to it. A conversation the user
-erased or closed is not written to again. This is the history shown to users, not the memory the model reads;
-that is still in-memory per node.
+erased or closed is not written to again. This is the history shown to users, not the memory the model reads.
+
+### Chat memory (what the model remembers)
+
+Follow-up questions work on any replica and after a restart: the window the model reads is kept in PostgreSQL
+(`dai_chat_memory_message`) as soon as the `dynamic_ai` store exists. It is redacted like transcripts, keyed by a
+hash of (workspace, agent, principal, conversation), and expires on its own clock:
+
+```yaml
+dynamic.ai.agent.memory:
+  persistent: true       # default; false keeps the window in this node's heap (lost on restart, per node)
+  retention: 24h         # kept this long after the last message; 1ms..3660d
+  max-stored-chars: 100000
+```
+
+Expired memories are deleted by the same background job as expired conversations.
 
 ## 10. Operations
 

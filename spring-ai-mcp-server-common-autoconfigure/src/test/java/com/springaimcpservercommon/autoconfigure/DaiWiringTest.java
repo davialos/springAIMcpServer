@@ -225,6 +225,31 @@ class DaiWiringTest {
     }
 
     @Test
+    void chatMemoryIsStoreBackedWhenTheStoreExistsAndOnlyThenAndCanBeTurnedOff() {
+        runner().run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBeanNamesForType(com.springaimcpservercommon.persistence.memory.ChatMemoryStore.class))
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(org.springframework.ai.chat.memory.ChatMemory.class)).hasSize(1);
+        });
+        runner().withBean(DaiStore.class, () -> STUB_STORE).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBeanNamesForType(com.springaimcpservercommon.persistence.memory.ChatMemoryStore.class))
+                    .containsExactly("chatMemoryStore");
+            assertThat(context.getBean(org.springframework.ai.chat.memory.ChatMemory.class)).isNotNull();
+        });
+        runner().withBean(DaiStore.class, () -> STUB_STORE)
+                .withPropertyValues("dynamic.ai.agent.memory.persistent=false")
+                .run(context -> assertThat(context.getBean(org.springframework.ai.chat.memory.ChatMemory.class))
+                        .isNotNull());
+        runner().withBean(DaiStore.class, () -> STUB_STORE)
+                .withPropertyValues("dynamic.ai.agent.memory.retention=0s")
+                .run(context -> org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> context.getBean(org.springframework.ai.chat.memory.ChatMemory.class))
+                        .hasStackTraceContaining("dynamic.ai.agent.memory.retention"));
+    }
+
+    @Test
     void weNeverRegisterAnObservationRegistryOfOurOwn() {
         // a fallback registry could displace the host's (Spring Boot backs off when one exists)
         runner().withBean(DaiStore.class, () -> STUB_STORE).run(context ->

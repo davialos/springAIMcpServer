@@ -23,8 +23,10 @@ import com.springaimcpservercommon.security.authz.ResourceRef;
 import com.springaimcpservercommon.security.permission.Permission;
 import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import io.micrometer.observation.ObservationRegistry;
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import org.jspecify.annotations.NullMarked;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -265,17 +267,29 @@ public class DaiAiAutoConfiguration {
     }
 
     /**
-     * Default in-memory chat memory store. Replace with a PostgreSQL-backed implementation
-     * (via the persistence module) for multi-replica deployments (ADR-0021).
+     * Chat memory the model reads. With a {@link ChatMemoryStore} (a persistence unit exists) and
+     * {@code dynamic.ai.agent.memory.persistent=true} (default) the window lives in PostgreSQL, so every replica
+     * shares it and it survives restarts (OQ-45, ADR-0021); otherwise it is this node's heap. The repository is
+     * wrapped here and deliberately not exposed as a {@code ChatMemoryRepository} bean, so it cannot collide with
+     * the host's own Spring AI memory configuration.
      *
-     * @return the memory store
+     * @param storeProvider optional PostgreSQL memory store
+     * @param props         framework properties
+     * @return the memory
      */
     @Bean
     @ConditionalOnMissingBean(ChatMemory.class)
-    public ChatMemory chatMemory() {
-        return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
-                .build();
+    public ChatMemory chatMemory(ObjectProvider<ChatMemoryStore> storeProvider, DaiProperties props) {
+        ChatMemoryRepository repository = new InMemoryChatMemoryRepository();
+        ChatMemoryStore store = storeProvider.getIfAvailable();
+        DaiProperties.Memory memory = props.memory();
+        if (store != null && memory.persistent()) {
+            repository = new StoreChatMemoryRepository(store,
+                    new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(),
+                            memory.maxStoredChars()),
+                    memory.retention());
+        }
+        return MessageWindowChatMemory.builder().chatMemoryRepository(repository).build();
     }
 
     /**

@@ -1,7 +1,9 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,14 +31,16 @@ final class ConversationRetentionJob implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(ConversationRetentionJob.class);
 
     private final TelemetryStore store;
+    private final @Nullable ChatMemoryStore memoryStore;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "dai-conversation-retention");
         t.setDaemon(true);
         return t;
     });
 
-    ConversationRetentionJob(TelemetryStore store, Duration interval) {
+    ConversationRetentionJob(TelemetryStore store, @Nullable ChatMemoryStore memoryStore, Duration interval) {
         this.store = Objects.requireNonNull(store, "store");
+        this.memoryStore = memoryStore;
         Objects.requireNonNull(interval, "interval");
         if (interval.compareTo(Duration.ofMinutes(1)) < 0) {
             throw new IllegalArgumentException("interval must be at least one minute");
@@ -62,9 +66,28 @@ final class ConversationRetentionJob implements AutoCloseable {
                 LOG.info("Conversation retention purged {} conversation(s)", total);
                 SafeMetrics.count("dynamic.ai.agent.conversation.purge.runs");
             }
+            purgeMemory();
         } catch (RuntimeException e) {
             LOG.warn("Conversation retention run failed ({}); retrying at the next interval",
                     e.getClass().getSimpleName());
+        }
+    }
+
+    /** Deletes expired chat-memory rows (OQ-45), in bounded batches like the conversations. */
+    private void purgeMemory() {
+        if (memoryStore == null) {
+            return;
+        }
+        int total = 0;
+        for (int i = 0; i < MAX_BATCHES_PER_RUN; i++) {
+            int deleted = memoryStore.purgeExpired(BATCH);
+            total += deleted;
+            if (deleted < BATCH) {
+                break;
+            }
+        }
+        if (total > 0) {
+            LOG.info("Chat memory retention purged {} message(s)", total);
         }
     }
 

@@ -70,6 +70,12 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private static final int MEMORY_ORDER = Ordered.HIGHEST_PRECEDENCE + 201;
     /** Cap on the answer text kept in memory for a streamed turn that is being recorded. */
     private static final int MAX_RECORDED_ANSWER_CHARS = 200_000;
+    /**
+     * Reactor-context key under which Micrometer and Spring AI look up the parent observation
+     * ({@code ObservationThreadLocalAccessor.KEY}; written as a literal so the ai module needs no compile dependency
+     * on context-propagation).
+     */
+    static final String OBSERVATION_CONTEXT_KEY = "micrometer.observation";
     /** Largest structured answer held back for validation on a stream; more fails the turn. */
     private static final int MAX_STRUCTURED_ANSWER_CHARS = 1_000_000;
 
@@ -251,6 +257,9 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
                         .stream()
                         .chatResponse()
+                        // A stream has no stable thread, so its span can't be current in a ThreadLocal. Spring AI's
+                        // stream path reads its parent from the Reactor context under this key instead (OQ-50).
+                        .contextWrite(ctx -> ctx.put(OBSERVATION_CONTEXT_KEY, turnObservation))
                         .timeout(agent.limits().turnTimeout())
                         .doOnNext(lastResponse::set)
                         .flatMapIterable(r -> {
@@ -471,7 +480,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         }
         advisors.add(new UsageMeteringAdvisor(agent, principal, usageSink, observationRegistry));
 
-        ChatClient.Builder builder = ChatClient.builder(chatModel)
+        // With the host's registry Spring AI emits its own client/advisor spans, nested under dai.agent.turn
+        ChatClient.Builder builder = ChatClient.builder(chatModel, observationRegistry, null, null)
                 .defaultSystem(agent.systemPrompt())
                 .defaultOptions(chatOptions(resolved.selection()))
                 .defaultAdvisors(advisors);

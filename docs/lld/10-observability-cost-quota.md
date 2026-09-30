@@ -54,8 +54,10 @@ store rows and, through `GET …/traces/by-trace-id/{traceId}`, back. The `trace
 is read while the span is open, so it is that span's trace. Never attached: prompts, answers, tool arguments or results
 (content recording stays off, see above). A failed turn marks its span as an error. The tool span's parent is the turn
 span, set explicitly because a streamed turn may run its tools on another thread; a **synchronous** turn also keeps its
-span current, so Spring AI's own spans and the host's below it nest under it. A **streamed** turn does not (no reliable
-thread propagation), so Spring AI's chat spans of a streamed turn are siblings, not children (OQ-50). The library
+span current, so Spring AI's own spans and the host's below it nest under it. A **streamed** turn has no stable thread,
+so it puts its span into the Reactor context (`micrometer.observation`), where Spring AI's stream path looks for its
+parent: the chat and provider spans of a streamed turn are its children too. The invoker builds its `ChatClient` with
+the host's registry, so Spring AI's own client and advisor spans are emitted under the turn. The library
 registers no `ObservationRegistry` of its own: it uses the host's when there is one and is silent otherwise.
 
 Every span joins the host's current trace (Micrometer Tracing with the host's OTel or Brave bridge), so one trace

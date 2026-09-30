@@ -33,6 +33,7 @@ import java.util.NoSuchElementException;
         AuditAdminController.class,
         KillSwitchAdminController.class,
         ClusterAdminController.class,
+        ModelProviderAdminController.class,
         MeAdminController.class,
         ProposalReviewController.class,
         WorkspaceAdminController.class,

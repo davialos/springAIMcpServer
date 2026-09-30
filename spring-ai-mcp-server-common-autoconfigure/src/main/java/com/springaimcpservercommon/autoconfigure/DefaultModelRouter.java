@@ -86,6 +86,41 @@ final class DefaultModelRouter implements ModelRouter {
         return new ResolvedModel(new ResilientChatModel(chain), first.selection());
     }
 
+    /**
+     * Status of one provider on this node.
+     *
+     * @param provider normalized provider id (bean name without {@code ChatModel}, letters and digits only)
+     * @param breaker  its breaker state; {@code CLOSED} with no failures when it was never called
+     */
+    record ProviderStatus(String provider, ProviderBreaker.State breaker) {}
+
+    /** @return every provider that has a {@code ChatModel} bean, with this node's breaker state, sorted by id */
+    List<ProviderStatus> providers() {
+        return byProvider.keySet().stream().sorted().map(key -> {
+            ProviderBreaker breaker = breakers.get(key);
+            return new ProviderStatus(key, breaker != null ? breaker.state()
+                    : new ProviderBreaker.State("CLOSED", 0, null, null));
+        }).toList();
+    }
+
+    /**
+     * Closes a provider's breaker by hand on this node.
+     *
+     * @param provider provider id, normalized the same way as agent selections
+     * @return {@code false} when no such provider exists
+     */
+    boolean resetBreaker(String provider) {
+        String key = normalize(provider);
+        if (!byProvider.containsKey(key)) {
+            return false;
+        }
+        ProviderBreaker breaker = breakers.get(key);
+        if (breaker != null) {
+            breaker.reset();
+        }
+        return true;
+    }
+
     private ResolvedModel match(ModelSelection selection) {
         ModelSelection current = selection;
         while (current != null) {

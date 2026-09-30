@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -64,6 +65,31 @@ final class ProviderBreaker {
             openedAt = clock.instant();
         }
         probeInFlight = false;
+    }
+
+    /**
+     * A point-in-time view of the breaker, for operators.
+     *
+     * @param state               {@code CLOSED}, {@code OPEN} (refusing) or {@code HALF_OPEN} (next call is a probe)
+     * @param consecutiveFailures failures since the last success
+     * @param openedAt            when the breaker last opened, {@code null} while closed
+     * @param retryAt             when an open breaker admits its probe, {@code null} while closed
+     */
+    record State(String state, int consecutiveFailures, @Nullable Instant openedAt, @Nullable Instant retryAt) {}
+
+    /** @return the current state */
+    synchronized State state() {
+        if (!open) {
+            return new State("CLOSED", consecutiveFailures, null, null);
+        }
+        Instant retryAt = openedAt.plus(openFor);
+        String state = clock.instant().isBefore(retryAt) || probeInFlight ? "OPEN" : "HALF_OPEN";
+        return new State(state, consecutiveFailures, openedAt, retryAt);
+    }
+
+    /** Closes the breaker by hand (an operator knows the provider is back). */
+    synchronized void reset() {
+        onSuccess();
     }
 
     /** @return {@code true} while calls are being refused or only probed */

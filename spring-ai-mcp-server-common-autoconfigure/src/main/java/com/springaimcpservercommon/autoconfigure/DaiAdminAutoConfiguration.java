@@ -336,6 +336,29 @@ public class DaiAdminAutoConfiguration {
     }
 
     /**
+     * Model provider status and breaker reset (OQ-47).
+     *
+     * @param router the model router (resolved per request, it lives in the AI auto-configuration)
+     * @param audit  audit writer
+     * @param api    admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ModelProviderAdminController.class)
+    @ConditionalOnBean({AdminAudit.class, AdminApi.class})
+    public ModelProviderAdminController modelProviderAdminController(
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.ai.model.ModelRouter> router,
+            AdminAudit audit, AdminApi api) {
+        String node;
+        try {
+            node = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (java.io.IOException e) {
+            node = "unknown";
+        }
+        return new ModelProviderAdminController(router, audit, api, node);
+    }
+
+    /**
      * Catalog read controller: exposes the live {@link com.springaimcpservercommon.core.catalog.EffectiveCatalog}
      * over HTTP (LLD-08 §2.1).
      *

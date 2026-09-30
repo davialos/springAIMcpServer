@@ -201,6 +201,17 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 traceId = currentTraceId();
             }
             try {
+                // Streamed turns skip the call-advisor chain, so the input checks run here (LLD-06 §4)
+                var violation = new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker)
+                        .checkInput(request.message());
+                if (violation.isPresent()) {
+                    String code = violation.get().code().replace('_', '-');
+                    LOG.info("Agent {} stream turn {} rejected by guard ({})", agent.slug(), turnId, code);
+                    recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, true,
+                            TurnRecorder.Outcome.REJECTED, TurnRecorder.Finish.ERROR, code, null, 0, 0);
+                    return Flux.just(new StreamEvent.ErrorEvent(
+                            "/errors/agent/" + code, violation.get().message(), code, false, turnId));
+                }
                 if (!budgetChecker.hasRemainingBudget(agent, principal)) {
                     LOG.warn("Agent {} budget exhausted for principal {}; stream turn {} rejected",
                             agent.slug(), principal.principalId(), turnId);

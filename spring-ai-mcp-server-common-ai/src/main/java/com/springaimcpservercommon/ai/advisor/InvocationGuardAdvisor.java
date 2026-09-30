@@ -10,13 +10,17 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.core.Ordered;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -39,7 +43,7 @@ import java.util.regex.Pattern;
  * receives a well-formed response (LLD-12 §4: fail the feature, not the host).
  */
 @NullMarked
-public final class InvocationGuardAdvisor implements CallAdvisor {
+public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger LOG = LoggerFactory.getLogger(InvocationGuardAdvisor.class);
     private static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 200;
@@ -108,59 +112,93 @@ public final class InvocationGuardAdvisor implements CallAdvisor {
         return ORDER;
     }
 
-    @Override
-    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
-        String userInput = extractUserInput(request);
+    /**
+     * A rejected turn: a stable machine code and a message that is safe to show the caller.
+     *
+     * @param code    stable code, e.g. {@code agent_disabled}, {@code input_too_large}, {@code budget_exhausted}
+     * @param message caller-safe explanation
+     */
+    public record Violation(String code, String message) {}
 
-        // Kill switch: agent disabled at runtime
+    /**
+     * Runs the pre-turn checks that depend only on the agent, the caller and the user's input: kill switch, input
+     * size, blocked patterns and topic allow-list. Shared by the call advisor and the streaming path, which does not
+     * pass through call advisors (LLD-06 §4).
+     *
+     * @param userInput the user's message
+     * @return the violation, or empty when the turn may proceed
+     */
+    public Optional<Violation> checkInput(String userInput) {
         if (!killSwitchChecker.isEnabled(agent.id())) {
             LOG.warn("Agent {} is kill-switched; blocking turn for principal {}",
                     agent.slug(), principal.principalId());
-            return blocked(request, "agent_disabled",
-                    "This agent is currently unavailable. Please try again later.");
+            return Optional.of(new Violation("agent_disabled",
+                    "This agent is currently unavailable. Please try again later."));
         }
-
-        // Input size guardrail
         GuardrailSpec g = agent.guardrails();
         if (g.maxInputChars() > 0 && userInput.length() > g.maxInputChars()) {
             LOG.info("Agent {} input too large ({} > {}) for principal {}",
                     agent.slug(), userInput.length(), g.maxInputChars(), principal.principalId());
-            return blocked(request, "input_too_large",
-                    "Your message is too long. Please shorten it and try again.");
+            return Optional.of(new Violation("input_too_large",
+                    "Your message is too long. Please shorten it and try again."));
         }
-
-        // Blocked patterns
         for (String pattern : g.blockedPatterns()) {
-            if (Pattern.compile(pattern, Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
-                    .matcher(userInput).find()) {
+            if (Pattern.compile(pattern, Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(userInput).find()) {
                 LOG.info("Agent {} input matched blocked pattern for principal {}",
                         agent.slug(), principal.principalId());
-                return blocked(request, "input_blocked",
-                        "Your message contains content that cannot be processed.");
+                return Optional.of(new Violation("input_blocked",
+                        "Your message contains content that cannot be processed."));
             }
         }
-
-        // Topic allowlist
         if (!g.topicAllowList().isEmpty()) {
+            String lower = userInput.toLowerCase(java.util.Locale.ROOT);
             boolean matched = g.topicAllowList().stream()
-                    .anyMatch(topic -> userInput.toLowerCase(java.util.Locale.ROOT)
-                            .contains(topic.toLowerCase(java.util.Locale.ROOT)));
+                    .anyMatch(topic -> lower.contains(topic.toLowerCase(java.util.Locale.ROOT)));
             if (!matched) {
                 LOG.info("Agent {} input does not match topic allowlist for principal {}",
                         agent.slug(), principal.principalId());
-                return blocked(request, "off_topic",
-                        "I can only help with: " + String.join(", ", g.topicAllowList()) + ".");
+                return Optional.of(new Violation("off_topic",
+                        "I can only help with: " + String.join(", ", g.topicAllowList()) + "."));
             }
         }
+        return Optional.empty();
+    }
 
-        // Budget check
+    /**
+     * Runs all pre-turn checks: {@link #checkInput(String)} then the budget.
+     *
+     * @param userInput the user's message
+     * @return the violation, or empty when the turn may proceed
+     */
+    public Optional<Violation> check(String userInput) {
+        Optional<Violation> input = checkInput(userInput);
+        if (input.isPresent()) {
+            return input;
+        }
         if (!budgetChecker.hasRemainingBudget(agent, principal)) {
             LOG.warn("Agent {} budget exhausted for principal {}", agent.slug(), principal.principalId());
-            return blocked(request, "budget_exhausted",
-                    "Usage limit reached. Please contact your administrator.");
+            return Optional.of(new Violation("budget_exhausted",
+                    "Usage limit reached. Please contact your administrator."));
         }
+        return Optional.empty();
+    }
 
+    @Override
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        Optional<Violation> violation = check(extractUserInput(request));
+        if (violation.isPresent()) {
+            return blocked(request, violation.get().code(), violation.get().message());
+        }
         return chain.nextCall(request);
+    }
+
+    @Override
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        Optional<Violation> violation = check(extractUserInput(request));
+        if (violation.isPresent()) {
+            return Flux.just(blocked(request, violation.get().code(), violation.get().message()));
+        }
+        return chain.nextStream(request);
     }
 
     private static String extractUserInput(ChatClientRequest request) {

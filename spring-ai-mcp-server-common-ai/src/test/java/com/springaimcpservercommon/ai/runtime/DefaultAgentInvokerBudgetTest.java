@@ -192,4 +192,35 @@ class DefaultAgentInvokerBudgetTest {
         assertThat(stopped.stream().map(c -> c.getLowCardinalityKeyValue("dai.streaming").getValue()))
                 .containsExactlyInAnyOrder("false", "true");
     }
+
+    @Test
+    void aKillSwitchedAgentIsRefusedOnTheStreamPathToo() {
+        DefaultAgentInvoker killed = new DefaultAgentInvoker(
+                (selection, p) -> {
+                    throw new AssertionError("the model must not be resolved for a refused turn");
+                },
+                null,
+                () -> {
+                    throw new AssertionError("the catalog must not be read for a refused turn");
+                },
+                agentId -> false,
+                (a, p) -> true,
+                (a, p, prompt, completion) -> usageRecords.incrementAndGet(),
+                recorded::add,
+                exchanges::add,
+                observations,
+                MessageWindowChatMemory.builder().chatMemoryRepository(new InMemoryChatMemoryRepository()).build(),
+                null);
+
+        List<StreamEvent> events = killed.stream(agent, request, principal, null).collectList().block();
+
+        assertThat(events).singleElement().isInstanceOfSatisfying(StreamEvent.ErrorEvent.class, e -> {
+            assertThat(e.code()).isEqualTo("agent-disabled");
+            assertThat(e.retryable()).isFalse();
+        });
+        assertThat(recorded).singleElement().satisfies(t -> {
+            assertThat(t.outcome()).isEqualTo(TurnRecorder.Outcome.REJECTED);
+            assertThat(t.streaming()).isTrue();
+        });
+    }
 }

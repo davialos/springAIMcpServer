@@ -792,6 +792,7 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean({DaiStore.class, ConfigStore.class, ChangeProposalStore.class, TelemetryStore.class})
     MaintenanceRunner maintenanceRunner(DaiStore store, ConfigStore config, ChangeProposalStore proposals,
                                         TelemetryStore telemetry,
+                                        org.springframework.beans.factory.ObjectProvider<ApiKeyStore> apiKeys,
                                         org.springframework.beans.factory.ObjectProvider<SnapshotView> views,
                                         DaiProperties props) {
         DaiProperties.Maintenance settings = props.store().maintenance();
@@ -811,10 +812,17 @@ public class DaiPersistenceAutoConfiguration {
                 () -> config.pruneNodes(settings.nodeRetention()),
                 () -> config.expireApprovals(clock.instant().minus(settings.approvalTtl())),
                 () -> failStuckApplies(proposals, settings.applyTimeout()),
-                partitions::run);
+                partitions::run,
+                () -> {
+                    ApiKeyStore keys = apiKeys.getIfAvailable();
+                    return keys == null ? 0 : keys.countExpiringWithin(API_KEY_EXPIRY_WARNING);
+                });
         return new MaintenanceRunner(steps, new MaintenanceRunner.Identity(nodeId, app, null,
                 libraryVersion == null ? "unknown" : libraryVersion), settings, clock);
     }
+
+    /** How far ahead the maintenance runner warns about API keys that are about to expire. */
+    static final java.time.Duration API_KEY_EXPIRY_WARNING = java.time.Duration.ofDays(14);
 
     /**
      * Proposals in APPLYING longer than the timeout have an unknown outcome (the node applying them may have

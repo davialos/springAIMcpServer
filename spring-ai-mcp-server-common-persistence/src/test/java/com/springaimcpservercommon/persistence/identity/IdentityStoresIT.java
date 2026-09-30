@@ -83,6 +83,26 @@ class IdentityStoresIT {
     }
 
     @Test
+    void keysAboutToExpireAreCountedButRevokedOrDistantOrExpiredOnesAreNot() {
+        ApiKeyStore keys = new ApiKeyStore(db.store(), clock, Duration.ofMinutes(5));
+        ServiceAccountView account = keys.createServiceAccount(db.workspace("expiry"), "rotating", null, admin);
+        Duration horizon = Duration.ofDays(14);
+        int before = keys.countExpiringWithin(horizon);
+
+        ApiKeyView soon = keys.createKey(new NewApiKey(account.id(), "dai_test_ExpSoon00001", "h1",
+                ApiKeyHashAlgorithm.HMAC_SHA256, clock.instant().plus(Duration.ofDays(3)), Set.of(), List.of(), admin));
+        ApiKeyView soonRevoked = keys.createKey(new NewApiKey(account.id(), "dai_test_ExpSoon00002", "h2",
+                ApiKeyHashAlgorithm.HMAC_SHA256, clock.instant().plus(Duration.ofDays(4)), Set.of(), List.of(), admin));
+        keys.revoke(soonRevoked.id(), admin);
+        keys.createKey(new NewApiKey(account.id(), "dai_test_ExpFar000001", "h3",
+                ApiKeyHashAlgorithm.HMAC_SHA256, clock.instant().plus(Duration.ofDays(200)), Set.of(), List.of(), admin));
+
+        assertThat(keys.countExpiringWithin(horizon)).isEqualTo(before + 1);
+        assertThat(soon.keyPrefix()).isNotBlank();
+        assertThatThrownBy(() -> keys.countExpiringWithin(Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void invalidNetworksAreRejectedByPostgres() {
         ApiKeyStore keys = new ApiKeyStore(db.store(), clock, Duration.ofMinutes(5));
         ServiceAccountView account = keys.createServiceAccount(db.workspace("net"), "bad-net", null, admin);

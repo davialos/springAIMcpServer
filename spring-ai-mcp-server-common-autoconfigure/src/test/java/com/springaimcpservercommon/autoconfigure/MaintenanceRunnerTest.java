@@ -26,7 +26,7 @@ class MaintenanceRunnerTest {
     }
 
     private static MaintenanceRunner.Steps steps(List<NodeHeartbeat> beats, long applied) {
-        return new MaintenanceRunner.Steps(() -> {}, () -> applied, beats::add, () -> 0, () -> 0, () -> 0, () -> {});
+        return new MaintenanceRunner.Steps(() -> {}, () -> applied, beats::add, () -> 0, () -> 0, () -> 0, () -> {}, () -> 0);
     }
 
     private static MaintenanceRunner runner(MaintenanceRunner.Steps steps, String cron) {
@@ -69,6 +69,7 @@ class MaintenanceRunnerTest {
                 () -> { throw new IllegalStateException("db down"); },
                 () -> { expired.incrementAndGet(); return 2; },
                 () -> { failedApplies.incrementAndGet(); return 1; },
+                () -> { throw new IllegalStateException("db down"); },
                 () -> { throw new IllegalStateException("db down"); });
         try (var runner = runner(steps, "0 17 3 * * *")) {
             runner.pollSnapshots();
@@ -100,5 +101,20 @@ class MaintenanceRunnerTest {
         assertThatThrownBy(() -> new DaiProperties.Maintenance(true, "0 17 3 * * *", Duration.ofSeconds(5),
                 Duration.ofSeconds(15), Duration.ofMinutes(5), Duration.ofHours(24), Duration.ofDays(30),
                 Duration.ofMinutes(10), " ")).hasMessageContaining("node-id");
+    }
+
+    @Test
+    void expiringKeysAreCountedEachSweepAndAFailureOfThatStepStopsNothing() {
+        AtomicInteger asked = new AtomicInteger();
+        AtomicInteger expiredApprovals = new AtomicInteger();
+        var steps = new MaintenanceRunner.Steps(() -> {}, () -> 1L, beat -> {}, () -> 0,
+                () -> { expiredApprovals.incrementAndGet(); return 0; }, () -> 0, () -> {},
+                () -> { asked.incrementAndGet(); return 3; });
+        try (var runner = runner(steps, "0 17 3 * * *")) {
+            runner.sweep();
+            runner.sweep();
+        }
+        assertThat(asked).hasValue(2);
+        assertThat(expiredApprovals).hasValue(2);
     }
 }

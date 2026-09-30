@@ -43,6 +43,8 @@ final class MaintenanceRunner implements AutoCloseable {
     /** Proposals failed per sweep at most; the rest is picked up at the next sweep. */
     static final int APPLY_BATCH = 100;
 
+    private static final Duration EXPIRY_WARNING_REPEAT = Duration.ofHours(6);
+
     private static final Logger LOG = LoggerFactory.getLogger(MaintenanceRunner.class);
 
     /**
@@ -55,10 +57,11 @@ final class MaintenanceRunner implements AutoCloseable {
      * @param expireApprovals      marks approvals that were never published as stale; returns the number expired
      * @param failStuckApplies     marks proposals stuck in APPLYING as failed; returns the number failed
      * @param partitionMaintenance runs the advisory-locked partition maintenance and retention purge
+     * @param expiringApiKeys      counts active API keys about to expire (an early warning, changes nothing)
      */
     record Steps(Runnable refreshSnapshots, LongSupplier appliedGeneration, Consumer<NodeHeartbeat> heartbeat,
                  IntSupplier pruneNodes, IntSupplier expireApprovals, IntSupplier failStuckApplies,
-                 Runnable partitionMaintenance) {}
+                 Runnable partitionMaintenance, IntSupplier expiringApiKeys) {}
 
     /**
      * Identity reported in every heartbeat.
@@ -81,6 +84,8 @@ final class MaintenanceRunner implements AutoCloseable {
     private final ScheduledExecutorService maintenanceThread = Executors.newSingleThreadScheduledExecutor(
             r -> daemon(r, "dai-maintenance"));
     private volatile boolean closed;
+    private int lastExpiringWarned;
+    private Instant lastExpiringWarnedAt = Instant.MIN;
 
     MaintenanceRunner(Steps steps, Identity identity, DaiProperties.Maintenance settings, Clock clock) {
         this.steps = Objects.requireNonNull(steps, "steps");
@@ -153,7 +158,7 @@ final class MaintenanceRunner implements AutoCloseable {
         });
     }
 
-    /** Runs the three sweeps independently; package-private for tests. */
+    /** Runs the sweeps independently; package-private for tests. */
     void sweep() {
         guarded("node pruning", "dynamic.ai.agent.maintenance.nodes.pruned", () -> {
             int n = steps.pruneNodes().getAsInt();
@@ -167,12 +172,27 @@ final class MaintenanceRunner implements AutoCloseable {
                 LOG.info("Expired {} unpublished approval(s)", n);
             }
         });
+        guarded("api key expiry warning", "dynamic.ai.agent.maintenance.apikeys.expiring", this::warnExpiringKeys);
         guarded("apply reconciliation", "dynamic.ai.agent.maintenance.applies.failed", () -> {
             int n = steps.failStuckApplies().getAsInt();
             if (n > 0) {
                 LOG.warn("Marked {} proposal(s) stuck in APPLYING as failed; verify the host state", n);
             }
         });
+    }
+
+    /** Warns when active API keys are about to expire; repeats only when the count changes or every 6 hours. */
+    private void warnExpiringKeys() {
+        int n = steps.expiringApiKeys().getAsInt();
+        Instant now = clock.instant();
+        if (n > 0 && (n != lastExpiringWarned || now.isAfter(lastExpiringWarnedAt.plus(EXPIRY_WARNING_REPEAT)))) {
+            LOG.warn("{} API key(s) expire soon; services using them will be refused once they do. "
+                    + "Create replacement keys and revoke the old ones", n);
+            lastExpiringWarned = n;
+            lastExpiringWarnedAt = now;
+        } else if (n == 0) {
+            lastExpiringWarned = 0;
+        }
     }
 
     /** Runs the partition maintenance; package-private for tests. */

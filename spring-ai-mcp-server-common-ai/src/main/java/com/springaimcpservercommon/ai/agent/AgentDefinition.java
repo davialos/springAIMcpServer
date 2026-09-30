@@ -27,6 +27,7 @@ import java.util.UUID;
  * @param output        output format (text or JSON schema)
  * @param references    all catalog elements this agent references (for drift detection)
  * @param catalogHash   effective catalog fingerprint validated against at publish time
+ * @param knowledge     bundled knowledge packs whose relevant chunks are added to every turn's prompt (ADR-0022)
  */
 public record AgentDefinition(
         UUID id,
@@ -42,7 +43,17 @@ public record AgentDefinition(
         LimitSpec limits,
         OutputSpec output,
         Set<CatalogElementRef> references,
-        String catalogHash) {
+        String catalogHash,
+        List<KnowledgeRef> knowledge) {
+
+    /** Creates a definition that uses no knowledge packs. */
+    public AgentDefinition(UUID id, int revision, UUID workspaceId, String slug, String displayName,
+                           String systemPrompt, ModelSelection model, List<ToolBindingRef> tools, MemorySpec memory,
+                           GuardrailSpec guardrails, LimitSpec limits, OutputSpec output,
+                           Set<CatalogElementRef> references, String catalogHash) {
+        this(id, revision, workspaceId, slug, displayName, systemPrompt, model, tools, memory, guardrails, limits,
+                output, references, catalogHash, List.of());
+    }
 
     private static final java.util.regex.Pattern SLUG_PATTERN =
             java.util.regex.Pattern.compile("^[a-z][a-z0-9-]{2,63}$");
@@ -65,5 +76,6 @@ public record AgentDefinition(
         Objects.requireNonNull(catalogHash, "catalogHash");
         tools = List.copyOf(tools);
         references = Set.copyOf(references);
+        knowledge = List.copyOf(knowledge);
     }
 }

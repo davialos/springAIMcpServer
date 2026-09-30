@@ -738,3 +738,22 @@ Expired memories are deleted by the same background job as expired conversations
 | MCP client gets `401` with `WWW-Authenticate: Bearer resource_metadata="..."` | No token, wrong audience, or the client isn't in `dai_mcp_client` as `APPROVED` yet | Check the token's `aud` claim against the MCP resource URI; have an admin approve the client (§9) |
 | Rows keep landing in `dai_agent_turn_pdefault` (or the other `_pdefault` partitions) | The partition-maintenance job is disabled, failing, or badly behind schedule | `scripts/db/postgresql/04_verify.sql` §3–4; check `dai_job_run` for recent failures; confirm `maintenance.cron` is actually configured and the job isn't losing the advisory lock race indefinitely |
 | A confirmed write proposal never applies, stuck in `APPLYING` | The node that confirmed it crashed before recording `APPLIED`/`FAILED` | This is exactly what `ix_change_proposal_applying` (LLD-15 §6.4) exists to find — the crash-reconciliation job should pick it up on its next run (LLD-11 §10); if it doesn't, that job itself needs investigating |
+
+## Knowledge packs: embeddings that ship in your JAR (ADR-0022)
+
+Keep the context your agents need in your repository and let the build bundle it.
+
+1. Put documents (`.md`, `.txt`) under e.g. `src/main/knowledge/handbook/`.
+2. Build the pack file, once and whenever the documents change, and commit it:
+   - keyword-only, no key needed:
+     `java -cp <starter+deps> com.springaimcpservercommon.ai.knowledge.KnowledgeIndexer src/main/knowledge/handbook src/main/resources/dynamic-ai/knowledge/handbook/index.jsonl handbook`
+   - with embeddings, using your own `EmbeddingModel` bean: start the application once with
+     `-Ddynamic.ai.agent.knowledge.index.enabled=true -Ddynamic.ai.agent.knowledge.index.source-dir=src/main/knowledge/handbook -Ddynamic.ai.agent.knowledge.index.output-file=src/main/resources/dynamic-ai/knowledge/handbook/index.jsonl -Ddynamic.ai.agent.knowledge.index.pack=handbook -Ddynamic.ai.agent.knowledge.index.exit-when-done=true -Ddynamic.ai.agent.knowledge.embedding-model-id=openai:text-embedding-3-small`.
+     Re-runs only embed changed chunks.
+3. `mvn package` bundles `index.jsonl` into the JAR (it is an ordinary resource).
+4. At runtime set `dynamic.ai.agent.knowledge.embedding-model-id` to the same id so the vectors are used (otherwise
+   search is keyword-only, with a warning). Use it from an agent by adding
+   `"knowledge":[{"pack":"handbook","topK":4}]` to its spec, or from code: inject `KnowledgeStore` and call
+   `search("handbook", "refund window", 3)`.
+
+Do not bundle confidential documents: every caller allowed to invoke the agent can be shown their content.

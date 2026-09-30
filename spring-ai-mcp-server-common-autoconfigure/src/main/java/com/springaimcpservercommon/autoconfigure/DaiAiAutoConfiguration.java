@@ -365,7 +365,9 @@ public class DaiAiAutoConfiguration {
             ConversationRecorder conversationRecorder,
             ObjectProvider<ObservationRegistry> observationRegistry,
             ChatMemory chatMemory,
-            ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider) {
+            ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider,
+            ObjectProvider<com.springaimcpservercommon.ai.knowledge.KnowledgeStore> knowledgeStore,
+            ObjectProvider<DaiKnowledgeProperties> knowledgeProperties) {
         return new DefaultAgentInvoker(
                 modelRouter,
                 toolBridgeProvider.getIfAvailable(),
@@ -377,6 +379,9 @@ public class DaiAiAutoConfiguration {
                 conversationRecorder,
                 observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP),
                 chatMemory,
-                schemaValidatorProvider.getIfAvailable());
+                schemaValidatorProvider.getIfAvailable(),
+                knowledgeStore.getIfAvailable(),
+                knowledgeProperties.getIfAvailable(() -> new DaiKnowledgeProperties(true, null, 6000,
+                        new DaiKnowledgeProperties.Index(false, null, null, null, 1200, false))).maxContextChars());
     }
 }

@@ -1179,7 +1179,17 @@ public class DaiPersistenceAutoConfiguration {
                 toLimitSpec(spec.limits),
                 toOutputSpec(spec.output),
                 toReferences(spec.references),
-                spec.catalogHash != null ? spec.catalogHash : "sha256:unknown");
+                spec.catalogHash != null ? spec.catalogHash : "sha256:unknown",
+                toKnowledge(spec.knowledge));
+    }
+
+    private static List<com.springaimcpservercommon.ai.agent.KnowledgeRef> toKnowledge(
+            @Nullable List<KnowledgeRefJson> list) {
+        if (list == null) return List.of();
+        return list.stream()
+                .filter(k -> k.pack != null)
+                .map(k -> new com.springaimcpservercommon.ai.agent.KnowledgeRef(k.pack, k.topK, k.minSimilarity))
+                .toList();
     }
 
     private static ModelSelection toModelSelection(@Nullable ModelSpecJson m) {
@@ -1290,7 +1300,14 @@ public class DaiPersistenceAutoConfiguration {
         public @Nullable LimitSpecJson limits;
         public @Nullable OutputSpecJson output;
         public @Nullable List<RefJson> references;
+        public @Nullable List<KnowledgeRefJson> knowledge;
         public @Nullable String catalogHash;
+    }
+
+    static final class KnowledgeRefJson {
+        public @Nullable String pack;
+        public int topK = 4;
+        public double minSimilarity = 0.0;
     }
 
     static final class ModelSpecJson {

@@ -5,6 +5,8 @@ import com.springaimcpservercommon.ai.advisor.JsonSchemaValidationPort;
 import com.springaimcpservercommon.ai.advisor.StructuredOutputValidationAdvisor;
 import com.springaimcpservercommon.ai.advisor.SummaryMemoryAdvisor;
 import com.springaimcpservercommon.ai.advisor.UsageMeteringAdvisor;
+import com.springaimcpservercommon.ai.knowledge.KnowledgeAdvisor;
+import com.springaimcpservercommon.ai.knowledge.KnowledgeStore;
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.MemorySpec;
 import com.springaimcpservercommon.ai.agent.OutputSpec;
@@ -82,6 +84,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final ModelRouter modelRouter;
     private final @Nullable ToolBridge toolBridge;
     private final MetadataRegistry metadataRegistry;
+    private final @Nullable KnowledgeStore knowledgeStore;
+    private final int knowledgeMaxChars;
     private final InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker;
     private final InvocationGuardAdvisor.BudgetChecker budgetChecker;
     private final UsageMeteringAdvisor.UsageSink usageSink;
@@ -119,6 +123,31 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 ObservationRegistry observationRegistry,
                                 ChatMemory chatMemory,
                                 @Nullable JsonSchemaValidationPort schemaValidator) {
+        this(modelRouter, toolBridge, metadataRegistry, killSwitchChecker, budgetChecker, usageSink, turnRecorder,
+                conversationRecorder, observationRegistry, chatMemory, schemaValidator, null, 0);
+    }
+
+    /**
+     * Same, with the knowledge packs agents may draw context from.
+     *
+     * @param knowledgeStore    the bundled knowledge packs, or {@code null} to give agents none
+     * @param knowledgeMaxChars most characters of retrieved text added to one prompt
+     */
+    public DefaultAgentInvoker(ModelRouter modelRouter,
+                                @Nullable ToolBridge toolBridge,
+                                MetadataRegistry metadataRegistry,
+                                InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
+                                InvocationGuardAdvisor.BudgetChecker budgetChecker,
+                                UsageMeteringAdvisor.UsageSink usageSink,
+                                TurnRecorder turnRecorder,
+                                ConversationRecorder conversationRecorder,
+                                ObservationRegistry observationRegistry,
+                                ChatMemory chatMemory,
+                                @Nullable JsonSchemaValidationPort schemaValidator,
+                                @Nullable KnowledgeStore knowledgeStore,
+                                int knowledgeMaxChars) {
+        this.knowledgeStore = knowledgeStore;
+        this.knowledgeMaxChars = knowledgeMaxChars;
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter");
         this.toolBridge = toolBridge;
         this.metadataRegistry = Objects.requireNonNull(metadataRegistry, "metadataRegistry");
@@ -475,6 +504,10 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                     .build());
         }
         // NONE: no memory advisor
+        if (knowledgeStore != null && !agent.knowledge().isEmpty()) {
+            advisors.add(new KnowledgeAdvisor(knowledgeStore, agent.knowledge(), knowledgeMaxChars,
+                    MEMORY_ORDER + 1));
+        }
         if (agent.output().mode() == OutputSpec.Mode.JSON_SCHEMA) {
             advisors.add(new StructuredOutputValidationAdvisor(agent.output(), schemaValidator));
         }

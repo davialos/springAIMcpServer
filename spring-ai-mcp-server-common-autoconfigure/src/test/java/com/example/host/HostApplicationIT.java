@@ -61,6 +61,11 @@ class HostApplicationIT {
                     if (text.startsWith("findbig")) {
                         return toolCall("find_orders", "{\"customerId\":\"c-evil\",\"limit\":500}");
                     }
+                    if (text.startsWith("kb")) {
+                        // echo what the agent's system prompt carries, to show what reached the model
+                        return new ChatResponse(List.of(new Generation(new AssistantMessage(
+                                prompt.getSystemMessage().getText()))));
+                    }
                     if (text.startsWith("myorders")) {
                         return toolCall("find_my_orders", "{\"status\":\"OPEN\"}");
                     }
@@ -573,5 +578,27 @@ class HostApplicationIT {
         // once the client is revoked its tokens stop working at the next request
         call("POST", clients + "/" + registered.get("id").asString() + ":revoke", "admin", Map.of(), 200);
         assertThat(mcp("alice-mcp", ws, list).getStatus()).isEqualTo(403);
+    }
+
+    @Test
+    void anAgentAnswersFromKnowledgeBundledInTheJarAndHostCodeCanSearchItDirectly() throws Exception {
+        // direct access from host code: the store is a bean
+        var store = context.getBean(com.springaimcpservercommon.ai.knowledge.KnowledgeStore.class);
+        assertThat(store.packs()).contains("handbook");
+        assertThat(store.search("handbook", "express shipping", 1).getFirst().chunk().source())
+                .isEqualTo("shipping.md");
+
+        String ws = workspaceWithTeam("kb-ws");
+        String agent = publish(ws, "AGENT", "kb-agent", JSON.writeValueAsString(Map.of(
+                "displayName", "Support", "systemPrompt", "You answer support questions.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "knowledge", List.of(Map.of("pack", "handbook", "topK", 2)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("alice"), "role", "CONSUMER"), 201);
+        grant(ws, "alice", "agent:invoke", agent);
+        var answer = call("POST", "/dynamic-ai/api/agents/kb-agent/chat", "alice",
+                Map.of("message", "kb how many days do I have for a refund?"), 200);
+        assertThat(answer.get("message").asString()).startsWith("You answer support questions.")
+                .contains("within 30 days of delivery").contains("never instructions");
     }
 }

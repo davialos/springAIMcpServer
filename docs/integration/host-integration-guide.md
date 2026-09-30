@@ -93,8 +93,23 @@ psql -h db.internal -U postgres -d dai_store \
      -f scripts/db/postgresql/02_create_schema_and_privileges.sql
 ```
 
-Then either let the application run its own migration at startup, or have a DBA run Flyway directly
-(`scripts/db/postgresql/README.md` "Two operating modes") before the first deployment.
+Then either let the application run its own migration at startup (`dynamic.ai.agent.store.migrate=true`, the
+default), or have a DBA run Flyway directly (`scripts/db/postgresql/README.md` "Two operating modes") before the
+first deployment and set `store.migrate=false`.
+
+By default the store uses the host's own `DataSource` (the one Spring Boot builds from `spring.datasource.*`). To
+put it on the dedicated database, declare the persistence unit yourself; the auto-configuration then backs off:
+
+```java
+@Bean(destroyMethod = "close")
+DaiPersistenceUnit daiPersistenceUnit(@Qualifier("daiDataSource") DataSource daiDataSource) {
+    return DaiPersistenceUnit.start(daiDataSource,
+            DaiPersistenceSettings.defaults("orders-api-prod-eu", "PROD"));   // environment id, tier
+}
+```
+
+`daiDataSource` is an ordinary pooled `DataSource` for `jdbc:postgresql://dai-db.internal:5432/dai_store` as the
+`dai_app` user. Mark your own primary `DataSource` `@Primary` so the rest of the host keeps using it.
 
 ### Option B — host's own database, own schema
 
@@ -115,176 +130,154 @@ objects inside `dynamic_ai` (CLAUDE.md namespace rules, ADR-0019).
 
 ## 4. `application.yml` examples
 
-### DEV — reuse the host's DataSource, app-run migrations
+Every property below exists in `DaiProperties` (`dynamic.ai.agent.*`); Spring ignores unknown keys silently, so
+copy names exactly. The whole library is on as soon as the starter is on the classpath
+(`dynamic.ai.agent.enabled`, default `true`); only the MCP endpoint and conversation recording are opt-in.
+
+### DEV — host's DataSource, app-run migrations
 
 ```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: orders
+    password: ${DB_PASSWORD}
+
 dynamic:
   ai:
     agent:
-      enabled: true
       environment:
-        tier: dev                     # explicit — never leave this unset, even in DEV (LLD-12 §2.1)
+        tier: DEV                     # explicit — never leave this unset (UNKNOWN is treated as PROD, LLD-12 §2.1)
+        application-name: orders-api
       store:
-        enabled: true
-        migrate: true                 # app runs Flyway itself on startup
-        # datasource.url left unset ⇒ reuses the host's own DataSource, schema dynamic_ai
-      endpoints:
-        enabled: true
-      agents:
-        enabled: true
-      admin:
-        enabled: true
-        ui:
-          enabled: true
+        migrate: true                 # default: Flyway runs at startup into schema dynamic_ai
       mcp:
-        server:
-          enabled: true               # LLD-07 §5 — confirm this is enabled in your build (see version note above)
+        enabled: true                 # serves POST /dynamic-ai/mcp (default false) — §9
 ```
 
-### PROD — dedicated datasource, DBA-run migrations, tuned retention
+### PROD — DBA-run migrations, schema validation, explicit identity
 
 ```yaml
 dynamic:
   ai:
     agent:
-      enabled: true
       environment:
-        tier: prod
-        id: orders-api-prod-eu        # ${spring.application.name}-<tier> is the default; override for clarity
+        tier: PROD
+        id: orders-api-prod-eu        # default: <application-name>-<tier>
       store:
-        enabled: true
         migrate: false                # a DBA already ran Flyway (scripts/db/postgresql/README.md Mode B)
-        validate-schema: true         # fail fast if the applied schema doesn't match what this build expects
-        schema: dynamic_ai
-        datasource:
-          url: jdbc:postgresql://dai-db.internal:5432/dai_store
-          username: dai_app
-          password: ${DAI_APP_PASSWORD}
-          maximum-pool-size: 20
-          connection-timeout: 5s
-        retention:
-          telemetry-months: 13
-          audit-months: 14
-          conversation-days: 30
-          proposal-days: 7
+        validate-schema: true         # fail fast if the applied schema does not match this build
         maintenance:
           enabled: true               # false = you run partitions, retention and node bookkeeping yourself
-          cron: "0 17 3 * * *"       # UTC
-      audit:
-        evidence:
-          enabled: false              # opt in per workspace/regulatory need (ADR-0018, OQ-27) — off by default
+          cron: "0 17 3 * * *"        # UTC
       security:
-        api-key:
-          pepper-secret-ref: "vault:secret/dai/api-key-pepper#value"   # resolved by your SecretResolver SPI
-      endpoints:
-        enabled: true
-      agents:
-        enabled: true
-      admin:
-        enabled: true
-        ui:
-          enabled: false              # LLD-12 §2.2 — authoring/introspection UI is locked in PROD by default
+        groups-claim: groups
+        cache-ttl: 2m                 # how long a node may serve a user's old roles after a change elsewhere
+      conversations:
+        enabled: true                 # record transcripts (redacted) — off by default
+        retention: 30d
+        erase-mode: RETAIN_FOR_AUDIT  # default; HARD deletes on user erase — see §9 "Conversation history"
+        audit-retention: 90d
+      memory:
+        retention: 24h                # what the model remembers of a conversation
+      model:
+        failure-threshold: 5          # a provider failing 5 calls in a row is skipped for breaker-open-for
+        breaker-open-for: 30s
       mcp:
-        server:
-          enabled: true
+        enabled: true
+        resource-uri: https://orders.example.com/dynamic-ai/mcp
+        authorization-servers: [ "https://login.example.com" ]
 ```
 
-`store.migration.username`/`.password` are only needed if the migration identity (`dai_migrator`) differs from
-the runtime identity (`dai_app`) **and** `store.migrate=true` (app-run mode) — in the PROD example above,
-`store.migrate=false` means Flyway never runs from inside the application at all, so those two properties are
-omitted.
+Reference of the top-level groups (defaults in parentheses):
+
+| Group | Keys |
+|---|---|
+| `environment` | `tier` (`UNKNOWN` ⇒ treated as PROD), `id`, `application-name`, `prod-profile-patterns` |
+| `store` | `migrate` (true), `validate-schema` (false), `maintenance.*` (enabled, `cron`, `snapshot-poll-interval` 5s, `heartbeat-interval`, `sweep-interval`, `node-retention`, `approval-ttl`, `apply-timeout`, `node-id`) |
+| `security` | `groups-claim` (groups), `clearance-claim`, `default-clearance` (INTERNAL), `attribute-claims`, `issuer-override`, `local-issuer`, `cache-ttl` (5m, max 5m), `cache-max-entries`, `static-role-mappings`, `filter-chains.enabled` (true) |
+| `mcp` | `enabled` (false), `workspace-id`, `transport` (STATELESS), `allowed-origins`, `resource-uri`, `authorization-servers`, `max-request-bytes`, `require-approved-client` (true) |
+| `conversations` | `enabled` (false), `retention` (30d), `max-stored-chars`, `purge-interval`, `erase-mode` (RETAIN_FOR_AUDIT), `audit-retention` (90d) |
+| `memory` | `persistent` (true), `retention` (24h), `max-stored-chars` |
+| `model` | `failure-threshold` (5), `breaker-open-for` (30s) |
+| `budget` | `enforce` (true) and limits — §10 |
+| `write` | `enabled` (false) — reviewed change proposals, §6 |
+| `review` | `required-approvals` (1) |
+| `chat`, `query`, `scan` | endpoint limits, query bulkhead (`max-concurrency`, `timeout`), `@Ai*` scan (`base-packages`, `strict`) |
 
 ## 5. Security integration
 
-The framework never authenticates anyone itself (SEC-01 §1); it reads the host's `Authentication` and maps it
-to a `DaiPrincipal` and a set of framework roles via `dai_role_mapping` rows and/or the static config below
-(SEC-01 §3). Configure `dynamic.ai.agent.security.identity.*` to tell the mapper where to find the subject id,
-groups/roles and (optionally) ABAC attributes in **your** IdP's tokens, then add `role-mappings` entries.
+The framework never authenticates anyone itself (SEC-01 §1). It reads the host's `Authentication` and maps it to
+a `DaiPrincipal` with framework roles, from `dai_role_mapping` rows (admin API) and/or the static mappings below
+(SEC-01 §3).
 
-### Entra ID (Azure AD)
+### Filter chains
+
+The starter registers three Spring Security chains, each limited to its own paths, so your chains keep everything
+else:
+
+| Chain | Paths | Accepts | Notes |
+|---|---|---|---|
+| admin | `/dynamic-ai/admin/**` | your session login, bearer tokens | CSRF for session requests, exempt for requests with credentials in a header |
+| mcp | `/dynamic-ai/mcp` | bearer tokens | stateless; 401 carries the RFC 9728 challenge when `mcp.resource-uri` is set |
+| api | every other `/dynamic-ai/**` | bearer tokens | stateless, no CSRF |
+
+Bearer tokens are validated with **your** `JwtDecoder` (or `OpaqueTokenIntrospector`) bean and converted with your
+`JwtAuthenticationConverter` if you have one, so claims and authorities look exactly as in the rest of your app.
+If you rely on Spring Boot's default chain, it stays in place for the rest of the app. To assemble the chains
+yourself, set `dynamic.ai.agent.security.filter-chains.enabled=false` and use `DynamicAiHttpSecurityConfigurer`.
+API keys for service accounts are not wired yet (OQ-37).
+
+### Roles, memberships and grants
+
+Access is default-deny. A caller needs, in order:
+
+1. **A global role** from a role mapping (e.g. `PLATFORM_ADMIN` to create workspaces), or
+2. **A workspace role** (`WORKSPACE_OWNER`, `AUTHOR`, `APPROVER`, `OPERATOR`, `CONSUMER`) granted with
+   `POST /dynamic-ai/admin/api/v1/workspaces/{id}/members`, and
+3. **A grant** for the grant-only permissions (`agent:invoke`, `endpoint:invoke`, `tool:invoke`, …) with
+   `POST /dynamic-ai/admin/api/v1/workspaces/{id}/grants`. `CONSUMER` alone carries no permission.
+
+Platform admins run the platform but do not author: authoring is `AUTHOR`, approving is `APPROVER` (and nobody
+approves their own revision). A typical agent rollout is: create workspace → add an author and an approver →
+author creates the agent draft and submits it → approver approves → publish → grant `agent:invoke` to its users.
+State transitions use optimistic concurrency: send the `rowVersion` you last read as `If-Match`.
+
+Changes made through the admin API take effect immediately on the node that served the request. Other nodes pick
+them up within `security.cache-ttl` (roles), 5 seconds (grants) and `store.maintenance.snapshot-poll-interval`
+(published generations).
+
+### Static role mappings
 
 ```yaml
 dynamic:
   ai:
     agent:
       security:
-        identity:
-          subject-claim: oid          # stable object id — do NOT use email or upn as the subject
-          groups-claim: roles         # prefer App Roles surfaced as "roles" over the raw "groups" claim
-        role-mappings:
-          - match: { authority: "APPROLE_PlatformAdmin" }
+        groups-claim: groups          # the claim holding group names (default "groups")
+        static-role-mappings:
+          - source: AUTHORITY         # AUTHORITY | SCOPE | LDAP_GROUP | OIDC_CLAIM
+            match-value: "SCOPE_dai.admin"
             role: PLATFORM_ADMIN
-          - match: { group: "AppRole.SalesEngineering.Owner" }
-            role: WORKSPACE_OWNER
-            workspace: sales
-```
-
-Assign **App Roles** to Entra security groups rather than reading the raw `groups` claim directly: a user in
-more than ~200 groups gets a *group overage* claim (`_claim_names`/`hasgroups`) instead of the actual list, and
-resolving it needs an extra Microsoft Graph call via a custom `GroupResolver` (SEC-01 §2). App Roles avoid the
-overage case entirely and are the pattern SEC-01 recommends.
-
-### Okta
-
-```yaml
-dynamic:
-  ai:
-    agent:
-      security:
-        identity:
-          subject-claim: sub
-          groups-claim: groups
-        role-mappings:
-          - match: { group: "sales-analysts" }
+          - source: OIDC_CLAIM
+            claim-name: roles
+            match-value: "Sales.Author"
             role: AUTHOR
-            workspace: sales
-          - match: { group: "sales-approvers" }
-            role: APPROVER
-            workspace: sales
+            workspace-id: 0193c2f4-…  # workspace-scoped roles take the workspace id (not its slug)
 ```
 
-### Keycloak
+`match-value` is a glob. The subject is the token's `sub` (never an e-mail or UPN); the subject and roles claims
+are not configurable today.
 
-```yaml
-dynamic:
-  ai:
-    agent:
-      security:
-        identity:
-          subject-claim: sub
-          groups-claim: realm_access.roles
-        role-mappings:
-          - match: { group: "platform-admin" }
-            role: PLATFORM_ADMIN
-```
+**Entra ID:** map **App Roles** (the `roles` claim) with `source: OIDC_CLAIM, claim-name: roles` rather than the raw
+`groups` claim: a user in more than ~200 groups gets a *group overage* marker instead of the list, and resolving it
+needs a custom `GroupResolver` bean (SEC-01 §2).
 
-Keycloak's realm roles arrive nested (`realm_access.roles`, not a top-level claim). Confirm your
-`AuthorityMapper`/`PrincipalAttributeResolver` SPI implementation (SEC-01 §3) actually resolves a dotted claim
-path before relying on this in PROD — if the default mapper only reads top-level claim names, provide a small
-custom `PrincipalAttributeResolver` bean that flattens `realm_access.roles` into a claim the default mapper can
-read, or map Keycloak client roles into a top-level custom claim in your Keycloak client mapper configuration
-instead.
+**Keycloak:** realm roles arrive nested (`realm_access.roles`). Add a client mapper that emits them as a top-level
+claim, or provide a `PrincipalAttributeResolver` bean that flattens them.
 
-### LDAP / Active Directory
-
-```yaml
-dynamic:
-  ai:
-    agent:
-      security:
-        role-mappings:
-          - match: { ldapGroup: "cn=data-owners,ou=groups,dc=acme,dc=com" }
-            role: APPROVER
-          - match: { ldapGroup: "cn=sales-team,ou=groups,dc=acme,dc=com" }
-            role: AUTHOR
-            workspace: sales
-```
-
-`memberOf` DNs resolve to `GrantedAuthority`s through Spring Security's LDAP support upstream of this mapping;
-`ldapGroup` matches the full DN, not just the CN, to avoid collisions across OUs.
-
-Whichever IdP you use, mapping results are cached per `(issuer, subject, token hash/session id)` for up to 5
-minutes (SEC-01 §3) — a role mapping change takes effect for a given user within that window, not instantly.
+**LDAP / Active Directory:** `source: LDAP_GROUP` matches the full DN of a `memberOf` group
+(`cn=sales-team,ou=groups,dc=acme,dc=com`), not just the CN, to avoid collisions across OUs.
 
 ## 6. Annotating host code
 
@@ -392,30 +385,26 @@ enough description key — but always supply `description`; it is what the LLM a
 
 ## 7. Enabling features
 
-Every top-level feature switch defaults to **`false`** (LLD-01 §4); enable only what a given environment
-needs:
+Everything is on once the starter is on the classpath; switches exist only where a feature has a cost or a
+privacy impact:
 
 ```yaml
 dynamic:
   ai:
     agent:
-      enabled: true              # master switch — everything else is inert if this is false
-      endpoints:
-        enabled: true            # metadata-driven dynamic REST endpoints (data plane)
-      agents:
-        enabled: true            # Spring AI agent runtime, chat API
-      admin:
-        enabled: true            # admin REST API (control plane)
-        ui:
-          enabled: true          # embedded admin dashboard — see §8 for the PROD default
+      enabled: true              # master switch (default true); false makes the whole library inert
       mcp:
         enabled: true            # serves POST /dynamic-ai/mcp (default false) — §9
         workspace-id: 0193…      # workspace used when a request sends no X-DAI-Workspace header
+      conversations:
+        enabled: true            # record redacted transcripts (default false)
+      write:
+        enabled: true            # reviewed change proposals from tools (default false) — §6
 ```
 
-`dynamic.ai.agent.store.enabled` (default `true`) is independent of these — the persistence unit initializes
-whenever the starter is on the classpath and `dynamic.ai.agent.enabled=true`, because audit/versioning tables
-are foundational to every other feature.
+The dynamic endpoints, agents and the admin API have no separate switch: they are inert until something is
+published and granted. Which *capabilities* an environment allows (authoring, introspection, playground,
+reviewed writes …) is decided by the environment tier (§8) and shown at `GET /dynamic-ai/admin/api/v1/me`.
 
 ## 8. Environment tiers and the PROD lock-down
 
@@ -425,28 +414,16 @@ DEV. Active Spring profiles matching `prod-profile-patterns` (default `prod,prod
 only make the resolved tier *stricter*, never looser: an explicit `tier: dev` alongside an active `prod`
 profile still resolves to PROD, logged as `CRITICAL` and audited as `ENVIRONMENT_CONFLICT`.
 
-In PROD, **authoring, introspection, query preview/explain, and the playground are disabled at the bean
-level** by default (LLD-12 §2.2) — there is no controller to reach, not just a permission check. Published
+In PROD, **authoring, introspection, query preview/explain and the playground are disabled** (LLD-12 §2.2): the
+endpoints answer `403 capability disabled` whatever the caller's roles; `GET /dynamic-ai/admin/api/v1/me` lists
+the capabilities of the environment. Published
 endpoints/agents/tools, reviewed writes, MCP, and ops views (usage, audit, kill switches) all continue to work
 in PROD; only the "build/inspect the configuration live" surfaces are locked. Config changes in PROD go
 through a signed bundle import promoted from STAGE, not the live UI (LLD-09 §5, LLD-12 §2.2).
 
-A time-boxed break-glass override exists for genuine incidents:
-
-```yaml
-dynamic:
-  ai:
-    agent:
-      environment:
-        tier: prod
-        production-override:
-          enabled: true
-          capabilities: [AUTHORING, PLAYGROUND]
-          expires-at: 2026-10-01T18:00:00Z   # mandatory; rejected at startup if missing or > 72h away
-          reason: "INC-4412 hotfix of agent prompt"
-```
-Every action taken under an active override is audited with `override=true`, and the affected capability turns
-off again automatically at `expires-at` without a restart (LLD-12 §2.3).
+A time-boxed break-glass override (named capabilities, mandatory expiry within 72 hours, reason, every action
+audited) is modelled in the core (`ProductionOverride`, LLD-12 §2.3) but **not yet configurable** (OQ-53): today
+the way to change a PROD configuration is a reviewed publish from an environment that allows authoring.
 
 ## 9. MCP client configuration
 
@@ -739,9 +716,9 @@ Expired memories are deleted by the same background job as expired conversations
   advisory-locked so exactly one cluster node does the work per run (`dai_job_run` records the outcome). Verify
   it is actually running with `scripts/db/postgresql/04_verify.sql` §3–4 (empty `DEFAULT` partitions, expected
   partitions present).
-- **Retention**: `dynamic.ai.agent.store.retention.{telemetry-months,audit-months,conversation-days,
-  proposal-days}` (§4 PROD example) — see `docs/lld/15-database-schema.md` §10 for exactly how each is
-  enforced (partition drop vs. row purge).
+- **Retention**: telemetry and audit are kept by monthly partition and dropped by the partition maintenance with
+  the defaults of `docs/lld/15-database-schema.md` §10 (not yet configurable per host, OQ-31); conversations and
+  chat memory follow `conversations.retention` / `audit-retention` and `memory.retention`.
 - **Backups**: continuous archiving (WAL + base backups) is recommended over `pg_dump` alone for anything
   beyond a dev snapshot; see `docs/lld/15-database-schema.md` §14 for the full restore-drill checklist,
   including why roles/grants must be recreated (`scripts/db/postgresql/02_`/`03_`) before an application can
@@ -751,7 +728,7 @@ Expired memories are deleted by the same background job as expired conversations
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| App fails to start with a Flyway `permission denied for schema dynamic_ai` | Migration credentials point at `dai_app` (DML-only) instead of `dai_migrator` | Set `dynamic.ai.agent.store.migration.username/.password` to `dai_migrator`, or switch to DBA-run migrations (`store.migrate=false`) |
+| App fails to start with a Flyway `permission denied for schema dynamic_ai` | Migration credentials point at `dai_app` (DML-only) instead of `dai_migrator` | Point the migrating `DataSource` at `dai_migrator` (or let a DBA run Flyway and set `dynamic.ai.agent.store.migrate=false`), or switch to DBA-run migrations (`store.migrate=false`) |
 | Runtime queries fail with `permission denied for table dai_...` | `02_create_schema_and_privileges.sql` never ran, or ran *after* Flyway already created the tables | Run `scripts/db/postgresql/03_post_migration_grants.sql` as a catch-up |
 | Authoring/introspection/playground unexpectedly disabled in what you believe is DEV | `dynamic.ai.agent.environment.tier` unset ⇒ resolves to `UNKNOWN` ⇒ treated as `PROD` (§8) | Set `environment.tier: dev` explicitly |
 | Startup logs `ENVIRONMENT_CONFLICT` / `CONFIG_STORE_IDENTITY_MISMATCH` | An active Spring profile matches a prod pattern despite an explicit non-prod tier, or this app is pointed at a store whose `dai_environment` row belongs to a different environment (e.g. a prod backup restored into stage) | Fix the profile/tier mismatch, or confirm you are connecting to the intended store (`scripts/db/postgresql/04_verify.sql` §2) |

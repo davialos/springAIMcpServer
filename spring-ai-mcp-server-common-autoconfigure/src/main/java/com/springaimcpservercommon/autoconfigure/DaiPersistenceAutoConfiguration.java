@@ -138,9 +138,12 @@ public class DaiPersistenceAutoConfiguration {
         DaiProperties.Environment env = props.environment();
         String tier = resolveTier(env.tier());
         String envId = environmentId(env, tier);
-        DaiPersistenceSettings settings = DaiPersistenceSettings.defaults(envId, tier);
-        LOG.info("Starting dynamic_ai persistence unit (schema {}, env {}/{})",
-                settings.schema(), envId, tier);
+        DaiPersistenceSettings defaults = DaiPersistenceSettings.defaults(envId, tier);
+        DaiProperties.Store store = props.store();
+        DaiPersistenceSettings settings = new DaiPersistenceSettings(defaults.schema(), store.migrate(), null, envId,
+                tier, store.validateSchema(), defaults.jdbcBatchSize());
+        LOG.info("Starting dynamic_ai persistence unit (schema {}, env {}/{}, migrate {}, validate {})",
+                settings.schema(), envId, tier, settings.migrate(), settings.validateSchema());
         return DaiPersistenceUnit.start(dataSource, settings);
     }
 

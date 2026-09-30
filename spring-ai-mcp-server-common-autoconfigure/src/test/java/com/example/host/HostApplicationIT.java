@@ -129,6 +129,7 @@ class HostApplicationIT {
                 "spring.datasource.username", POSTGRES.getUsername(),
                 "spring.datasource.password", POSTGRES.getPassword(),
                 "dynamic.ai.agent.environment.tier", "DEV",
+                "dynamic.ai.agent.store.validate-schema", "true",
                 "dynamic.ai.agent.environment.application-name", "host-it",
                 "dynamic.ai.agent.security.static-role-mappings[0].source", "AUTHORITY",
                 "dynamic.ai.agent.security.static-role-mappings[0].match-value", "SCOPE_dai.admin",

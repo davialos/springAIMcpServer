@@ -97,11 +97,16 @@ public record DaiProperties(
     }
 
     /**
-     * Store settings.
+     * Store settings. The store uses the host's {@code DataSource} and the {@code dynamic_ai} schema; for a dedicated
+     * database, declare your own {@code DaiPersistenceUnit} bean (see the integration guide).
      *
-     * @param maintenance background jobs of this node
+     * @param maintenance    background jobs of this node
+     * @param migrate        run the Flyway migrations at startup (default); {@code false} when a DBA applies them
+     * @param validateSchema check at startup that the tables match this build's entities (fail fast on drift)
      */
-    public record Store(@DefaultValue Maintenance maintenance) {}
+    public record Store(@DefaultValue Maintenance maintenance,
+                        @DefaultValue("true") boolean migrate,
+                        @DefaultValue("false") boolean validateSchema) {}
 
     /**
      * Background maintenance (OQ-46). Every node runs it; work that must happen once per cluster is guarded by a

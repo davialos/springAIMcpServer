@@ -345,7 +345,13 @@ class HostApplicationIT {
                 "permission", permission, "targetType", "RESOURCE", "resourceId", resource), 201);
     }
 
-    private static void seedOrders() {
+    private static boolean seeded;
+
+    private static synchronized void seedOrders() {
+        if (seeded) {
+            return;
+        }
+        seeded = true;
         var emf = context.getBean(jakarta.persistence.EntityManagerFactory.class);
         try (var em = emf.createEntityManager()) {
             em.getTransaction().begin();
@@ -395,5 +401,64 @@ class HostApplicationIT {
         var answer = call("POST", "/dynamic-ai/api/agents/orders-agent/chat", "alice",
                 Map.of("message", "find orders"), 200);
         assertThat(answer.toString()).contains("o1").contains("o2").doesNotContain("o3");
+    }
+
+    private static String operationRef(String method) throws Exception {
+        var operations = call("GET", "/dynamic-ai/admin/api/v1/catalog/operations", "admin", null, 200);
+        for (var op : operations.has("items") ? operations.get("items") : operations) {
+            if (op.get("ref").asString().contains("OrderService#" + method)) {
+                return op.get("ref").asString();
+            }
+        }
+        throw new AssertionError("operation not in the catalog: " + method);
+    }
+
+    @Test
+    void aModelNeverWritesItProposesAndAPersonConfirmsThroughTheHostMethod() throws Exception {
+        seedOrders();
+        String ws = workspaceWithTeam("orders-write");
+        String binding = publish(ws, "TOOL_BINDING", "cancel-order", JSON.writeValueAsString(Map.of(
+                "toolName", "cancel_order",
+                "source", Map.of("kind", "operation", "ref", operationRef("cancel")),
+                "writeMode", "PROPOSE", "change", "update", "entityIdArgument", "orderId")));
+        String agent = publish(ws, "AGENT", "orders-writer", JSON.writeValueAsString(Map.of(
+                "displayName", "Orders", "systemPrompt", "You help with orders.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "tools", List.of(Map.of("bindingId", binding, "revision", 1)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("bob"), "role", "CONSUMER"), 201);
+        grant(ws, "bob", "agent:invoke", agent);
+        grant(ws, "bob", "tool:invoke", binding);
+        grant(ws, "bob", "data:write-propose", binding);
+        // confirming is a workspace-wide permission: it applies to the person's own proposals, whatever the tool
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/grants", "admin",
+                Map.of("principalId", principalId("bob"), "permission", "data:write-confirm"), 201);
+
+        int before = OrderService.CANCELLATIONS.get();
+        var answer = call("POST", "/dynamic-ai/api/agents/orders-writer/chat", "bob",
+                Map.of("message", "cancel o1"), 200);
+        assertThat(answer.toString()).contains("proposed");
+        // the model's turn changed nothing
+        assertThat(OrderService.CANCELLATIONS.get()).isEqualTo(before);
+
+        var proposals = call("GET", "/dynamic-ai/api/proposals", "bob", null, 200);
+        String id = proposals.get("items").get(0).get("id").asString();
+        assertThat(proposals.get("items").get(0).get("state").asString()).isEqualTo("PROPOSED");
+        var detail = call("GET", "/dynamic-ai/api/proposals/" + id, "bob", null, 200);
+        // someone else cannot even see bob's proposal
+        call("POST", "/dynamic-ai/api/proposals/" + id + ":confirm", "alice",
+                Map.of("contentHash", detail.get("contentHash").asString()), 404);
+        // no approver is required here, so the person's confirmation applies it, in this request, as them
+        var applied = call("POST", "/dynamic-ai/api/proposals/" + id + ":confirm", "bob",
+                Map.of("contentHash", detail.get("contentHash").asString()), 200);
+        assertThat(applied.get("summary").get("state").asString()).isEqualTo("APPLIED");
+        // the host's own method ran, once, and the host's data changed
+        assertThat(OrderService.CANCELLATIONS.get()).isEqualTo(before + 1);
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class));
+        assertThat(jdbc.queryForObject("select status from host_order where id = 'o1'", String.class))
+                .isEqualTo("CANCELLED");
+        // repeating the apply is harmless: the host method does not run twice
+        call("POST", "/dynamic-ai/api/proposals/" + id + ":apply", "bob", null, 200);
+        assertThat(OrderService.CANCELLATIONS.get()).isEqualTo(before + 1);
     }
 }

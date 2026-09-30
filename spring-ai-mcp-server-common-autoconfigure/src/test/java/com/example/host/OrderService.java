@@ -37,10 +37,10 @@ public class OrderService {
 
     @AiExposedAction(intent = "Cancel an order", readOnly = false, idempotent = true)
     @Transactional
-    public String cancel(@AiParam(description = "The order id") String orderId) {
+    public Order cancel(@AiParam(description = "The order id") String orderId) {
         CANCELLATIONS.incrementAndGet();
         Order order = entityManager.find(Order.class, orderId);
         order.setStatus("CANCELLED");
-        return orderId;
+        return order;
     }
 }

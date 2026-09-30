@@ -250,7 +250,7 @@ public class DaiWebMvcAutoConfiguration {
         }
         try {
             Object result = method.invoke(bean, args);
-            return result == null ? "null" : CanonicalJson.write(result);
+            return render(result, desc);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
             if (cause instanceof AccessDeniedException) {
@@ -265,6 +265,28 @@ public class DaiWebMvcAutoConfiguration {
         } catch (IllegalAccessException e) {
             throw new GenericDynamicHandler.BackingException(
                     ProblemCode.EXECUTION_ERROR, "Method is not accessible.");
+        }
+    }
+
+    /**
+     * Renders an operation's result. A write has already happened by now, so a result that cannot be rendered (a
+     * host returning its entity, say) must not make the caller believe the write failed: it is dropped and only the
+     * type is logged. A read has nothing else to give, so there it stays an error.
+     */
+    private static String render(@Nullable Object result, OperationDescriptor desc) {
+        if (result == null) {
+            return "null";
+        }
+        try {
+            return CanonicalJson.write(result);
+        } catch (IllegalArgumentException e) {
+            if (desc.readOnly()) {
+                throw e;
+            }
+            org.slf4j.LoggerFactory.getLogger(DaiWebMvcAutoConfiguration.class).warn(
+                    "Result of {} ({}) cannot be rendered as JSON; the change was applied, the result is omitted",
+                    desc.methodName(), result.getClass().getName());
+            return "null";
         }
     }
 

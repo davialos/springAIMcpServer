@@ -2,9 +2,10 @@ package com.springaimcpservercommon.ai.advisor;
 
 import com.springaimcpservercommon.ai.agent.OutputSpec;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -37,7 +38,7 @@ class StructuredOutputValidationAdvisorTest {
 
     @Test
     void getOrder_isAboveUsageMetering() {
-        OutputSpec spec = new OutputSpec(OutputSpec.Mode.JSON_SCHEMA, null);
+        OutputSpec spec = new OutputSpec(OutputSpec.Mode.JSON_SCHEMA, SAMPLE_SCHEMA);
         var advisor = new StructuredOutputValidationAdvisor(spec);
         assertThat(advisor.getOrder()).isEqualTo(org.springframework.core.Ordered.LOWEST_PRECEDENCE - 100);
     }
@@ -46,28 +47,28 @@ class StructuredOutputValidationAdvisorTest {
 
     @Test
     void level1_validJsonObject_passes() {
-        var advisor = advisorWithSchema(null, null);
+        var advisor = advisorWithSchema(SAMPLE_SCHEMA, null);
         var response = callWith(advisor, "{\"name\":\"Alice\"}");
         assertThat(firstText(response)).isEqualTo("{\"name\":\"Alice\"}");
     }
 
     @Test
     void level1_invalidJson_blocksResponse() {
-        var advisor = advisorWithSchema(null, null);
+        var advisor = advisorWithSchema(SAMPLE_SCHEMA, null);
         var response = callWith(advisor, "not json at all");
         assertThat(firstText(response)).contains("output_invalid_json");
     }
 
     @Test
     void level1_jsonPrimitive_blocksResponse() {
-        var advisor = advisorWithSchema(null, null);
+        var advisor = advisorWithSchema(SAMPLE_SCHEMA, null);
         var response = callWith(advisor, "42");
         assertThat(firstText(response)).contains("output_not_json_object");
     }
 
     @Test
     void level1_blankOutput_blocksResponse() {
-        var advisor = advisorWithSchema(null, null);
+        var advisor = advisorWithSchema(SAMPLE_SCHEMA, null);
         var response = callWith(advisor, "");
         assertThat(firstText(response)).contains("output_empty");
     }
@@ -116,19 +117,11 @@ class StructuredOutputValidationAdvisorTest {
     }
 
     @Test
-    void level2_nullSchema_skipsValidatorCall() {
-        JsonSchemaValidationPort validator = mock(JsonSchemaValidationPort.class);
-        var advisor = advisorWithSchema(null, validator);
-        callWith(advisor, "{\"name\":\"Alice\"}");
-        verify(validator, never()).validate(any(), any());
-    }
-
-    @Test
-    void level2_blankSchema_skipsValidatorCall() {
-        JsonSchemaValidationPort validator = mock(JsonSchemaValidationPort.class);
-        var advisor = advisorWithSchema("   ", validator);
-        callWith(advisor, "{\"name\":\"Alice\"}");
-        verify(validator, never()).validate(any(), any());
+    void outputSpec_rejectsMissingOrBlankSchema() {
+        assertThatThrownBy(() -> new OutputSpec(OutputSpec.Mode.JSON_SCHEMA, null))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new OutputSpec(OutputSpec.Mode.JSON_SCHEMA, "   "))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
@@ -139,20 +132,20 @@ class StructuredOutputValidationAdvisorTest {
         return new StructuredOutputValidationAdvisor(spec, validator);
     }
 
-    private static AdvisedResponse callWith(StructuredOutputValidationAdvisor advisor,
+    private static ChatClientResponse callWith(StructuredOutputValidationAdvisor advisor,
                                              String modelOutput) {
         AssistantMessage assistantMessage = new AssistantMessage(modelOutput);
         ChatResponse chatResponse = new ChatResponse(List.of(new Generation(assistantMessage)));
-        AdvisedResponse upstream = new AdvisedResponse(chatResponse, Map.of());
+        ChatClientResponse upstream = new ChatClientResponse(chatResponse, Map.of());
 
-        CallAroundAdvisorChain chain = mock(CallAroundAdvisorChain.class);
-        when(chain.nextAroundCall(any())).thenReturn(upstream);
+        CallAdvisorChain chain = mock(CallAdvisorChain.class);
+        when(chain.nextCall(any())).thenReturn(upstream);
 
-        AdvisedRequest request = mock(AdvisedRequest.class);
-        return advisor.aroundCall(request, chain);
+        ChatClientRequest request = new ChatClientRequest(new Prompt("question"), Map.of());
+        return advisor.adviseCall(request, chain);
     }
 
-    private static String firstText(AdvisedResponse response) {
-        return response.response().getResult().getOutput().getText();
+    private static String firstText(ChatClientResponse response) {
+        return response.chatResponse().getResult().getOutput().getText();
     }
 }

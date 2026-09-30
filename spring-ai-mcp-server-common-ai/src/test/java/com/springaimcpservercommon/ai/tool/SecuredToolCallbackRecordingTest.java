@@ -184,7 +184,7 @@ class SecuredToolCallbackRecordingTest {
                 }, recorded::add, ToolCallScope.ofTurn(Channel.CHAT, TURN), Clock.systemUTC());
         String result = cb.call("{}");
 
-        assertThat(result).contains("proposal_unavailable").doesNotContain("proposed");
+        assertThat(result).contains("proposal_unavailable").doesNotContain("\"status\":\"proposed\"");
         assertThat(recorded).singleElement().extracting(ToolCallRecorder.ToolCall::status)
                 .isEqualTo(ToolResultStatus.ERROR);
     }

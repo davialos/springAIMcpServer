@@ -13,7 +13,8 @@ import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.core.principal.SubjectType;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 
 import java.util.List;
 import java.util.Map;
@@ -60,7 +61,7 @@ class DefaultAgentInvokerBudgetTest {
                 recorder,
                 exchanges::add,
                 observations,
-                new InMemoryChatMemory(),
+                MessageWindowChatMemory.builder().chatMemoryRepository(new InMemoryChatMemoryRepository()).build(),
                 null);
     }
 

@@ -86,6 +86,7 @@ class DaiWiringTest {
                         DaiPersistenceAutoConfiguration.class,
                         DaiSecurityAutoConfiguration.class,
                         DaiAiAutoConfiguration.class,
+                        DaiMcpAutoConfiguration.class,
                         DaiWebMvcAutoConfiguration.class,
                         DaiAdminAutoConfiguration.class))
                 .withInitializer(context -> context.addBeanFactoryPostProcessor(beanFactory -> {

@@ -63,8 +63,10 @@ class CanonicalJsonTest {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("a", List.of(1, 2));
         Object copy = CanonicalJson.immutableCopy(map);
+        @SuppressWarnings("unchecked")
+        Map<Object, Object> copyMap = (Map<Object, Object>) copy;
         assertThat(copy).isInstanceOf(Map.class);
-        assertThatThrownBy(() -> ((Map<?, ?>) copy).put("x", "y")).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> copyMap.put("x", "y")).isInstanceOf(UnsupportedOperationException.class);
 
         Map<String, Object> deep = new LinkedHashMap<>();
         Map<String, Object> cursor = deep;

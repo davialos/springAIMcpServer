@@ -152,7 +152,7 @@ public final class GenericDynamicHandler implements Controller {
         int checkAndRecord(DaiPrincipal principal, UUID endpointId);
     }
 
-    private final DynamicEndpointRegistrar registrar;
+    private final EndpointLookup registrar;
     private final DaiPrincipalResolver principalResolver;
     private final AuthorizationEngine authorizationEngine;
     private final BackingExecutor backingExecutor;
@@ -171,7 +171,7 @@ public final class GenericDynamicHandler implements Controller {
      * @param rateLimiter          enforces per-principal rate limits
      * @param observationRegistry  Micrometer registry for metrics
      */
-    public GenericDynamicHandler(DynamicEndpointRegistrar registrar,
+    public GenericDynamicHandler(EndpointLookup registrar,
                                   DaiPrincipalResolver principalResolver,
                                   AuthorizationEngine authorizationEngine,
                                   BackingExecutor backingExecutor,

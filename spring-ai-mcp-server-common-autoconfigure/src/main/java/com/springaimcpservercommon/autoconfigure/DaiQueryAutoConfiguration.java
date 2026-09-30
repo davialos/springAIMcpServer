@@ -24,7 +24,10 @@ import java.util.UUID;
  * the host's {@link EntityManagerFactory} bean is available. The query executor runs against the host's
  * JPA persistence unit, never the framework's isolated one.
  */
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+// After Boot's JPA auto-configuration: the query engine runs over the host's EntityManagerFactory
+// (by name: spring-boot-hibernate is optional).
+@AutoConfiguration(after = DaiCoreAutoConfiguration.class,
+        afterName = "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration")
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass(CriteriaQueryExecutor.class)

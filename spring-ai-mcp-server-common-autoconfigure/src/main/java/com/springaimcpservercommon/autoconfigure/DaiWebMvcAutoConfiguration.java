@@ -12,6 +12,7 @@ import com.springaimcpservercommon.security.principal.AuthorityMapper;
 import com.springaimcpservercommon.webmvc.endpoint.AgentChatController;
 import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
 import com.springaimcpservercommon.webmvc.endpoint.DynamicEndpointRegistrar;
+import com.springaimcpservercommon.webmvc.endpoint.EndpointLookup;
 import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.webmvc.endpoint.InMemoryTurnEventBuffer;
 import com.springaimcpservercommon.webmvc.endpoint.TurnEventBuffer;
@@ -143,14 +144,16 @@ public class DaiWebMvcAutoConfiguration {
                         AuthorizationEngine.class,
                         GenericDynamicHandler.BackingExecutor.class})
     public GenericDynamicHandler genericDynamicHandler(
-            DynamicEndpointRegistrar registrar,
+            ObjectProvider<DynamicEndpointRegistrar> registrar,
             GenericDynamicHandler.DaiPrincipalResolver principalResolver,
             AuthorizationEngine authorizationEngine,
             GenericDynamicHandler.BackingExecutor backingExecutor,
             GenericDynamicHandler.KillSwitchChecker killSwitchChecker,
             GenericDynamicHandler.RateLimiter rateLimiter,
             ObjectProvider<ObservationRegistry> observationRegistry) {
-        return new GenericDynamicHandler(registrar, principalResolver, authorizationEngine,
+        // resolved per request: the registrar itself needs this handler to register routes
+        EndpointLookup lookup = (path, method) -> registrar.getObject().lookup(path, method);
+        return new GenericDynamicHandler(lookup, principalResolver, authorizationEngine,
                 backingExecutor, killSwitchChecker, rateLimiter,
                 observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
@@ -408,7 +411,7 @@ public class DaiWebMvcAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnBean(RequestMappingHandlerMapping.class)
+    @ConditionalOnBean({RequestMappingHandlerMapping.class, GenericDynamicHandler.class})
     public DynamicEndpointRegistrar dynamicEndpointRegistrar(RequestMappingHandlerMapping handlerMapping,
                                                               GenericDynamicHandler handler) throws NoSuchMethodException {
         Method handleMethod = GenericDynamicHandler.class.getMethod(

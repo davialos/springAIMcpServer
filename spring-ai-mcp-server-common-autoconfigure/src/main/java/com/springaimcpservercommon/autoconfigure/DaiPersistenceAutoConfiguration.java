@@ -102,7 +102,10 @@ import java.util.stream.Collectors;
  * <p>These resolver beans supersede the no-op defaults registered by {@link DaiWebMvcAutoConfiguration}
  * (via {@code @ConditionalOnMissingBean}), because this configuration runs before it.
  */
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class)
+// After Boot's DataSource auto-configuration: the persistence unit needs the host's DataSource bean, and
+// @ConditionalOnBean only sees beans defined by earlier configurations (by name: spring-boot-jdbc is optional).
+@AutoConfiguration(after = DaiCoreAutoConfiguration.class,
+        afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({ConfigStore.class, DaiPersistenceUnit.class})

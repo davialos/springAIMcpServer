@@ -517,22 +517,26 @@ class HostApplicationIT {
                 .doesNotContain("very long remark continues")
                 .doesNotContain("Fraud notes").doesNotContain("chargeback").doesNotContain("private gossip");
 
-        // a query that selects the sensitive column can be authored, but its data never reaches the model
-        String leaky = publish(ws, "QUERY", "leaky", JSON.writeValueAsString(Map.of(
-                "root", "entity:com.example.host.Order",
-                "select", List.of(Map.of("path", "id"), Map.of("path", "cardNumber")),
-                "orderBy", List.of(Map.of("path", "id")))));
-        String leakyTool = publish(ws, "TOOL_BINDING", "leaky-tool", JSON.writeValueAsString(Map.of(
-                "toolName", "find_my_orders", "source", Map.of("kind", "query", "ref", leaky))));
-        String leakyAgent = publish(ws, "AGENT", "orders-leaky", JSON.writeValueAsString(Map.of(
-                "displayName", "Orders", "systemPrompt", "You help with orders.",
-                "model", Map.of("providerId", "openai", "modelName", "scripted"),
-                "tools", List.of(Map.of("bindingId", leakyTool, "revision", 1)))));
-        grant(ws, "alice", "agent:invoke", leakyAgent);
-        grant(ws, "alice", "tool:invoke", leakyTool);
-        var leaked = call("POST", "/dynamic-ai/api/agents/orders-leaky/chat", "alice",
-                Map.of("message", "myorders"), 200);
-        assertThat(leaked.toString()).doesNotContain("4111").doesNotContain("5500");
+        // what an author cannot do is caught when the spec is saved, with a reason they can act on (OQ-41):
+        // a query over the sensitive column, over a column that was never exposed, an agent naming a missing
+        // knowledge pack, a tool binding without a source
+        String resources = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/resources";
+        var leaky = call("POST", resources, "admin", Map.of("kind", "QUERY", "slug", "leaky", "specJson",
+                JSON.writeValueAsString(Map.of("root", "entity:com.example.host.Order",
+                        "select", List.of(Map.of("path", "id"), Map.of("path", "cardNumber")),
+                        "orderBy", List.of(Map.of("path", "id"))))), 400);
+        assertThat(leaky.toString()).contains("sensitive").contains("cardNumber");
+        var unknown = call("POST", resources, "admin", Map.of("kind", "QUERY", "slug", "unknown-col", "specJson",
+                JSON.writeValueAsString(Map.of("root", "entity:com.example.host.Order",
+                        "select", List.of(Map.of("path", "doesNotExist"))))), 400);
+        assertThat(unknown.toString()).contains("doesNotExist");
+        var noPack = call("POST", resources, "admin", Map.of("kind", "AGENT", "slug", "bad-agent", "specJson",
+                JSON.writeValueAsString(Map.of("displayName", "x", "systemPrompt", "y",
+                        "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                        "knowledge", List.of(Map.of("pack", "no-such-pack"))))), 400);
+        assertThat(noPack.toString()).contains("no-such-pack").contains("handbook");
+        call("POST", resources, "admin", Map.of("kind", "TOOL_BINDING", "slug", "bad-binding", "specJson",
+                JSON.writeValueAsString(Map.of("toolName", "x_tool"))), 400);
     }
 
     private static org.springframework.mock.web.MockHttpServletResponse mcpWithKey(String apiKey, String workspace,

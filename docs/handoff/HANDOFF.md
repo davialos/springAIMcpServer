@@ -52,7 +52,7 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
 2. (MCP end to end is done, with an MCP client admin API.) MCP gaps in OQ-49: stateful sessions and
    `tools/list_changed`, resources/prompts, `insufficient_scope` step-up, per-client rate limits, SDK transport.
 3. (Break-glass production override is bound and audited, OQ-53.)
-4. **Per-kind spec validation at authoring time (OQ-41)** and **budget reservation (OQ-40).**
+4. Per-kind spec validation at save time is done for QUERY/AGENT/TOOL_BINDING (OQ-41: remaining kinds, `catalogHash` stamping, drift re-validation). **Budget reservation (OQ-40)** is open.
 5. **PII redaction of transcripts (OQ-44)** — only credentials are redacted today; matters more now that transcripts
    are retained for audit.
 

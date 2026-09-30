@@ -153,6 +153,7 @@ public final class ResourceAdminController {
     private final int requiredApprovals;
 
     private final Runnable generationPublished;
+    private final ResourceSpecChecker specChecker;
 
     ResourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api, int requiredApprovals) {
         this(configStore, audit, api, requiredApprovals, () -> { });
@@ -164,6 +165,15 @@ public final class ResourceAdminController {
      */
     ResourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api, int requiredApprovals,
                             Runnable generationPublished) {
+        this(configStore, audit, api, requiredApprovals, generationPublished, ResourceSpecChecker.NONE);
+    }
+
+    /**
+     * @param specChecker checks the content of a spec when it is saved (OQ-41)
+     */
+    ResourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api, int requiredApprovals,
+                            Runnable generationPublished, ResourceSpecChecker specChecker) {
+        this.specChecker = Objects.requireNonNull(specChecker, "specChecker");
         this.generationPublished = Objects.requireNonNull(generationPublished, "generationPublished");
         this.configStore = Objects.requireNonNull(configStore, "configStore");
         this.audit = Objects.requireNonNull(audit, "audit");
@@ -316,6 +326,9 @@ public final class ResourceAdminController {
             errors.add(new FieldViolation("slug", "must match [a-z][a-z0-9-]{1,62}[a-z0-9]"));
         }
         String spec = ResourceSpecs.validate(body.specJson(), "specJson", errors);
+        if (spec != null && kind != null) {
+            checkSpec(kind, spec, errors);
+        }
         String summary = AdminApi.text(errors, "changeSummary", body.changeSummary(), false, MAX_SUMMARY);
         if (!errors.isEmpty() || kind == null) {
             return AdminApi.validation(request, errors);
@@ -355,6 +368,10 @@ public final class ResourceAdminController {
         }
         List<FieldViolation> errors = new ArrayList<>();
         String spec = ResourceSpecs.validate(body.specJson(), "specJson", errors);
+        ResourceView owner = configStore.findResource(resourceId).orElse(null);
+        if (spec != null && owner != null) {
+            checkSpec(owner.kind(), spec, errors);
+        }
         String summary = AdminApi.text(errors, "changeSummary", body.changeSummary(), false, MAX_SUMMARY);
         if (!errors.isEmpty()) {
             return AdminApi.validation(request, errors);
@@ -401,6 +418,10 @@ public final class ResourceAdminController {
             }
             List<FieldViolation> errors = new ArrayList<>();
             String spec = ResourceSpecs.validate(body.specJson(), "specJson", errors);
+            ResourceView owner = configStore.findResource(resourceId).orElse(null);
+            if (spec != null && owner != null) {
+                checkSpec(owner.kind(), spec, errors);
+            }
             String summary = AdminApi.text(errors, "changeSummary", body.changeSummary(), false, MAX_SUMMARY);
             if (!errors.isEmpty()) {
                 return AdminApi.validation(request, errors);
@@ -792,5 +813,12 @@ public final class ResourceAdminController {
 
     private static ResponseEntity<RevisionView> etag(HttpStatus status, RevisionView revision) {
         return ResponseEntity.status(status).eTag("\"" + revision.rowVersion() + "\"").body(revision);
+    }
+
+    /** Content checks of a saved spec: each violation becomes a field error the author can act on (OQ-41). */
+    private void checkSpec(ResourceKind kind, String spec, List<FieldViolation> errors) {
+        for (String violation : specChecker.violations(kind, spec)) {
+            errors.add(new FieldViolation("specJson", violation));
+        }
     }
 }

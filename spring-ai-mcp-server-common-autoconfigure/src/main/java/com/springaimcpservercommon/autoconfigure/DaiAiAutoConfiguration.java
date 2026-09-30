@@ -25,7 +25,8 @@ import com.springaimcpservercommon.core.catalog.MetadataRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -281,7 +282,9 @@ public class DaiAiAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(ChatMemory.class)
     public ChatMemory chatMemory() {
-        return new InMemoryChatMemory();
+        return MessageWindowChatMemory.builder()
+                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .build();
     }
 
     /**

@@ -393,7 +393,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         }
         var u = response.getMetadata().getUsage();
         return new long[] {u.getPromptTokens() != null ? u.getPromptTokens() : 0L,
-                u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L};
+                u.getCompletionTokens() != null ? u.getCompletionTokens() : 0L};
     }
 
     // ─── ChatClient assembly ──────────────────────────────────────────────────
@@ -453,7 +453,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
             var u = response.getMetadata().getUsage();
             if (u.getPromptTokens() != null) promptTokens = u.getPromptTokens();
-            if (u.getGenerationTokens() != null) completionTokens = u.getGenerationTokens();
+            if (u.getCompletionTokens() != null) completionTokens = u.getCompletionTokens();
         }
         return new SyncChatResult(conversationId, turnId, text,
                 List.of(), new UsageRecord(promptTokens, completionTokens));
@@ -473,7 +473,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         }
         var u = last.getMetadata().getUsage();
         long prompt = u.getPromptTokens() != null ? u.getPromptTokens() : 0L;
-        long completion = u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L;
+        long completion = u.getCompletionTokens() != null ? u.getCompletionTokens() : 0L;
         if (prompt + completion == 0) {
             return;
         }
@@ -491,7 +491,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
         if (last != null && last.getMetadata() != null && last.getMetadata().getUsage() != null) {
             var u = last.getMetadata().getUsage();
             long prompt = u.getPromptTokens() != null ? u.getPromptTokens() : 0L;
-            long completion = u.getGenerationTokens() != null ? u.getGenerationTokens() : 0L;
+            long completion = u.getCompletionTokens() != null ? u.getCompletionTokens() : 0L;
             events.add(new StreamEvent.UsageEvent(prompt, completion, 0L, agent.model().modelName()));
         }
         events.add(new StreamEvent.TurnEnd("stop", null));

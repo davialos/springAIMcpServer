@@ -42,7 +42,7 @@ public final class ApiKeyFormat {
          * @return {@code dai_<env>_<keyId>}
          */
         public String prefix() {
-            return prefix(env, keyId);
+            return ApiKeyFormat.prefix(env, keyId);
         }
 
         /**

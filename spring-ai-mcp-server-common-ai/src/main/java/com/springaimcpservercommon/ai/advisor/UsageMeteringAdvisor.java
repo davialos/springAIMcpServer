@@ -6,10 +6,10 @@ import io.micrometer.observation.ObservationRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.core.Ordered;
@@ -24,7 +24,7 @@ import java.util.Objects;
  *
  * <p>Responsibilities:
  * <ul>
- *   <li>Reads {@link Usage#getPromptTokens()} / {@link Usage#getGenerationTokens()} from the response.</li>
+ *   <li>Reads {@link Usage#getPromptTokens()} / {@link Usage#getCompletionTokens()} from the response.</li>
  *   <li>Records Micrometer counters under {@code dynamic.ai.agent.tokens} tags:
  *       {@code agent}, {@code workspace}, {@code kind} (prompt|completion|total).</li>
  *   <li>Delegates to a {@link UsageSink} port so the persistence layer can update budget counters.</li>
@@ -33,7 +33,7 @@ import java.util.Objects;
  * <p>Failures in the sink are swallowed after logging — metering must not break the agent turn.
  */
 @NullMarked
-public final class UsageMeteringAdvisor implements CallAroundAdvisor {
+public final class UsageMeteringAdvisor implements CallAdvisor {
 
     private static final Logger LOG = LoggerFactory.getLogger(UsageMeteringAdvisor.class);
     private static final int ORDER = Ordered.LOWEST_PRECEDENCE;
@@ -79,15 +79,20 @@ public final class UsageMeteringAdvisor implements CallAroundAdvisor {
     }
 
     @Override
+    public String getName() {
+        return "daiUsageMetering";
+    }
+
+    @Override
     public int getOrder() {
         return ORDER;
     }
 
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request, CallAroundAdvisorChain chain) {
-        AdvisedResponse response = chain.nextAroundCall(request);
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        ChatClientResponse response = chain.nextCall(request);
         try {
-            recordUsage(response.response());
+            recordUsage(response.chatResponse());
         } catch (Exception e) {
             LOG.warn("Usage metering failed for agent {} principal {}; usage not recorded",
                     agent.slug(), principal.principalId(), e);
@@ -103,7 +108,7 @@ public final class UsageMeteringAdvisor implements CallAroundAdvisor {
         if (usage == null) return;
 
         long prompt = usage.getPromptTokens() != null ? usage.getPromptTokens() : 0L;
-        long completion = usage.getGenerationTokens() != null ? usage.getGenerationTokens() : 0L;
+        long completion = usage.getCompletionTokens() != null ? usage.getCompletionTokens() : 0L;
         long total = prompt + completion;
 
         if (total == 0) return;

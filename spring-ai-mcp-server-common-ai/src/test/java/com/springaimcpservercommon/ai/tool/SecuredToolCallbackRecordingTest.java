@@ -11,7 +11,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.tool.context.ToolContext;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.security.authentication.TestingAuthenticationToken;

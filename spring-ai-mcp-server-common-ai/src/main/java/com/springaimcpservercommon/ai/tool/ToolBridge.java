@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.ai.tool;
 
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
+import com.springaimcpservercommon.ai.agent.ToolBindingRef;
 import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.core.catalog.EffectiveCatalog;
 import com.springaimcpservercommon.core.catalog.EffectiveOperation;

@@ -5,14 +5,16 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
-import org.springframework.ai.chat.client.advisor.api.StreamAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.StreamAroundAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -45,7 +47,7 @@ import java.util.Objects;
  * {@link com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker}.
  */
 @NullMarked
-public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+public final class SummaryMemoryAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger LOG = LoggerFactory.getLogger(SummaryMemoryAdvisor.class);
 
@@ -76,6 +78,11 @@ public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamArou
     }
 
     @Override
+    public String getName() {
+        return "daiSummaryMemory";
+    }
+
+    @Override
     public int getOrder() {
         return order;
     }
@@ -90,15 +97,15 @@ public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamArou
      * response is returned, so the next turn always has fresh context.
      */
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request, CallAroundAdvisorChain chain) {
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
         String convId = conversationId(request);
         String prevSummary = loadSummary(convId);
 
-        AdvisedRequest augmented = injectSummary(request, prevSummary);
-        AdvisedResponse response = chain.nextAroundCall(augmented);
+        ChatClientRequest augmented = injectSummary(request, prevSummary);
+        ChatClientResponse response = chain.nextCall(augmented);
 
-        String userText = request.userText();
-        String assistantText = extractText(response.response());
+        String userText = userText(request);
+        String assistantText = extractText(response.chatResponse());
         // Run synchronously: ensures the summary is stored before the caller's next turn
         updateSummary(convId, prevSummary, userText, assistantText);
 
@@ -114,17 +121,17 @@ public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamArou
      * summary is updated asynchronously in a virtual thread to avoid blocking token delivery.
      */
     @Override
-    public Flux<AdvisedResponse> aroundStream(AdvisedRequest request, StreamAroundAdvisorChain chain) {
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
         String convId = conversationId(request);
         String prevSummary = loadSummary(convId);
 
-        AdvisedRequest augmented = injectSummary(request, prevSummary);
-        String userText = request.userText();
+        ChatClientRequest augmented = injectSummary(request, prevSummary);
+        String userText = userText(request);
         StringBuilder collectedResponse = new StringBuilder();
 
-        return chain.nextAroundStream(augmented)
+        return chain.nextStream(augmented)
                 .doOnNext(r -> {
-                    String chunk = extractText(r.response());
+                    String chunk = extractText(r.chatResponse());
                     if (!chunk.isEmpty()) collectedResponse.append(chunk);
                 })
                 .doOnComplete(() -> {
@@ -140,22 +147,27 @@ public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamArou
     /** Loads the stored summary for this conversation, or empty string if none exists yet. */
     private String loadSummary(String convId) {
         if (convId.isBlank()) return "";
-        List<org.springframework.ai.chat.messages.Message> messages =
-                chatMemory.get(SUMMARY_KEY_PREFIX + convId, 1);
+        List<Message> messages = chatMemory.get(SUMMARY_KEY_PREFIX + convId);
         if (messages.isEmpty()) return "";
-        String text = messages.get(0).getText();
+        String text = messages.get(messages.size() - 1).getText();
         return text != null ? text : "";
     }
 
-    /** Returns a modified request with the summary prepended to the system prompt. */
-    private static AdvisedRequest injectSummary(AdvisedRequest request, String summary) {
+    /** Returns a modified request with the summary appended to the system prompt. */
+    private static ChatClientRequest injectSummary(ChatClientRequest request, String summary) {
         if (summary.isBlank()) return request;
-        String existing = request.systemText();
-        String newSystem = (existing != null && !existing.isBlank()
-                ? existing + "\n\n"
-                : "")
-                + SUMMARY_HEADER + summary;
-        return request.mutate().systemText(newSystem).build();
+        Prompt prompt = request.prompt().augmentSystemMessage((SystemMessage existing) -> {
+            String current = existing.getText();
+            String newSystem = (current != null && !current.isBlank() ? current + "\n\n" : "")
+                    + SUMMARY_HEADER + summary;
+            return new SystemMessage(newSystem);
+        });
+        return request.mutate().prompt(prompt).build();
+    }
+
+    private static String userText(ChatClientRequest request) {
+        String text = request.prompt().getUserMessage().getText();
+        return text != null ? text : "";
     }
 
     /**
@@ -169,7 +181,7 @@ public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamArou
             if (newSummary != null && !newSummary.isBlank()) {
                 chatMemory.clear(SUMMARY_KEY_PREFIX + convId);
                 chatMemory.add(SUMMARY_KEY_PREFIX + convId,
-                        List.of(new AssistantMessage(newSummary)));
+                        List.<Message>of(new AssistantMessage(newSummary)));
             }
         } catch (Exception e) {
             LOG.warn("Conversation summary update failed for conversation {}; retaining previous summary",
@@ -223,8 +235,8 @@ public final class SummaryMemoryAdvisor implements CallAroundAdvisor, StreamArou
         return text != null ? text : "";
     }
 
-    private static String conversationId(AdvisedRequest request) {
-        Object id = request.adviseContext().get(ChatMemory.CONVERSATION_ID);
+    private static String conversationId(ChatClientRequest request) {
+        Object id = request.context().get(ChatMemory.CONVERSATION_ID);
         return id instanceof String s ? s : "";
     }
 }

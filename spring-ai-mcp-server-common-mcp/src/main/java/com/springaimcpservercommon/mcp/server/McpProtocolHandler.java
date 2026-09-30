@@ -236,7 +236,7 @@ public final class McpProtocolHandler {
         try {
             List<Object> listed = tools.tools(caller, ToolCallScope.ofMcpRequest(requestId)).stream()
                     .sorted(Comparator.comparing(t -> t.getToolDefinition().name()))
-                    .map(McpProtocolHandler::describe)
+                    .<Object>map(McpProtocolHandler::describe)
                     .toList();
             return finish(requestId, received, caller, "tools/list", idText, null, McpRequestRecorder.Status.OK, null,
                     result(id, Map.of("tools", listed)), 200);

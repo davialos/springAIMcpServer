@@ -19,7 +19,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.ai.tool.execution.ToolExecutionException;
-import org.springframework.ai.tool.context.ToolContext;
+import org.springframework.ai.chat.model.ToolContext;
 
 import java.time.Clock;
 import java.time.Instant;

@@ -52,7 +52,7 @@ public final class TtlCache<K, V> {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.entries = new LinkedHashMap<>(Math.min(maxEntries, 1024), 0.75f, true) {
             @Override
-            protected boolean removeEldestEntry(Map.Entry<K, Entry<V>> eldest) {
+            protected boolean removeEldestEntry(Map.Entry<K, TtlCache.Entry<V>> eldest) {
                 return size() > TtlCache.this.maxEntries;
             }
         };

@@ -6,10 +6,10 @@ import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import org.jspecify.annotations.NullMarked;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -39,7 +39,7 @@ import java.util.regex.Pattern;
  * receives a well-formed response (LLD-12 §4: fail the feature, not the host).
  */
 @NullMarked
-public final class InvocationGuardAdvisor implements CallAroundAdvisor {
+public final class InvocationGuardAdvisor implements CallAdvisor {
 
     private static final Logger LOG = LoggerFactory.getLogger(InvocationGuardAdvisor.class);
     private static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 200;
@@ -99,12 +99,17 @@ public final class InvocationGuardAdvisor implements CallAroundAdvisor {
     }
 
     @Override
+    public String getName() {
+        return "daiInvocationGuard";
+    }
+
+    @Override
     public int getOrder() {
         return ORDER;
     }
 
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request, CallAroundAdvisorChain chain) {
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
         String userInput = extractUserInput(request);
 
         // Kill switch: agent disabled at runtime
@@ -155,17 +160,17 @@ public final class InvocationGuardAdvisor implements CallAroundAdvisor {
                     "Usage limit reached. Please contact your administrator.");
         }
 
-        return chain.nextAroundCall(request);
+        return chain.nextCall(request);
     }
 
-    private static String extractUserInput(AdvisedRequest request) {
-        String user = request.userText();
+    private static String extractUserInput(ChatClientRequest request) {
+        String user = request.prompt().getUserMessage().getText();
         return user != null ? user : "";
     }
 
-    private static AdvisedResponse blocked(AdvisedRequest request, String code, String message) {
+    private static ChatClientResponse blocked(ChatClientRequest request, String code, String message) {
         AssistantMessage msg = new AssistantMessage("[" + code + "] " + message);
         ChatResponse response = new ChatResponse(List.of(new Generation(msg)));
-        return new AdvisedResponse(response, request.adviseContext());
+        return new ChatClientResponse(response, request.context());
     }
 }

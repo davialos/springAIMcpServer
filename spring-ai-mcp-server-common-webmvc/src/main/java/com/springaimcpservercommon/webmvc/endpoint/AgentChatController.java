@@ -558,12 +558,12 @@ public class AgentChatController {
         } catch (Exception e) {
             return PreCheckResult.problem(
                     ProblemDetailFactory.build(ProblemCode.UNAUTHENTICATED,
-                            "Authentication required", null, httpRequest.getRequestURI()), 1);
+                            "Authentication required", null, httpRequest.getRequestURI()), 1);
         }
         if (auth == null) {
             return PreCheckResult.problem(
                     ProblemDetailFactory.build(ProblemCode.UNAUTHENTICATED,
-                            "Authentication required", null, httpRequest.getRequestURI()), 1);
+                            "Authentication required", null, httpRequest.getRequestURI()), 1);
         }
 
         // 4. Authorization
@@ -650,15 +650,15 @@ public class AgentChatController {
             return new PreCheckResult(null, null, null, json, status);
         }
 
-        AgentDefinition agent() {
+        public AgentDefinition agent() {
             return Objects.requireNonNull(agent, "agent");
         }
 
-        DaiPrincipal principal() {
+        public DaiPrincipal principal() {
             return Objects.requireNonNull(principal, "principal");
         }
 
-        Authentication authentication() {
+        public Authentication authentication() {
             return Objects.requireNonNull(authentication, "authentication");
         }
     }

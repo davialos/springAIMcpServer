@@ -1,16 +1,16 @@
 package com.springaimcpservercommon.ai.advisor;
 
 import com.springaimcpservercommon.ai.agent.OutputSpec;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -39,13 +39,13 @@ import java.util.Objects;
  * so the agent runtime degrades gracefully per LLD-12 §4.
  */
 @NullMarked
-public final class StructuredOutputValidationAdvisor implements CallAroundAdvisor {
+public final class StructuredOutputValidationAdvisor implements CallAdvisor {
 
     private static final Logger LOG = LoggerFactory.getLogger(StructuredOutputValidationAdvisor.class);
     private static final int ORDER = Ordered.LOWEST_PRECEDENCE - 100;
 
     // Jackson ObjectMapper is instantiated locally — never registered as a bean (ADR-0019).
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
     private final OutputSpec outputSpec;
     private final @Nullable JsonSchemaValidationPort schemaValidator;
@@ -79,28 +79,33 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
     }
 
     @Override
+    public String getName() {
+        return "daiStructuredOutputValidation";
+    }
+
+    @Override
     public int getOrder() {
         return ORDER;
     }
 
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request, CallAroundAdvisorChain chain) {
-        AdvisedResponse response = chain.nextAroundCall(request);
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        ChatClientResponse response = chain.nextCall(request);
         return validate(response);
     }
 
-    private AdvisedResponse validate(AdvisedResponse response) {
-        if (response.response() == null) {
+    private ChatClientResponse validate(ChatClientResponse response) {
+        if (response.chatResponse() == null) {
             return response;
         }
-        var result = response.response().getResult();
+        var result = response.chatResponse().getResult();
         if (result == null) {
             return response;
         }
         String text = result.getOutput().getText();
         if (text == null || text.isBlank()) {
             LOG.warn("Agent returned blank output in JSON_SCHEMA mode");
-            return blocked(response.adviseContext(), "output_empty",
+            return blocked(response.context(), "output_empty",
                     "The agent returned an empty response. Please try again.");
         }
 
@@ -110,12 +115,12 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
             // Only JSON objects and arrays are valid structured outputs
             if (!node.isObject() && !node.isArray()) {
                 LOG.warn("Agent output is not a JSON object or array in JSON_SCHEMA mode");
-                return blocked(response.adviseContext(), "output_not_json_object",
+                return blocked(response.context(), "output_not_json_object",
                         "The agent response must be a JSON object or array.");
             }
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             LOG.warn("Agent output is not valid JSON in JSON_SCHEMA mode: {}", e.getMessage());
-            return blocked(response.adviseContext(), "output_invalid_json",
+            return blocked(response.context(), "output_invalid_json",
                     "The agent response is not valid JSON. Please try again.");
         }
 
@@ -127,7 +132,7 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
                     List<String> errors = schemaValidator.validate(schema, text);
                     if (!errors.isEmpty()) {
                         LOG.warn("Agent output failed JSON Schema validation: {}", errors);
-                        return blocked(response.adviseContext(), "output_schema_violation",
+                        return blocked(response.context(), "output_schema_violation",
                                 "The agent response does not conform to the expected schema.");
                     }
                 } catch (Exception e) {
@@ -143,9 +148,9 @@ public final class StructuredOutputValidationAdvisor implements CallAroundAdviso
         return response;
     }
 
-    private static AdvisedResponse blocked(Map<String, Object> adviseContext, String code, String message) {
+    private static ChatClientResponse blocked(Map<String, Object> adviseContext, String code, String message) {
         AssistantMessage msg = new AssistantMessage("[" + code + "] " + message);
         ChatResponse chatResponse = new ChatResponse(List.of(new Generation(msg)));
-        return new AdvisedResponse(chatResponse, adviseContext);
+        return new ChatClientResponse(chatResponse, adviseContext);
     }
 }

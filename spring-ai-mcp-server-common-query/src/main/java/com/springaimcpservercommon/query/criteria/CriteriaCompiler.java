@@ -304,19 +304,19 @@ public final class CriteriaCompiler {
         return switch (op) {
             case EQ -> cb.equal(attrPath, resolvedValue);
             case NE -> cb.notEqual(attrPath, resolvedValue);
-            case LT -> cb.lessThan((Expression<Comparable>) attrPath, (Comparable) resolvedValue);
-            case LE -> cb.lessThanOrEqualTo((Expression<Comparable>) attrPath, (Comparable) resolvedValue);
-            case GT -> cb.greaterThan((Expression<Comparable>) attrPath, (Comparable) resolvedValue);
-            case GE -> cb.greaterThanOrEqualTo((Expression<Comparable>) attrPath, (Comparable) resolvedValue);
+            case LT -> cb.lessThan((Expression<Comparable>) (Expression<?>) attrPath, (Comparable) resolvedValue);
+            case LE -> cb.lessThanOrEqualTo((Expression<Comparable>) (Expression<?>) attrPath, (Comparable) resolvedValue);
+            case GT -> cb.greaterThan((Expression<Comparable>) (Expression<?>) attrPath, (Comparable) resolvedValue);
+            case GE -> cb.greaterThanOrEqualTo((Expression<Comparable>) (Expression<?>) attrPath, (Comparable) resolvedValue);
             case IN -> attrPath.in(asList(resolvedValue));
             case NOT_IN -> cb.not(attrPath.in(asList(resolvedValue)));
-            case LIKE_PREFIX -> cb.like((Expression<String>) attrPath, escapeLike(resolvedValue.toString()) + "%");
+            case LIKE_PREFIX -> cb.like((Expression<String>) (Expression<?>) attrPath, escapeLike(resolvedValue.toString()) + "%");
             case CONTAINS_CI -> cb.like(
-                    cb.lower((Expression<String>) attrPath),
+                    cb.lower((Expression<String>) (Expression<?>) attrPath),
                     "%" + escapeLike(resolvedValue.toString().toLowerCase(java.util.Locale.ROOT)) + "%");
             case BETWEEN -> {
                 List<?> range = asList(resolvedValue);
-                yield cb.between((Expression<Comparable>) attrPath,
+                yield cb.between((Expression<Comparable>) (Expression<?>) attrPath,
                         (Comparable) range.get(0), (Comparable) range.get(1));
             }
             case IS_NULL, NOT_NULL -> throw new IllegalStateException("unreachable");
@@ -378,8 +378,7 @@ public final class CriteriaCompiler {
             return joins.computeIfAbsent(key, k -> {
                 Join<?, ?> j = from.join(relation, type);
                 try {
-                    jakarta.persistence.metamodel.Attribute<?, ?> attr =
-                            from.getModel().getAttribute(relation);
+                    jakarta.persistence.metamodel.Attribute<?, ?> attr = j.getAttribute();
                     if (attr.isCollection()) hasToMany = true;
                 } catch (IllegalArgumentException ignored) {}
                 return j;

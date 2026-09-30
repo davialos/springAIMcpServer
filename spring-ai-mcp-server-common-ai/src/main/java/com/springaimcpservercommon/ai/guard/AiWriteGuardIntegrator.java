@@ -27,9 +27,10 @@ public final class AiWriteGuardIntegrator
         implements Integrator, PreInsertEventListener, PreUpdateEventListener, PreDeleteEventListener {
 
     @Override
-    public void integrate(org.hibernate.boot.Metadata metadata, SessionFactoryImplementor sessionFactory,
-                           SessionFactoryServiceRegistry serviceRegistry) {
-        EventListenerRegistry registry = serviceRegistry.requireService(EventListenerRegistry.class);
+    public void integrate(org.hibernate.boot.Metadata metadata, org.hibernate.boot.spi.BootstrapContext bootstrapContext,
+                           SessionFactoryImplementor sessionFactory) {
+        EventListenerRegistry registry = sessionFactory.getServiceRegistry()
+                .requireService(EventListenerRegistry.class);
         registry.appendListeners(EventType.PRE_INSERT, this);
         registry.appendListeners(EventType.PRE_UPDATE, this);
         registry.appendListeners(EventType.PRE_DELETE, this);

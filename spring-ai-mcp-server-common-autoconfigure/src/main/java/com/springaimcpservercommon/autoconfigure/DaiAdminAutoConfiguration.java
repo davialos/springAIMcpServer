@@ -325,14 +325,37 @@ public class DaiAdminAutoConfiguration {
      * @param store telemetry store
      * @param audit audit recorder
      * @param api   admin gate
+     * @param props framework properties (erase mode and audit retention)
      * @return the controller
      */
     @Bean
     @ConditionalOnMissingBean(ConversationController.class)
     @ConditionalOnBean({TelemetryStore.class, AdminAudit.class, AdminApi.class})
     public ConversationController conversationController(TelemetryStore store, AdminAudit audit, AdminApi api,
+            DaiProperties props,
             org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.persistence.memory.ChatMemoryStore> memory) {
-        return new ConversationController(store, audit, api, memory.getIfAvailable());
+        DaiProperties.Conversations c = props.conversations();
+        return new ConversationController(store, audit, api, memory.getIfAvailable(),
+                c.eraseMode() == DaiProperties.Conversations.EraseMode.HARD ? null : c.auditRetention());
+    }
+
+    /**
+     * Auditor access to a workspace's conversations, including erased ones kept for audit (LLD-06 §7).
+     *
+     * @param store  telemetry store
+     * @param audit  audit recorder
+     * @param api    admin gate
+     * @param memory optional chat memory store (purge also forgets what the model remembers)
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationAuditController.class)
+    @ConditionalOnBean({TelemetryStore.class, AdminAudit.class, AdminApi.class})
+    public ConversationAuditController conversationAuditController(TelemetryStore store, AdminAudit audit,
+            AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.persistence.memory.ChatMemoryStore> memory) {
+        return new ConversationAuditController(store, audit, api,
+                new ConversationController(store, audit, api, memory.getIfAvailable()));
     }
 
     /**

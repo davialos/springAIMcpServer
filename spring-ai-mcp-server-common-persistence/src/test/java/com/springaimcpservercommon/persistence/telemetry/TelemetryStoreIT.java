@@ -218,6 +218,46 @@ class TelemetryStoreIT {
     }
 
     @Test
+    void anEraseKeptForAuditHidesTheConversationButKeepsItsMessagesUntilTheHoldEnds() {
+        String key = Sha256.of("audit-" + UUID.randomUUID());
+        Conversation conversation = telemetry.openConversation(new NewConversation(key, workspace, null, principal,
+                Channel.CHAT, "Refund question", Duration.ofDays(30)));
+        telemetry.appendMessage(conversation.getId(), new NewMessage(MessageRole.USER, "refund?", false, null, null, 1));
+
+        assertThat(telemetry.eraseConversationKeepingForAudit(conversation.getId(), Duration.ofDays(90))).isTrue();
+        assertThat(telemetry.eraseConversationKeepingForAudit(conversation.getId(), Duration.ofDays(90))).isFalse();
+
+        Conversation held = telemetry.findConversation(key).orElseThrow();
+        assertThat(held.getStatus()).isEqualTo(ConversationStatus.ERASED);
+        assertThat(held.getErasedAt()).isNotNull();
+        assertThat(held.getAuditHoldUntil()).isEqualTo(held.getRetentionUntil()).isAfter(held.getErasedAt());
+        assertThat(held.getTitle()).isEqualTo("Refund question");
+        assertThat(telemetry.messages(conversation.getId(), 10)).extracting(ConversationMessage::getContent)
+                .containsExactly("refund?");
+        assertThatThrownBy(() -> telemetry.appendMessage(conversation.getId(),
+                new NewMessage(MessageRole.USER, "again", false, null, null, null)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(telemetry.conversationsOfWorkspace(workspace, ConversationStatus.ERASED, principal,
+                PageRequest.first(500)).items()).extracting(Conversation::getId).contains(conversation.getId());
+
+        assertThat(telemetry.purgeConversation(conversation.getId())).isTrue();
+        assertThat(telemetry.findConversation(key)).isEmpty();
+        assertThat(telemetry.messages(conversation.getId(), 10)).isEmpty();
+        assertThat(telemetry.purgeConversation(conversation.getId())).isFalse();
+    }
+
+    @Test
+    void theDatabaseRefusesAnAuditHoldOnAConversationThatIsNotErased() {
+        Conversation conversation = telemetry.openConversation(new NewConversation(
+                Sha256.of("hold-" + UUID.randomUUID()), workspace, null, principal, Channel.CHAT, null,
+                Duration.ofDays(1)));
+        assertThatThrownBy(() -> PostgresTestSupport.jdbc().update("UPDATE " + unit.schema()
+                + ".dai_conversation SET audit_hold_until = now() + interval '1 day' WHERE id = ?",
+                conversation.getId()))
+                .hasStackTraceContaining("ck_conversation_audit_hold");
+    }
+
+    @Test
     void concurrentAppendsKeepSequenceContiguous() throws Exception {
         Conversation conversation = telemetry.openConversation(new NewConversation(
                 Sha256.of("conc-" + UUID.randomUUID()), workspace, null, principal, Channel.CHAT, null, Duration.ofDays(1)));

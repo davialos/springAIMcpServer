@@ -676,7 +676,27 @@ dynamic.ai.agent.conversations:
   retention: 30d         # kept this long after the last activity; 1ms..3660d
   max-stored-chars: 100000
   purge-interval: 15m    # expired conversations are deleted (runs even while enabled=false)
+  erase-mode: RETAIN_FOR_AUDIT   # default; HARD deletes the transcript when the user erases
+  audit-retention: 90d   # how long an erased conversation is kept for audit (1ms..3660d)
 ```
+
+**Erase keeps the transcript for audit by default.** When a user erases a conversation it disappears from their
+history (the title is hidden too), the model's memory of it is deleted, and nothing is written to it again. With
+`RETAIN_FOR_AUDIT` the redacted transcript is kept for `audit-retention` and then purged by the same job as expired
+conversations; with `HARD` it is deleted at once. The audit trail records the erase and its mode either way.
+
+Auditors see the workspace's conversations, including erased ones still on hold, at
+`/dynamic-ai/admin/api/v1/workspaces/{workspaceId}/conversations`:
+
+| Call | Permission | What it does |
+|---|---|---|
+| `GET …/conversations?status=ERASED&principalId=…` | `AUDIT_READ` | lists conversations with `erasedAt`, `auditHoldUntil`, `retentionUntil` |
+| `GET …/conversations/{id}` | `AUDIT_READ` | the stored (redacted) transcript; every read is itself audited (`CONVERSATION_READ`) |
+| `DELETE …/conversations/{id}?reason=…` | `WORKSPACE_ADMIN` | deletes the conversation, its messages and its model memory now, hold or not (`CONVERSATION_PURGED`) |
+
+> **Privacy.** Under `RETAIN_FOR_AUDIT` a user's erase is not a deletion: the content stays for `audit-retention`.
+> Tell users so in your privacy notice, make sure you have a legal basis for the hold, and handle a data-subject
+> erasure request with the admin `DELETE` above (or run with `erase-mode: HARD`).
 
 Each successful turn stores the user message and the answer, after redaction: a message that contains a
 credential (private key, API or cloud token, JWT, URL with credentials, password assignment) is replaced by a

@@ -2,6 +2,8 @@ package com.springaimcpservercommon.persistence.telemetry;
 
 import com.springaimcpservercommon.persistence.support.Checks;
 import com.springaimcpservercommon.persistence.support.PageRequest;
+import org.jspecify.annotations.Nullable;
+import java.time.Duration;
 import com.springaimcpservercommon.persistence.support.Slice;
 import com.springaimcpservercommon.persistence.support.SqlStates;
 import com.springaimcpservercommon.persistence.support.StoreSupport;
@@ -372,6 +374,76 @@ public final class TelemetryStore {
             deleteMessages(em, conversationId);
             conversation.markErased(now);
             return true;
+        });
+    }
+
+    /**
+     * Erases a conversation for its user but keeps it for audit (LLD-06 §7): the row is marked ERASED, hidden from the
+     * user and never written again, while its messages stay until {@code now + hold}, when the purge job removes it.
+     *
+     * @param conversationId conversation
+     * @param hold           how long to keep it for audit (positive, at most {@link Conversation#MAX_RETENTION})
+     * @return {@code true} if the conversation existed and was not already erased
+     */
+    public boolean eraseConversationKeepingForAudit(UUID conversationId, Duration hold) {
+        if (hold.isNegative() || hold.isZero() || hold.compareTo(Conversation.MAX_RETENTION) > 0) {
+            throw new IllegalArgumentException("hold must be positive and at most "
+                    + Conversation.MAX_RETENTION.toDays() + " days");
+        }
+        Instant now = clock.instant();
+        return db.write(em -> {
+            Conversation conversation = em.find(Conversation.class, conversationId, LockModeType.PESSIMISTIC_WRITE);
+            if (conversation == null || conversation.getStatus() == ConversationStatus.ERASED) {
+                return false;
+            }
+            conversation.markErasedForAudit(now, now.plus(hold));
+            return true;
+        });
+    }
+
+    /**
+     * Deletes a conversation and all its messages now, whatever its state or hold (an administrator acting on a
+     * data-subject erasure request). The row is gone afterwards, so the same conversation id could start afresh.
+     *
+     * @param conversationId conversation
+     * @return {@code true} if it existed
+     */
+    public boolean purgeConversation(UUID conversationId) {
+        return db.write(em -> em.createNativeQuery("DELETE FROM " + db.qualified("dai_conversation")
+                        + " WHERE id = ?1")
+                .setParameter(1, conversationId)
+                .executeUpdate() > 0);
+    }
+
+    /**
+     * Conversations of a workspace for auditors, most recently active first, including closed and erased ones that
+     * are still retained.
+     *
+     * @param workspaceId workspace
+     * @param status      only this status, or {@code null} for all
+     * @param principalId only this user's, or {@code null} for all
+     * @param page        page
+     * @return a page
+     */
+    public Slice<Conversation> conversationsOfWorkspace(UUID workspaceId, @Nullable ConversationStatus status,
+                                                        @Nullable UUID principalId, PageRequest page) {
+        return db.read(em -> {
+            StringBuilder jpql = new StringBuilder("select c from Conversation c where c.workspaceId = :w");
+            if (status != null) {
+                jpql.append(" and c.status = :s");
+            }
+            if (principalId != null) {
+                jpql.append(" and c.principalId = :p");
+            }
+            jpql.append(" order by c.lastActivityAt desc, c.id desc");
+            var query = em.createQuery(jpql.toString(), Conversation.class).setParameter("w", workspaceId);
+            if (status != null) {
+                query.setParameter("s", status);
+            }
+            if (principalId != null) {
+                query.setParameter("p", principalId);
+            }
+            return StoreSupport.slice(query, page);
         });
     }
 

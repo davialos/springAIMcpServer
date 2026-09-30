@@ -161,12 +161,28 @@ public record DaiProperties(
      * @param maxStoredChars   longest stored message; longer ones are cut
      * @param purgeInterval    how often expired conversations are deleted (at least one minute); runs whenever
      *                         the store exists so old transcripts never outlive their retention
+     * @param eraseMode        what a user's erase does: {@code RETAIN_FOR_AUDIT} (default) hides the conversation from
+     *                         the user and the model but keeps its transcript for {@code auditRetention};
+     *                         {@code HARD} deletes the messages at once
+     * @param auditRetention   how long an erased conversation is kept for audit in {@code RETAIN_FOR_AUDIT} mode
+     *                         (positive, at most 3660 days); administrators can purge earlier
      */
     public record Conversations(
             @DefaultValue("false") boolean enabled,
             @DefaultValue("30d") Duration retention,
             @DefaultValue("100000") int maxStoredChars,
-            @DefaultValue("15m") Duration purgeInterval) {
+            @DefaultValue("15m") Duration purgeInterval,
+            @DefaultValue("RETAIN_FOR_AUDIT") EraseMode eraseMode,
+            @DefaultValue("90d") Duration auditRetention) {
+
+        /** What a user's erase does to the stored transcript. */
+        public enum EraseMode {
+            /** Hide from the user and the model; keep the transcript for audit until {@code auditRetention} ends. */
+            RETAIN_FOR_AUDIT,
+            /** Delete the transcript at once. */
+            HARD
+        }
+
         /** Validates the settings. */
         public Conversations {
             if (retention.isNegative() || retention.isZero() || retention.toDays() > 3660) {
@@ -177,6 +193,9 @@ public record DaiProperties(
             }
             if (purgeInterval.compareTo(Duration.ofMinutes(1)) < 0) {
                 throw new IllegalArgumentException("dynamic.ai.agent.conversations.purge-interval must be >= 1m");
+            }
+            if (auditRetention.isNegative() || auditRetention.isZero() || auditRetention.toDays() > 3660) {
+                throw new IllegalArgumentException("dynamic.ai.agent.conversations.audit-retention must be 1ms..3660d");
             }
         }
     }

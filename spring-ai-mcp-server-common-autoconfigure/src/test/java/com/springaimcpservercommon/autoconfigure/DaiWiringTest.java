@@ -42,6 +42,7 @@ class DaiWiringTest {
             KillSwitchAdminController.class,
             ClusterAdminController.class,
             ModelProviderAdminController.class,
+            ConversationAuditController.class,
             DaiControllerRegistrar.class,
             MeAdminController.class,
             ProposalReviewController.class,

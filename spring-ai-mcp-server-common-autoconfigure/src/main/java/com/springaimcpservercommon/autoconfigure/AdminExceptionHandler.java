@@ -34,6 +34,7 @@ import java.util.NoSuchElementException;
         KillSwitchAdminController.class,
         ClusterAdminController.class,
         ModelProviderAdminController.class,
+        ConversationAuditController.class,
         MeAdminController.class,
         ProposalReviewController.class,
         WorkspaceAdminController.class,

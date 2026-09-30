@@ -154,7 +154,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
             ChatResponse response = client.prompt()
                     .user(request.message())
-                    .tools(callbacks.toArray(new ToolCallback[0]))
+                    .toolCallbacks(callbacks)
                     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
                     .call()
                     .chatResponse();
@@ -240,7 +240,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
                 Flux<StreamEvent> content = client.prompt()
                         .user(request.message())
-                        .tools(callbacks.toArray(new ToolCallback[0]))
+                        .toolCallbacks(callbacks)
                         .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
                         .stream()
                         .chatResponse()

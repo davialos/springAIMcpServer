@@ -124,6 +124,23 @@ class StructuredOutputValidationAdvisorTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    // ── tool-calling rounds ───────────────────────────────────────────────────
+
+    @Test
+    void aRoundThatAsksForToolCallsIsNotTheAnswerAndPassesUntouched() {
+        // the advisor sits inside the tool-calling loop, so it sees every model round, not only the last
+        AssistantMessage ask = AssistantMessage.builder().content("").toolCalls(List.of(
+                new AssistantMessage.ToolCall("id-1", "function", "find_orders", "{}"))).build();
+        ChatClientResponse upstream = new ChatClientResponse(new ChatResponse(List.of(new Generation(ask))), Map.of());
+        CallAdvisorChain chain = mock(CallAdvisorChain.class);
+        when(chain.nextCall(any())).thenReturn(upstream);
+
+        var response = advisorWithSchema(SAMPLE_SCHEMA, null)
+                .adviseCall(new ChatClientRequest(new Prompt("q"), Map.of()), chain);
+
+        assertThat(response).isSameAs(upstream);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static StructuredOutputValidationAdvisor advisorWithSchema(

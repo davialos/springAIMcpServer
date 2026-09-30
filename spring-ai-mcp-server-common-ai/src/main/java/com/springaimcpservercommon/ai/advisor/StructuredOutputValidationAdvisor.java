@@ -26,6 +26,9 @@ import java.util.Objects;
  * <p>Order: {@link Ordered#LOWEST_PRECEDENCE} {@code - 100} — after the tool-calling loop completes
  * but before {@link UsageMeteringAdvisor} so that a validation failure is metered as a complete turn.
  *
+ * <p>The advisor sits inside Spring AI's tool-calling loop and therefore sees every model round; rounds that ask
+ * for tool calls are passed through and only the final answer is validated.
+ *
  * <p>Only active when {@link OutputSpec#mode()} is {@link OutputSpec.Mode#JSON_SCHEMA}.
  * The advisor validates two levels:
  * <ol>
@@ -96,6 +99,12 @@ public final class StructuredOutputValidationAdvisor implements CallAdvisor {
 
     private ChatClientResponse validate(ChatClientResponse response) {
         if (response.chatResponse() == null) {
+            return response;
+        }
+        if (response.chatResponse().hasToolCalls()) {
+            // This advisor runs inside the tool-calling loop, so it also sees the rounds in which the model asks for
+            // tools. Those carry no answer (empty text) and must reach the loop untouched; only the final round is
+            // the output to validate.
             return response;
         }
         var result = response.chatResponse().getResult();

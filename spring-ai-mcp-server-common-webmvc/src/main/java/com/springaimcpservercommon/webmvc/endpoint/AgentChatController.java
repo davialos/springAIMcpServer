@@ -481,7 +481,7 @@ public class AgentChatController {
                 com.springaimcpservercommon.annotations.Classification.PUBLIC);
         var authReq = com.springaimcpservercommon.security.authz.AuthorizationRequest.onResource(
                 principal,
-                com.springaimcpservercommon.security.permission.Permission.ENDPOINT_INVOKE,
+                com.springaimcpservercommon.security.permission.Permission.AGENT_INVOKE,
                 resource);
         if (authorizationEngine.decide(authReq) instanceof AuthorizationOutcome.Deny) {
             return ResponseEntity.status(403)
@@ -570,7 +570,7 @@ public class AgentChatController {
         var resource = ResourceRef.of(agent.workspaceId(), agent.id(),
                 com.springaimcpservercommon.annotations.Classification.PUBLIC);
         var authReq = AuthorizationRequest.onResource(principal,
-                com.springaimcpservercommon.security.permission.Permission.ENDPOINT_INVOKE, resource);
+                com.springaimcpservercommon.security.permission.Permission.AGENT_INVOKE, resource);
         var outcome = authorizationEngine.decide(authReq);
         if (outcome instanceof AuthorizationOutcome.Deny) {
             return PreCheckResult.problem(

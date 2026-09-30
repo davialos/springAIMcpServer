@@ -51,6 +51,7 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
    auto-configuration and there is no issuance endpoint, so machine clients need JWTs. Needs an
    `ApiKeyPepperProvider` SPI default, the service bean, an issuance endpoint, and wiring into the security chains
    (`DynamicAiSecurityOptions(apiKeysEnabled=true)`); extend `HostApplicationIT`.
+2. (`HostApplicationIT` now also proves annotated host code end to end: a read tool with `principalAttr`/`range` constraints, a saved query over the host entity that cannot reach sensitive columns, and a PROPOSE tool whose write only runs through the host method after the owner confirms.)
 2. **MCP end to end in `HostApplicationIT`** (endpoint enabled, a published tool binding, `tools/list`, `tools/call`
    under a bearer token and the client-approval rule). MCP gaps in OQ-49: stateful sessions and
    `tools/list_changed`, resources/prompts, `insufficient_scope` step-up, per-client rate limits, SDK transport.

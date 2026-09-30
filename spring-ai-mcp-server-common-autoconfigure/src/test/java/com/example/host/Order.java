@@ -15,6 +15,7 @@ import jakarta.persistence.Table;
 public class Order {
 
     @Id
+    @AiEntityProperty(meaning = "The order number")
     private String id;
 
     @AiEntityProperty(meaning = "The customer who placed the order")

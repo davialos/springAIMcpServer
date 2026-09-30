@@ -61,6 +61,9 @@ class HostApplicationIT {
                     if (text.startsWith("findbig")) {
                         return toolCall("find_orders", "{\"customerId\":\"c-evil\",\"limit\":500}");
                     }
+                    if (text.startsWith("myorders")) {
+                        return toolCall("find_my_orders", "{\"status\":\"OPEN\"}");
+                    }
                     if (text.startsWith("find")) {
                         return toolCall("find_orders", "{\"customerId\":\"c-evil\",\"limit\":3}");
                     }
@@ -460,5 +463,53 @@ class HostApplicationIT {
         // repeating the apply is harmless: the host method does not run twice
         call("POST", "/dynamic-ai/api/proposals/" + id + ":apply", "bob", null, 200);
         assertThat(OrderService.CANCELLATIONS.get()).isEqualTo(before + 1);
+    }
+
+    @Test
+    void aSavedQueryOverTheHostsEntityRunsAsTheCallerAndNeverShowsSensitiveColumns() throws Exception {
+        seedOrders();
+        String ws = workspaceWithTeam("orders-query");
+        String query = publish(ws, "QUERY", "my-orders", JSON.writeValueAsString(Map.of(
+                "root", "entity:com.example.host.Order",
+                "select", List.of(Map.of("path", "id"), Map.of("path", "status")),
+                "where", Map.of("type", "and", "children", List.of(
+                        Map.of("type", "cmp", "path", "customerId", "op", "eq",
+                                "operand", Map.of("kind", "principal", "attr", "customerId")),
+                        Map.of("type", "cmp", "path", "status", "op", "eq",
+                                "operand", Map.of("kind", "param", "name", "status")))),
+                "orderBy", List.of(Map.of("path", "id")),
+                "params", List.of(Map.of("name", "status", "schema", "{\"type\":\"string\"}", "required", true)))));
+        String binding = publish(ws, "TOOL_BINDING", "find-my-orders", JSON.writeValueAsString(Map.of(
+                "toolName", "find_my_orders", "source", Map.of("kind", "query", "ref", query))));
+        String agent = publish(ws, "AGENT", "orders-reader", JSON.writeValueAsString(Map.of(
+                "displayName", "Orders", "systemPrompt", "You help with orders.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "tools", List.of(Map.of("bindingId", binding, "revision", 1)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("alice"), "role", "CONSUMER"), 201);
+        grant(ws, "alice", "agent:invoke", agent);
+        grant(ws, "alice", "tool:invoke", binding);
+
+        var answer = call("POST", "/dynamic-ai/api/agents/orders-reader/chat", "alice",
+                Map.of("message", "myorders"), 200);
+        assertThat(answer.toString()).contains("o1").contains("o2").doesNotContain("o3")
+                .doesNotContain("4111").doesNotContain("cardNumber");
+
+        // a query that selects the sensitive column can be authored, but its data never reaches the model
+        String leaky = publish(ws, "QUERY", "leaky", JSON.writeValueAsString(Map.of(
+                "root", "entity:com.example.host.Order",
+                "select", List.of(Map.of("path", "id"), Map.of("path", "cardNumber")),
+                "orderBy", List.of(Map.of("path", "id")))));
+        String leakyTool = publish(ws, "TOOL_BINDING", "leaky-tool", JSON.writeValueAsString(Map.of(
+                "toolName", "find_my_orders", "source", Map.of("kind", "query", "ref", leaky))));
+        String leakyAgent = publish(ws, "AGENT", "orders-leaky", JSON.writeValueAsString(Map.of(
+                "displayName", "Orders", "systemPrompt", "You help with orders.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "tools", List.of(Map.of("bindingId", leakyTool, "revision", 1)))));
+        grant(ws, "alice", "agent:invoke", leakyAgent);
+        grant(ws, "alice", "tool:invoke", leakyTool);
+        var leaked = call("POST", "/dynamic-ai/api/agents/orders-leaky/chat", "alice",
+                Map.of("message", "myorders"), 200);
+        assertThat(leaked.toString()).doesNotContain("4111").doesNotContain("5500");
     }
 }

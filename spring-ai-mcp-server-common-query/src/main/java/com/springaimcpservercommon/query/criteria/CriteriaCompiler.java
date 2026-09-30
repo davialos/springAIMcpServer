@@ -107,8 +107,13 @@ public final class CriteriaCompiler {
         }
 
         // Append hidden sort-key columns (_ks_N) so the executor can read last-row sort values
+        // A JPA path is one shared node: selecting it again would carry the projection's alias (or be given this
+        // one, leaving two columns with the same alias, which Hibernate rejects), so the hidden column is a
+        // separate expression with the same value.
         for (int idx = 0; idx < sortSpecs.size(); idx++) {
-            selections.add(sortPaths.get(idx).alias("_ks_" + idx));
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Expression<?> hidden = cb.coalesce((Expression) sortPaths.get(idx), (Expression) sortPaths.get(idx));
+            selections.add(hidden.alias("_ks_" + idx));
         }
         cq.multiselect(selections);
 

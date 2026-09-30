@@ -56,6 +56,7 @@ import com.springaimcpservercommon.query.ast.Operator;
 import com.springaimcpservercommon.query.ast.PageSpec;
 import com.springaimcpservercommon.query.ast.Projection;
 import com.springaimcpservercommon.query.ast.QueryDefinition;
+import com.springaimcpservercommon.query.validation.QueryValidationException;
 import com.springaimcpservercommon.query.ast.QueryParam;
 import com.springaimcpservercommon.query.ast.SortSpec;
 import com.springaimcpservercommon.query.execution.QueryBulkheadException;
@@ -104,7 +105,7 @@ import java.util.stream.Collectors;
  */
 // After Boot's DataSource auto-configuration: the persistence unit needs the host's DataSource bean, and
 // @ConditionalOnBean only sees beans defined by earlier configurations (by name: spring-boot-jdbc is optional).
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class,
+@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiQueryAutoConfiguration.class},
         afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -915,6 +916,16 @@ public class DaiPersistenceAutoConfiguration {
                 throw new GenericDynamicHandler.BackingException(
                         ProblemCode.RESOURCE_SUSPENDED, "Query " + queryId + " is not published.");
             }
+            // The executor trusts its query (QueryExecutor contract): enforce the catalog allow-list here, on every
+            // run, against the live catalog, so a stored query can never reach a sensitive, hidden or disabled
+            // attribute or entity, whatever was published (LLD-05 §4). Publish-time validation is OQ-41.
+            try {
+                QUERY_VALIDATOR.validateAtPublish(def, registry.current(), null);
+            } catch (QueryValidationException e) {
+                LOG.warn("Query {} refused: {} violation(s): {}", queryId, e.violations().size(), e.violations());
+                throw new GenericDynamicHandler.BackingException(
+                        ProblemCode.EXECUTION_ERROR, "The query is not allowed by the catalog.");
+            }
             try {
                 QueryResult result = executor.execute(def, principal, bindings,
                         List.of(), registry.current(), 0);
@@ -928,6 +939,9 @@ public class DaiPersistenceAutoConfiguration {
             }
         };
     }
+
+    private static final com.springaimcpservercommon.query.validation.QueryValidator QUERY_VALIDATOR =
+            new com.springaimcpservercommon.query.validation.QueryValidator();
 
     private static String queryResultToJson(QueryResult result) {
         java.util.LinkedHashMap<String, Object> m = new java.util.LinkedHashMap<>();

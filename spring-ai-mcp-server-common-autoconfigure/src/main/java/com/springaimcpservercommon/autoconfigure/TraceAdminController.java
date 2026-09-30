@@ -300,8 +300,9 @@ public final class TraceAdminController {
      *
      * @param traceId the trace id looked up
      * @param turns   matching turns of the workspace, newest first
+     * @param mcpRequests matching MCP requests of the workspace, newest first
      */
-    public record TraceLookupDto(String traceId, List<TurnDto> turns) {}
+    public record TraceLookupDto(String traceId, List<TurnDto> turns, List<McpRequestDto> mcpRequests) {}
 
     private final TelemetryStore store;
     private final AdminApi api;
@@ -480,7 +481,7 @@ public final class TraceAdminController {
     }
 
     /**
-     * Turns of the workspace that carry an OpenTelemetry trace id, to follow a trace seen in an external tracing
+     * Turns and MCP requests of the workspace that carry an OpenTelemetry trace id, to follow a trace seen in an external tracing
      * backend back to the store.
      *
      * @param workspaceId workspace
@@ -488,7 +489,7 @@ public final class TraceAdminController {
      * @param from        inclusive ISO-8601 start; default 7 days before {@code to}
      * @param to          exclusive ISO-8601 end; default now
      * @param request     current request
-     * @return 200 with the matching turns (possibly none)
+     * @return 200 with the matching turns and MCP requests (possibly none)
      */
     @GetMapping("/by-trace-id/{traceId}")
     public ResponseEntity<?> byTraceId(@PathVariable UUID workspaceId, @PathVariable String traceId,
@@ -505,7 +506,9 @@ public final class TraceAdminController {
         }
         List<TurnDto> turns = store.turnsOfTrace(id, lookupWindow(from, to)).stream()
                 .filter(t -> t.getWorkspaceId().equals(workspaceId)).map(TurnDto::of).toList();
-        return ResponseEntity.ok(new TraceLookupDto(id, turns));
+        List<McpRequestDto> mcpRequests = store.mcpRequestsOfTrace(id, lookupWindow(from, to)).stream()
+                .filter(r -> workspaceId.equals(r.getWorkspaceId())).map(McpRequestDto::of).toList();
+        return ResponseEntity.ok(new TraceLookupDto(id, turns, mcpRequests));
     }
 
     /**

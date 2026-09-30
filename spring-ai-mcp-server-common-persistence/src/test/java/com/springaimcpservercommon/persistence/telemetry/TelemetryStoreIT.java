@@ -135,6 +135,9 @@ class TelemetryStoreIT {
                 workspace, "tools/call", "1", "trace_tool_a", McpRequestStatus.OK, null, null));
         telemetry.recordMcpRequest(new NewMcpRequest(Ids.newId(), start, start.plusMillis(5), null, null, principal,
                 workspace, "ping", "2", null, McpRequestStatus.ERROR, "internal_error", null));
+        UUID tracedRequest = Ids.newId();
+        telemetry.recordMcpRequest(new NewMcpRequest(tracedRequest, start, start.plusMillis(5), null, null, principal,
+                workspace, "prompts/get", "3", null, McpRequestStatus.OK, null, trace));
 
         TimeRange range = TimeRange.lastUntil(start.plusSeconds(60), Duration.ofHours(1));
         PageRequest page = PageRequest.first(50);
@@ -148,6 +151,8 @@ class TelemetryStoreIT {
         assertThat(telemetry.turnsOfWorkspace(workspace, range,
                 new TurnFilter(UUID.randomUUID(), null, null, null), page).items()).isEmpty();
         assertThat(telemetry.turnsOfTrace(trace, range)).extracting(AgentTurn::getId).containsExactly(okTurn);
+        assertThat(telemetry.mcpRequestsOfTrace(trace, range)).extracting(McpRequest::getId)
+                .containsExactly(tracedRequest);
 
         assertThat(telemetry.toolInvocationsOfWorkspace(workspace, range,
                 new ToolInvocationFilter("trace_tool_a", null, null, false, false), page).items()).hasSize(2);

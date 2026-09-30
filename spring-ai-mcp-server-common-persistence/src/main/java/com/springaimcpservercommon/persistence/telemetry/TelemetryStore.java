@@ -507,6 +507,25 @@ public final class TelemetryStore {
                 .getResultList());
     }
 
+    /**
+     * MCP requests that carry the given trace id, newest first (at most {@link #TRACE_LOOKUP_LIMIT}).
+     *
+     * @param traceId trace id
+     * @param range   time window on {@code received_at} (the table is partitioned by time)
+     * @return matching requests
+     */
+    public List<McpRequest> mcpRequestsOfTrace(String traceId, TimeRange range) {
+        Checks.text(traceId, "traceId", 128);
+        return db.read(em -> em.createQuery("select r from McpRequest r where r.traceId = :trace "
+                        + "and r.receivedAt >= :from and r.receivedAt < :to order by r.receivedAt desc, r.id desc",
+                        McpRequest.class)
+                .setParameter("trace", traceId)
+                .setParameter("from", range.from())
+                .setParameter("to", range.to())
+                .setMaxResults(TRACE_LOOKUP_LIMIT)
+                .getResultList());
+    }
+
     public Optional<AgentTurn> findTurn(UUID turnId, TimeRange range) {
         return db.read(em -> em.createQuery(
                         "select t from AgentTurn t where t.id = :id and t.startedAt >= :from and t.startedAt < :to",

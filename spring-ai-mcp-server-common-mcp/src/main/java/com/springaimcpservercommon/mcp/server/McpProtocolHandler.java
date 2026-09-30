@@ -150,6 +150,7 @@ public final class McpProtocolHandler {
      * @param caller the caller
      * @return the reply to send
      */
+    @SuppressWarnings("try") // the scope is held open for its side effect (current span), not read
     public Reply handle(String body, Caller caller) {
         Observation observation = Observation.createNotStarted("dynamic.ai.agent.mcp", observations)
                 .contextualName("dai.mcp")

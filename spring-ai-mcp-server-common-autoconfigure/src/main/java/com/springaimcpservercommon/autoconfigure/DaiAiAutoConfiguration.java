@@ -211,15 +211,6 @@ public class DaiAiAutoConfiguration {
      *
      * @param agentCatalogProvider  optional port for loading agent definitions by id
      * @param agentInvokerProvider  lazy reference to the agent invoker (breaks the cycle)
-     * @return the factory
-     */
-    /**
-     * Sub-agent callback factory — active only when an {@link AgentCatalogPort} bean is present.
-     * Uses {@code ObjectProvider<AgentInvoker>} to avoid the circular bean dependency:
-     * {@code ToolBridge → AgentCallbackFactory → ObjectProvider<AgentInvoker>} (lazy).
-     *
-     * @param agentCatalogProvider optional port for loading agent definitions
-     * @param agentInvokerProvider lazy reference to the AgentInvoker
      * @return the factory, or a no-op factory when no AgentCatalogPort is registered
      */
     @Bean

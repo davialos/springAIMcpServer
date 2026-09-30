@@ -179,6 +179,8 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                     <configuration>
+                        <!-- Mockito's inline mock maker attaches an agent at runtime; JDK 21+ warns unless allowed -->
+                        <argLine>-XX:+EnableDynamicAgentLoading</argLine>
                         <excludes>
                             <exclude>**/*IT.java</exclude>
                         </excludes>

@@ -41,6 +41,7 @@ import java.util.NoSuchElementException;
         RoleMappingAdminController.class,
         GrantAdminController.class,
         ServiceAccountAdminController.class,
+        McpClientAdminController.class,
         BudgetAdminController.class,
         UsageAdminController.class,
         TraceAdminController.class,

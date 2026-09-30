@@ -280,6 +280,23 @@ public class DaiAdminAutoConfiguration {
     }
 
     /**
+     * MCP client admin API (register, approve, revoke the OAuth clients the MCP endpoint serves).
+     *
+     * @param store MCP client store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(McpClientAdminController.class)
+    @ConditionalOnBean({com.springaimcpservercommon.persistence.identity.McpClientStore.class, AdminAudit.class,
+            AdminApi.class})
+    public McpClientAdminController mcpClientAdminController(
+            com.springaimcpservercommon.persistence.identity.McpClientStore store, AdminAudit audit, AdminApi api) {
+        return new McpClientAdminController(store, audit, api);
+    }
+
+    /**
      * Budget admin API.
      *
      * @param store  budget store

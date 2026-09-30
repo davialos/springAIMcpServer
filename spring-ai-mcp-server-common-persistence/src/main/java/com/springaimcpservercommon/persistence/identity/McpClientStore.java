@@ -98,6 +98,17 @@ public final class McpClientStore {
     }
 
     /**
+     * Who registered a client (for segregation of duties on approval).
+     *
+     * @param id registration id
+     * @return the registering principal, if the registration exists
+     */
+    public Optional<UUID> registeredBy(UUID id) {
+        return store.transactions().execute(status ->
+                Optional.ofNullable(store.entityManager().find(McpClient.class, id)).map(McpClient::createdBy));
+    }
+
+    /**
      * Finds a registration.
      *
      * @param id registration id

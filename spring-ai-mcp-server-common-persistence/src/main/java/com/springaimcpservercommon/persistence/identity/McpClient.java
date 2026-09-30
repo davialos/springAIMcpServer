@@ -113,6 +113,11 @@ public class McpClient {
         return value;
     }
 
+    /** @return the principal that registered the client */
+    public UUID createdBy() {
+        return createdBy;
+    }
+
     /**
      * Approves a pending client.
      *

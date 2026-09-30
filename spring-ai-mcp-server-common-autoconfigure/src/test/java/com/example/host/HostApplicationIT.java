@@ -129,7 +129,7 @@ class HostApplicationIT {
     private static String token(String subject, String scope) {
         try {
             var claims = new com.nimbusds.jwt.JWTClaimsSet.Builder().subject(subject).issuer("https://idp.test")
-                    .claim("scope", scope).claim("customerId", "c-" + subject).expirationTime(new java.util.Date(System.currentTimeMillis() + 600_000))
+                    .claim("scope", scope).claim("customerId", "c-" + subject).claim("azp", "mcp-app").expirationTime(new java.util.Date(System.currentTimeMillis() + 600_000))
                     .build();
             var jwt = new com.nimbusds.jwt.SignedJWT(new com.nimbusds.jose.JWSHeader.Builder(
                     com.nimbusds.jose.JWSAlgorithm.RS256).keyID("test").build(), claims);
@@ -141,6 +141,9 @@ class HostApplicationIT {
     }
 
     private static String bearer(String user) {
+        if (user.endsWith("-mcp")) {
+            return token(user.substring(0, user.length() - 4), "openid dai.mcp.read");
+        }
         return user.startsWith("admin") ? token(user, "openid dai.admin") : token(user, "openid");
     }
 
@@ -151,6 +154,7 @@ class HostApplicationIT {
         var props = new java.util.HashMap<String, Object>();
         props.put("spring.jpa.hibernate.ddl-auto", "create");
         props.put("dynamic.ai.agent.write.enabled", "true");
+        props.put("dynamic.ai.agent.mcp.enabled", "true");
         props.put("dynamic.ai.agent.security.attribute-claims.customerId", "customerId");
         props.put("spring.datasource.url", POSTGRES.getJdbcUrl());
         props.put("spring.datasource.username", POSTGRES.getUsername());
@@ -161,6 +165,9 @@ class HostApplicationIT {
         props.put("dynamic.ai.agent.security.static-role-mappings[0].source", "AUTHORITY");
         props.put("dynamic.ai.agent.security.static-role-mappings[0].match-value", "SCOPE_dai.admin");
         props.put("dynamic.ai.agent.security.static-role-mappings[0].role", "PLATFORM_ADMIN");
+        props.put("dynamic.ai.agent.security.static-role-mappings[1].source", "AUTHORITY");
+        props.put("dynamic.ai.agent.security.static-role-mappings[1].match-value", "SCOPE_dai.admin");
+        props.put("dynamic.ai.agent.security.static-role-mappings[1].role", "SECURITY_ADMIN");
         app.setDefaultProperties(props);
 
         app.setWebApplicationType(org.springframework.boot.WebApplicationType.SERVLET);
@@ -511,5 +518,60 @@ class HostApplicationIT {
         var leaked = call("POST", "/dynamic-ai/api/agents/orders-leaky/chat", "alice",
                 Map.of("message", "myorders"), 200);
         assertThat(leaked.toString()).doesNotContain("4111").doesNotContain("5500");
+    }
+
+    private static org.springframework.mock.web.MockHttpServletResponse mcp(String user, String workspace, String body)
+            throws Exception {
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/dynamic-ai/mcp")
+                .contentType("application/json").accept("application/json", "text/event-stream").content(body);
+        if (user != null) {
+            request.header("Authorization", bearer(user));
+        }
+        if (workspace != null) {
+            request.header("X-DAI-Workspace", workspace);
+        }
+        return mvc.perform(request).andReturn().getResponse();
+    }
+
+    @Test
+    void anMcpClientSeesAndCallsOnlyWhatItMayThroughTheSameGuards() throws Exception {
+        seedOrders();
+        String ws = workspaceWithTeam("orders-mcp");
+        String binding = publish(ws, "TOOL_BINDING", "mcp-find-orders", JSON.writeValueAsString(Map.of(
+                "toolName", "find_orders", "mcpExposed", true,
+                "source", Map.of("kind", "operation", "ref", operationRef("find")),
+                "argConstraints", Map.of(
+                        "customerId", Map.of("kind", "principalAttr", "attr", "customerId"),
+                        "limit", Map.of("kind", "range", "min", 1, "max", 5)))));
+        var anonymous = mcp(null, ws, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
+        assertThat(anonymous.getStatus()).isEqualTo(401);
+        String list = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}";
+        // default deny: a valid token from a client nobody approved is refused
+        assertThat(mcp("alice", ws, list).getStatus()).isEqualTo(403);
+        String clients = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/mcp-clients";
+        var registered = call("POST", clients, "admin", Map.of("issuer", "https://idp.test", "clientId", "mcp-app",
+                "displayName", "Test client"), 201);
+        assertThat(registered.get("status").asString()).isEqualTo("PENDING");
+        assertThat(mcp("alice", ws, list).getStatus()).isEqualTo(403);
+        call("POST", clients + "/" + registered.get("id").asString() + ":approve", "admin", Map.of(), 403);
+        call("POST", clients + "/" + registered.get("id").asString() + ":approve", "admin2", Map.of(), 200);
+        // approved client, but the token carries no MCP scope: it lists nothing
+        var noScope = mcp("alice", ws, list);
+        assertThat(noScope.getStatus()).isEqualTo(200);
+        assertThat(noScope.getContentAsString()).doesNotContain("find_orders");
+        // approved client and scope, but nothing granted: nothing listed (default deny)
+        assertThat(mcp("alice-mcp", ws, list).getContentAsString()).doesNotContain("find_orders");
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("alice"), "role", "CONSUMER"), 201);
+        grant(ws, "alice", "tool:invoke", binding);
+        var listed = mcp("alice-mcp", ws, list);
+        assertThat(listed.getStatus()).isEqualTo(200);
+        assertThat(listed.getContentAsString()).contains("find_orders");
+        var called = mcp("alice-mcp", ws, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":"
+                + "{\"name\":\"find_orders\",\"arguments\":{\"customerId\":\"c-evil\",\"limit\":3}}}");
+        assertThat(called.getContentAsString()).contains("o1").contains("o2").doesNotContain("o3");
+        // once the client is revoked its tokens stop working at the next request
+        call("POST", clients + "/" + registered.get("id").asString() + ":revoke", "admin", Map.of(), 200);
+        assertThat(mcp("alice-mcp", ws, list).getStatus()).isEqualTo(403);
     }
 }

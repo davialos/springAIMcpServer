@@ -125,12 +125,15 @@ public class DaiAiAutoConfiguration {
      * every turn with {@code model-unavailable}, which is clearer than an agent endpoint that does not exist.
      *
      * @param beans the bean factory, to find every {@code ChatModel} by name
+     * @param props framework properties (provider breaker)
      * @return the router
      */
     @Bean
     @ConditionalOnMissingBean(ModelRouter.class)
-    public ModelRouter modelRouter(org.springframework.beans.factory.ListableBeanFactory beans) {
-        return new DefaultModelRouter(beans.getBeansOfType(org.springframework.ai.chat.model.ChatModel.class));
+    public ModelRouter modelRouter(org.springframework.beans.factory.ListableBeanFactory beans, DaiProperties props) {
+        DaiProperties.Model model = props.model();
+        return new DefaultModelRouter(beans.getBeansOfType(org.springframework.ai.chat.model.ChatModel.class),
+                model.failureThreshold(), model.breakerOpenFor(), java.time.Clock.systemUTC());
     }
 
     /**

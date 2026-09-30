@@ -8,7 +8,9 @@ import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import org.jspecify.annotations.NullMarked;
 import org.springframework.ai.chat.model.ChatModel;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -23,17 +25,30 @@ import java.util.Objects;
  * {@code ollamaChatModel}. There is deliberately no "use whichever model exists" fallback: silently sending a
  * workspace's data to a different provider than configured would defeat data-residency rules (F-77).
  *
- * <p>{@link #resolveModel} also reports which selection matched, so the invoker applies that selection's model name,
- * temperature and token limit. Known limit (OQ-47): there is no circuit breaker or failover on provider errors,
- * only on a missing provider. Hosts can supply their own {@link ModelRouter} bean to change any of this.
+ * <p>{@link #resolveModel} wraps the chain of selections in a {@link ResilientChatModel}: a provider that errors
+ * fails over to the next one, behind a per-provider {@link ProviderBreaker} (OQ-47). It also reports which selection matched, so the invoker applies that selection's model name,
+ * temperature and token limit. Hosts can supply their own {@link ModelRouter} bean to change any of this.
  */
 @NullMarked
 final class DefaultModelRouter implements ModelRouter {
 
     private final Map<String, ChatModel> byProvider;
+    private final java.util.concurrent.ConcurrentMap<String, ProviderBreaker> breakers =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final int failureThreshold;
+    private final java.time.Duration breakerOpenFor;
+    private final java.time.Clock clock;
 
     DefaultModelRouter(Map<String, ChatModel> chatModelsByBeanName) {
+        this(chatModelsByBeanName, 5, java.time.Duration.ofSeconds(30), java.time.Clock.systemUTC());
+    }
+
+    DefaultModelRouter(Map<String, ChatModel> chatModelsByBeanName, int failureThreshold,
+                       java.time.Duration breakerOpenFor, java.time.Clock clock) {
         Objects.requireNonNull(chatModelsByBeanName, "chatModelsByBeanName");
+        this.failureThreshold = failureThreshold;
+        this.breakerOpenFor = Objects.requireNonNull(breakerOpenFor, "breakerOpenFor");
+        this.clock = Objects.requireNonNull(clock, "clock");
         Map<String, ChatModel> index = new HashMap<>();
         chatModelsByBeanName.forEach((beanName, model) -> {
             String key = normalize(stripSuffix(beanName));
@@ -45,13 +60,33 @@ final class DefaultModelRouter implements ModelRouter {
         this.byProvider = Map.copyOf(index);
     }
 
+    /** The plain provider model, without failover or breaker (used by callers that want exactly one provider). */
     @Override
     public ChatModel resolve(ModelSelection selection, DaiPrincipal principal) {
-        return resolveModel(selection, principal).model();
+        return match(selection).model();
     }
 
+    /**
+     * The model to call for a turn: the first selection with a provider bean, wrapped so that a failing provider
+     * fails over to the following selections that have one, and an open breaker is skipped (OQ-47).
+     */
     @Override
     public ResolvedModel resolveModel(ModelSelection selection, DaiPrincipal principal) {
+        ResolvedModel first = match(selection);
+        List<ResilientChatModel.Candidate> chain = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (ModelSelection s = first.selection(); s != null; s = s.fallback()) {
+            String key = normalize(s.providerId());
+            ChatModel model = byProvider.get(key);
+            if (model != null && seen.add(key)) {
+                chain.add(new ResilientChatModel.Candidate(s, model, breakers.computeIfAbsent(key,
+                        k -> new ProviderBreaker(failureThreshold, breakerOpenFor, clock))));
+            }
+        }
+        return new ResolvedModel(new ResilientChatModel(chain), first.selection());
+    }
+
+    private ResolvedModel match(ModelSelection selection) {
         ModelSelection current = selection;
         while (current != null) {
             ChatModel model = byProvider.get(normalize(current.providerId()));

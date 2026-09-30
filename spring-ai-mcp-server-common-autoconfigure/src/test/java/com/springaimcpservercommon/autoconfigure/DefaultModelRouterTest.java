@@ -71,8 +71,47 @@ class DefaultModelRouterTest {
 
         var resolved = router.resolveModel(primary, null);
 
-        assertThat(resolved.model()).isSameAs(ollama);
+        assertThat(resolved.model()).isInstanceOf(ResilientChatModel.class);
+        assertThat(router.resolve(primary, null)).isSameAs(ollama);
         assertThat(resolved.selection()).isSameAs(fallback);
         assertThat(router.resolveModel(selection("openai", null), null).selection().providerId()).isEqualTo("openai");
+    }
+
+    @Test
+    void theResolvedModelFailsOverFromTheMatchedProviderToTheNextOneThatHasABean() {
+        ChatModel broken = new ChatModel() {
+            @Override
+            public org.springframework.ai.chat.model.ChatResponse call(org.springframework.ai.chat.prompt.Prompt p) {
+                throw new IllegalStateException("down");
+            }
+
+            @Override
+            public org.springframework.ai.chat.prompt.ChatOptions getOptions() {
+                return org.springframework.ai.model.tool.ToolCallingChatOptions.builder().build();
+            }
+        };
+        ChatModel healthy = new ChatModel() {
+            @Override
+            public org.springframework.ai.chat.model.ChatResponse call(org.springframework.ai.chat.prompt.Prompt p) {
+                return new org.springframework.ai.chat.model.ChatResponse(java.util.List.of(
+                        new org.springframework.ai.chat.model.Generation(
+                                new org.springframework.ai.chat.messages.AssistantMessage("from-ollama"))));
+            }
+
+            @Override
+            public org.springframework.ai.chat.prompt.ChatOptions getOptions() {
+                return org.springframework.ai.model.tool.ToolCallingChatOptions.builder().build();
+            }
+        };
+        DefaultModelRouter withBroken = new DefaultModelRouter(Map.of("openAiChatModel", broken,
+                "ollamaChatModel", healthy));
+        ModelSelection sel = new ModelSelection("openai", "gpt-x", null, null,
+                new ModelSelection("anthropic", "none", null, null, new ModelSelection("ollama", "llama", null, null, null)));
+
+        var resolved = withBroken.resolveModel(sel, null);
+
+        assertThat(resolved.selection().providerId()).isEqualTo("openai");
+        var response = resolved.model().call(new org.springframework.ai.chat.prompt.Prompt("hi"));
+        assertThat(response.getResult().getOutput().getText()).isEqualTo("from-ollama");
     }
 }

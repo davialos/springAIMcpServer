@@ -30,6 +30,7 @@ import java.util.UUID;
  * @param conversations   conversation history recording and retention (F-44)
  * @param store           background maintenance of the {@code dynamic_ai} store (LLD-15 §10, LLD-09 §4)
  * @param memory          the model's chat memory (OQ-45)
+ * @param model           model provider resilience (OQ-47)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -45,7 +46,30 @@ public record DaiProperties(
         @DefaultValue Chat chat,
         @DefaultValue Conversations conversations,
         @DefaultValue Store store,
-        @DefaultValue Memory memory) {
+        @DefaultValue Memory memory,
+        @DefaultValue Model model) {
+
+    /**
+     * Model provider resilience (OQ-47). A provider that fails {@code failureThreshold} calls in a row is skipped for
+     * {@code breakerOpenFor}, then probed with one call; agents with a fallback selection fail over to it meanwhile.
+     * State is per node.
+     *
+     * @param failureThreshold consecutive failures that open a provider's breaker (at least 1)
+     * @param breakerOpenFor   how long an open breaker refuses calls (positive)
+     */
+    public record Model(
+            @DefaultValue("5") int failureThreshold,
+            @DefaultValue("30s") Duration breakerOpenFor) {
+        /** Validates the settings. */
+        public Model {
+            if (failureThreshold < 1) {
+                throw new IllegalArgumentException("dynamic.ai.agent.model.failure-threshold must be >= 1");
+            }
+            if (breakerOpenFor.isNegative() || breakerOpenFor.isZero()) {
+                throw new IllegalArgumentException("dynamic.ai.agent.model.breaker-open-for must be positive");
+            }
+        }
+    }
 
     /**
      * The model's chat memory (OQ-45). With a persistence unit present the memory lives in PostgreSQL so every

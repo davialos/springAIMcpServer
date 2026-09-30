@@ -52,7 +52,7 @@ public final class SummaryMemoryAdvisor implements CallAdvisor, StreamAdvisor {
     private static final Logger LOG = LoggerFactory.getLogger(SummaryMemoryAdvisor.class);
 
     /** {@link ChatMemory} key prefix for the stored summary (separate from message history). */
-    static final String SUMMARY_KEY_PREFIX = "dai:sum:";
+    static final String SUMMARY_KEY_PREFIX = com.springaimcpservercommon.ai.runtime.ConversationKeys.SUMMARY_PREFIX;
 
     /** System-prompt header injected before the summary text so the model knows the context origin. */
     private static final String SUMMARY_HEADER =

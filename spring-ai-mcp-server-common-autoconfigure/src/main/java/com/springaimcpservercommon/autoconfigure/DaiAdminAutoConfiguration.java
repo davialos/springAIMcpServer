@@ -330,8 +330,9 @@ public class DaiAdminAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(ConversationController.class)
     @ConditionalOnBean({TelemetryStore.class, AdminAudit.class, AdminApi.class})
-    public ConversationController conversationController(TelemetryStore store, AdminAudit audit, AdminApi api) {
-        return new ConversationController(store, audit, api);
+    public ConversationController conversationController(TelemetryStore store, AdminAudit audit, AdminApi api,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.persistence.memory.ChatMemoryStore> memory) {
+        return new ConversationController(store, audit, api, memory.getIfAvailable());
     }
 
     /**

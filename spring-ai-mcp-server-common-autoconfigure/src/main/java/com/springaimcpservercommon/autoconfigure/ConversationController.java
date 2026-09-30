@@ -1,6 +1,9 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.ai.runtime.ConversationKeys;
+import com.springaimcpservercommon.core.hash.Sha256;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
+import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
 import com.springaimcpservercommon.persistence.audit.AuditCategory;
 import com.springaimcpservercommon.persistence.audit.AuditPlane;
 import com.springaimcpservercommon.persistence.support.PageRequest;
@@ -13,6 +16,7 @@ import com.springaimcpservercommon.webmvc.problem.ProblemCode;
 import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -98,8 +102,10 @@ public final class ConversationController {
     private final TelemetryStore store;
     private final AdminAudit audit;
     private final AdminApi api;
+    private final @Nullable ChatMemoryStore memory;
 
-    ConversationController(TelemetryStore store, AdminAudit audit, AdminApi api) {
+    ConversationController(TelemetryStore store, AdminAudit audit, AdminApi api, @Nullable ChatMemoryStore memory) {
+        this.memory = memory;
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
         this.api = Objects.requireNonNull(api, "api");
@@ -175,6 +181,7 @@ public final class ConversationController {
             return AdminApi.problem(ProblemCode.NOT_FOUND, "Conversation not found", null, request);
         }
         store.closeConversation(id);
+        forgetMemory(c);
         return ResponseEntity.noContent().build();
     }
 
@@ -196,9 +203,30 @@ public final class ConversationController {
         if (c == null || !store.eraseConversation(id)) {
             return AdminApi.problem(ProblemCode.NOT_FOUND, "Conversation not found", null, request);
         }
+        forgetMemory(c);
         audit.record(caller, AuditCategory.DATA_WRITE, AuditPlane.DATA, "CONVERSATION_ERASED", c.getWorkspaceId(),
                 "conversation", id.toString(), null, null, Map.of());
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Deletes what the model remembers of a conversation that was closed or erased (OQ-45), best effort: the memory
+     * expires by retention anyway, so a failure here is logged and never fails the request.
+     */
+    void forgetMemory(Conversation c) {
+        UUID agent = c.getAgentResourceId();
+        if (memory == null || agent == null) {
+            return;
+        }
+        try {
+            String key = ConversationKeys.memoryKey(c.getWorkspaceId(), agent, c.getPrincipalId(), c.getId());
+            memory.delete(Sha256.of(key));
+            memory.delete(Sha256.of(ConversationKeys.summaryKey(key)));
+        } catch (RuntimeException e) {
+            LoggerFactory.getLogger(ConversationController.class)
+                    .warn("Could not delete chat memory of a closed conversation ({}); it expires by retention",
+                            e.getClass().getSimpleName());
+        }
     }
 
     private @Nullable Conversation owned(UUID id, DaiPrincipal caller) {

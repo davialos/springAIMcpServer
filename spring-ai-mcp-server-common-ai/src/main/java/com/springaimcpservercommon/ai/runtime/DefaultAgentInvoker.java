@@ -466,7 +466,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     // ─── Conversation key ─────────────────────────────────────────────────────
 
     private static String convKey(DaiPrincipal principal, AgentDefinition agent, UUID conversationId) {
-        return agent.workspaceId() + ":" + agent.id() + ":" + principal.principalId() + ":" + conversationId;
+        return ConversationKeys.memoryKey(agent.workspaceId(), agent.id(), principal.principalId(), conversationId);
     }
 
     // ─── Response mapping ─────────────────────────────────────────────────────

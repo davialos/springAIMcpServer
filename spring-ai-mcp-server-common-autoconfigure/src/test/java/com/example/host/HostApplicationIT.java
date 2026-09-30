@@ -160,6 +160,9 @@ class HostApplicationIT {
         props.put("spring.jpa.hibernate.ddl-auto", "create");
         props.put("dynamic.ai.agent.write.enabled", "true");
         props.put("dynamic.ai.agent.mcp.enabled", "true");
+        props.put("dynamic.ai.agent.security.api-keys.enabled", "true");
+        props.put("dynamic.ai.agent.security.api-keys.pepper",
+                java.util.Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef".getBytes()));
         props.put("dynamic.ai.agent.security.attribute-claims.customerId", "customerId");
         props.put("spring.datasource.url", POSTGRES.getJdbcUrl());
         props.put("spring.datasource.username", POSTGRES.getUsername());
@@ -532,6 +535,14 @@ class HostApplicationIT {
         assertThat(leaked.toString()).doesNotContain("4111").doesNotContain("5500");
     }
 
+    private static org.springframework.mock.web.MockHttpServletResponse mcpWithKey(String apiKey, String workspace,
+                                                                                    String body) throws Exception {
+        return mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/dynamic-ai/mcp")
+                .contentType("application/json").accept("application/json", "text/event-stream").content(body)
+                .header("Authorization", "ApiKey " + apiKey).header("X-DAI-Workspace", workspace)).andReturn()
+                .getResponse();
+    }
+
     private static org.springframework.mock.web.MockHttpServletResponse mcp(String user, String workspace, String body)
             throws Exception {
         var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/dynamic-ai/mcp")
@@ -631,5 +642,50 @@ class HostApplicationIT {
         assertThat(everything.chunks()).extracting(c -> c.text())
                 .anyMatch(t -> t.contains("Tool cancel:") && t.contains("never run by the AI"))
                 .anyMatch(t -> t.contains("Record type") && t.contains("The customer who placed the order"));
+    }
+
+    @Test
+    void aServiceAccountUsesAnIssuedApiKeyAndLosesAccessWhenItIsRevoked() throws Exception {
+        seedOrders();
+        String ws = workspaceWithTeam("keys-ws");
+        String binding = publish(ws, "TOOL_BINDING", "key-find-orders", JSON.writeValueAsString(Map.of(
+                "toolName", "find_orders", "mcpExposed", true,
+                "source", Map.of("kind", "operation", "ref", operationRef("find")),
+                "argConstraints", Map.of(
+                        "customerId", Map.of("kind", "literal", "value", "c-alice"),
+                        "limit", Map.of("kind", "range", "min", 1, "max", 5)))));
+        String accounts = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/service-accounts";
+        var account = call("POST", accounts, "admin", Map.of("name", "nightly-job"), 201);
+        String keys = accounts + "/" + account.get("id").asString() + "/keys";
+
+        // bad requests are refused, a good one returns the secret once and only once
+        call("POST", keys, "admin", Map.of("scopes", List.of("admin:everything")), 400);
+        call("POST", keys, "admin", Map.of("expiresInDays", 400), 400);
+        var issued = call("POST", keys, "admin", Map.of("expiresInDays", 30, "scopes", List.of("mcp:read", "tool:invoke")), 201);
+        String apiKey = issued.get("apiKey").asString();
+        assertThat(apiKey).startsWith("dai_dev_");
+        var listing = call("GET", keys, "admin", null, 200).toString();
+        assertThat(listing).contains(issued.get("keyPrefix").asString()).doesNotContain(apiKey);
+
+        String list = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}";
+        assertThat(mcpWithKey("dai_dev_notarealkey_x", ws, list).getStatus()).isEqualTo(401);
+        // authenticated, but default deny: nothing granted yet
+        var before = mcpWithKey(apiKey, ws, list);
+        assertThat(before.getStatus()).isEqualTo(200);
+        assertThat(before.getContentAsString()).doesNotContain("find_orders");
+
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/grants", "admin", Map.of(
+                "principalId", account.get("principalId").asString(), "permission", "tool:invoke",
+                "targetType", "RESOURCE", "resourceId", binding), 201);
+        assertThat(mcpWithKey(apiKey, ws, list).getContentAsString()).contains("find_orders");
+        var called = mcpWithKey(apiKey, ws, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":"
+                + "{\"name\":\"find_orders\",\"arguments\":{\"customerId\":\"c-evil\",\"limit\":3}}}");
+        assertThat(called.getContentAsString()).contains("o1").doesNotContain("o3");
+        // the key of a service account of another workspace is not served for this one
+        String otherWs = workspaceWithTeam("keys-other");
+        assertThat(mcpWithKey(apiKey, otherWs, list).getStatus()).isIn(401, 403);
+
+        call("DELETE", keys + "/" + issued.get("id").asString(), "admin", null, 204);
+        assertThat(mcpWithKey(apiKey, ws, list).getStatus()).isEqualTo(401);
     }
 }

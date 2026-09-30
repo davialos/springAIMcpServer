@@ -274,9 +274,13 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean({ApiKeyStore.class, AdminAudit.class, AdminApi.class})
     public ServiceAccountAdminController serviceAccountAdminController(ApiKeyStore store, AdminAudit audit,
                                                                        AdminApi api,
-            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers) {
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.apikey.ApiKeyService> keys,
+            org.springframework.beans.factory.ObjectProvider<DaiApiKeyProperties> keyProperties) {
         return new ServiceAccountAdminController(store, audit, api, java.time.Clock.systemUTC(),
-                () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll));
+                () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll),
+                keys.getIfAvailable(), keyProperties.getIfAvailable(
+                        () -> new DaiApiKeyProperties(false, null, 1, null, true, 90)).defaultLifetimeDays());
     }
 
     /**

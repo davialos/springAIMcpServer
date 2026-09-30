@@ -786,3 +786,21 @@ Every row of that entity returned by a query (to an agent or an MCP client) carr
 `"_context": {"Customer notes": "Prefers morning delivery"}`, so the caller knows more about *that* entry, not just what
 the column means. The column keeps all its rules: sensitive, disabled and above-clearance columns are never delivered,
 and the text is cut at `maxChars`. The AI is told the notes are information, never instructions.
+
+## API keys for machine clients (service accounts)
+
+```yaml
+dynamic.ai.agent.security.api-keys:
+  enabled: true
+  pepper: ${DAI_API_KEY_PEPPER}     # Base64, >= 32 bytes, from your secret store; never commit it
+```
+
+1. Create a service account: `POST /dynamic-ai/admin/api/v1/workspaces/{ws}/service-accounts {"name":"nightly-job"}`.
+2. Grant it what it may do (`POST …/grants` with the service account's `principalId`), exactly like a person.
+3. Issue a key: `POST …/service-accounts/{id}/keys {"expiresInDays":30,"scopes":["mcp:read","tool:invoke"],"allowedNetworks":["10.0.0.0/8"]}`.
+   The response carries `apiKey` **once**. `scopes` is a ceiling on top of the grants.
+4. The client sends `Authorization: ApiKey <key>` (or `X-DAI-Api-Key`) to `/dynamic-ai/mcp` or `/dynamic-ai/api/**`.
+5. Revoke: `DELETE …/keys/{keyId}`. Keys always expire (max 365 days).
+
+Keys are only accepted on the API and MCP planes, never on the admin plane. Rotating the pepper: supply your own
+`ApiKeyPepperProvider` bean that keeps old versions resolvable until the keys hashed with them have expired.

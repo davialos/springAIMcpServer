@@ -1,5 +1,12 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import java.util.Objects;
+import org.springframework.beans.factory.ObjectProvider;
+import com.springaimcpservercommon.security.port.ApiKeyLookup;
+import com.springaimcpservercommon.security.apikey.FailedAttemptLimiter;
+import com.springaimcpservercommon.security.apikey.ApiKeyService;
+import com.springaimcpservercommon.security.apikey.ApiKeyPepperProvider;
+import com.springaimcpservercommon.security.apikey.ApiKeyAuthenticationFilter;
 import com.springaimcpservercommon.security.web.DynamicAiHttpSecurityConfigurer;
 import com.springaimcpservercommon.security.web.DynamicAiSecurityOptions;
 import com.springaimcpservercommon.security.web.HostAuthenticationCapabilities;
@@ -43,6 +50,7 @@ import java.util.List;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnClass({HttpSecurity.class, SecurityFilterChain.class, DynamicAiHttpSecurityConfigurer.class})
 @ConditionalOnBean(HttpSecurity.class)
+@org.springframework.boot.context.properties.EnableConfigurationProperties(DaiApiKeyProperties.class)
 public class DaiWebSecurityAutoConfiguration {
 
     private static final String JWT_DECODER = "org.springframework.security.oauth2.jwt.JwtDecoder";
@@ -95,12 +103,78 @@ public class DaiWebSecurityAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    DynamicAiSecurityOptions daiSecurityOptions(DaiProperties props) {
+    DynamicAiSecurityOptions daiSecurityOptions(DaiProperties props, DaiApiKeyProperties apiKeys) {
         String resource = props.mcp().resourceUri();
         String metadata = resource == null ? null
                 : resource.replaceFirst("^(https?://[^/]+)(.*)$", "$1/.well-known/oauth-protected-resource$2");
-        return new DynamicAiSecurityOptions("/dynamic-ai", false, false, false, null,
-                DynamicAiSecurityOptions.DEFAULT_ADMIN_CSP, metadata, List.of("dai.mcp.read"));
+        return new DynamicAiSecurityOptions("/dynamic-ai", apiKeys.enabled(), apiKeys.acceptDedicatedHeader(), false,
+                null, DynamicAiSecurityOptions.DEFAULT_ADMIN_CSP, metadata, List.of("dai.mcp.read"));
+    }
+
+    /**
+     * Hashing secret from {@code dynamic.ai.agent.security.api-keys.pepper}. Declare your own
+     * {@link ApiKeyPepperProvider} to rotate or to read it from a vault.
+     *
+     * @param props API key settings
+     * @return the provider
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyPepperProvider.class)
+    @ConditionalOnProperty(prefix = "dynamic.ai.agent.security.api-keys", name = "enabled", havingValue = "true")
+    ApiKeyPepperProvider daiApiKeyPepperProvider(DaiApiKeyProperties props) {
+        if (props.pepper() == null || props.pepper().isBlank()) {
+            throw new IllegalStateException("dynamic.ai.agent.security.api-keys.enabled=true needs "
+                    + "dynamic.ai.agent.security.api-keys.pepper (Base64, >= 32 bytes) or an ApiKeyPepperProvider bean");
+        }
+        byte[] decoded;
+        try {
+            decoded = java.util.Base64.getDecoder().decode(props.pepper().strip());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("dynamic.ai.agent.security.api-keys.pepper is not valid Base64");
+        }
+        if (decoded.length < 32) {
+            throw new IllegalStateException("dynamic.ai.agent.security.api-keys.pepper must decode to >= 32 bytes");
+        }
+        int version = props.pepperVersion();
+        return new ApiKeyPepperProvider() {
+            @Override
+            public int currentVersion() {
+                return version;
+            }
+
+            @Override
+            public byte[] pepper(int requested) {
+                if (requested != version) {
+                    throw new IllegalArgumentException("unknown pepper version " + requested);
+                }
+                return decoded.clone();
+            }
+        };
+    }
+
+    /**
+     * Generates and verifies API keys. Needs the store (the persistence auto-configuration) and a pepper.
+     *
+     * @param lookup  the key store port
+     * @param peppers the pepper provider
+     * @param props   API key settings
+     * @param core    framework settings (environment tier)
+     * @return the service
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyService.class)
+    @ConditionalOnProperty(prefix = "dynamic.ai.agent.security.api-keys", name = "enabled", havingValue = "true")
+    ApiKeyService daiApiKeyService(ObjectProvider<ApiKeyLookup> lookup, ApiKeyPepperProvider peppers,
+                                   DaiApiKeyProperties props, DaiProperties core) {
+        ApiKeyLookup store = lookup.getIfAvailable();
+        if (store == null) {
+            throw new IllegalStateException("dynamic.ai.agent.security.api-keys.enabled=true needs the dynamic_ai "
+                    + "store (a DataSource and dynamic.ai.agent.store.*)");
+        }
+        String environment = props.keyEnvironment() != null ? props.keyEnvironment()
+                : core.environment().tier().toLowerCase(java.util.Locale.ROOT);
+        return new ApiKeyService(store, peppers, environment, java.time.Clock.systemUTC(),
+                java.time.Duration.ofSeconds(30), java.time.Duration.ofMinutes(5));
     }
 
     /**
@@ -108,13 +182,20 @@ public class DaiWebSecurityAutoConfiguration {
      *
      * @param options chain settings
      * @param host    the host's authentication
+     * @param service API key service, when API keys are enabled
+     * @param props   API key settings
      * @return the configurer
      */
     @Bean
     @ConditionalOnMissingBean
     DynamicAiHttpSecurityConfigurer daiHttpSecurityConfigurer(DynamicAiSecurityOptions options,
-                                                              HostAuthenticationCapabilities host) {
-        return new DynamicAiHttpSecurityConfigurer(options, host, null);
+                                                              HostAuthenticationCapabilities host,
+                                                              ObjectProvider<ApiKeyService> service,
+                                                              DaiApiKeyProperties props) {
+        ApiKeyAuthenticationFilter filter = !options.apiKeysEnabled() ? null : new ApiKeyAuthenticationFilter(
+                Objects.requireNonNull(service.getIfAvailable(), "ApiKeyService"),
+                FailedAttemptLimiter.defaults(java.time.Clock.systemUTC()), props.acceptDedicatedHeader());
+        return new DynamicAiHttpSecurityConfigurer(options, host, filter);
     }
 
     /**

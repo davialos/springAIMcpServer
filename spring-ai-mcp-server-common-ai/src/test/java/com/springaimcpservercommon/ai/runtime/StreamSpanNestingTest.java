@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class StreamSpanNestingTest {
 
     private final ObservationRegistry registry = ObservationRegistry.create();
-    private final List<String> stopped = new ArrayList<>();
+    private final List<String> stopped = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     StreamSpanNestingTest() {
         registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
@@ -103,6 +103,11 @@ class StreamSpanNestingTest {
                     : o.getContext().getName());
         }
         assertThat(ancestry).contains("dai.agent.turn");
+        // the turn span is stopped when the stream terminates, which can be a moment after block() returns
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (!stopped.contains("dai.agent.turn") && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
         assertThat(stopped).contains("dai.agent.turn");
     }
 }

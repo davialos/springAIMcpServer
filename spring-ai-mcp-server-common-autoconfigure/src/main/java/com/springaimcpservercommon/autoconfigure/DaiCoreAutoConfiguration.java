@@ -40,7 +40,7 @@ import java.util.Map;
 @AutoConfiguration
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
-@EnableConfigurationProperties({DaiProperties.class, DaiProductionOverrideProperties.class})
+@EnableConfigurationProperties({DaiProperties.class, DaiProductionOverrideProperties.class, DaiPiiProperties.class})
 @NullMarked
 public class DaiCoreAutoConfiguration {
 
@@ -105,6 +105,32 @@ public class DaiCoreAutoConfiguration {
             throw new IllegalStateException("dynamic.ai.agent.environment.production-override is invalid: "
                     + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Finds personal data in text that is about to be stored (F-76): the built-in patterns plus the host's own.
+     * Declare your own {@link com.springaimcpservercommon.core.lint.PiiDetector} to use a DLP service or a name
+     * recogniser.
+     *
+     * @param props PII settings
+     * @return the detector
+     */
+    @Bean
+    @ConditionalOnMissingBean(com.springaimcpservercommon.core.lint.PiiDetector.class)
+    public com.springaimcpservercommon.core.lint.PiiDetector piiDetector(DaiPiiProperties props) {
+        java.util.Map<String, java.util.regex.Pattern> custom = new java.util.LinkedHashMap<>();
+        props.customPatterns().forEach((label, regex) -> {
+            try {
+                custom.put(label, java.util.regex.Pattern.compile(regex));
+            } catch (java.util.regex.PatternSyntaxException e) {
+                throw new IllegalStateException("dynamic.ai.agent.conversations.pii.custom-patterns." + label
+                        + " is not a valid regular expression");
+            }
+        });
+        java.util.Set<com.springaimcpservercommon.core.lint.RegexPiiDetector.Type> types = props.types().isEmpty()
+                ? com.springaimcpservercommon.core.lint.RegexPiiDetector.DEFAULT_TYPES
+                : java.util.Set.copyOf(props.types());
+        return new com.springaimcpservercommon.core.lint.RegexPiiDetector(types, custom);
     }
 
     /**

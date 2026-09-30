@@ -819,3 +819,20 @@ dynamic.ai.agent.environment.production-override:
 It switches itself off at `expires-at` without a restart, logs a warning at startup and on every use, and writes a
 `PRODUCTION_OVERRIDE_USED` audit event (who, which capability, which request) each time it is what allowed a request.
 An invalid override (no reason, no expiry, too long, not overridable) stops the application at startup.
+
+## Personal data in stored conversations
+
+Stored transcripts (and the model's chat memory) are masked by default: e-mail addresses, phone numbers, card numbers,
+IBANs and US SSNs become `[EMAIL]`, `[PHONE]`, `[CREDIT_CARD]`, `[IBAN]`, `[US_SSN]`. Credentials still remove the
+whole message.
+
+```yaml
+dynamic.ai.agent.conversations.pii:
+  mode: MASK            # MASK (default) | REMOVE (drop the whole message) | OFF
+  types: [EMAIL, PHONE, CREDIT_CARD, IBAN, US_SSN, IPV4]   # default: all but IPV4
+  custom-patterns:
+    EMPLOYEE_ID: 'E-\d{6}'
+```
+
+This changes what is stored, not the current turn's prompt. Names and free-form addresses are not detected by the
+built-in patterns: declare your own `PiiDetector` bean (a DLP service, a name recogniser) to cover them.

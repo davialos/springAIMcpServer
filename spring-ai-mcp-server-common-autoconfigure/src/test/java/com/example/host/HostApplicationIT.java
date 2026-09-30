@@ -160,6 +160,8 @@ class HostApplicationIT {
         props.put("spring.jpa.hibernate.ddl-auto", "create");
         props.put("dynamic.ai.agent.write.enabled", "true");
         props.put("dynamic.ai.agent.mcp.enabled", "true");
+        props.put("dynamic.ai.agent.conversations.enabled", "true");
+        props.put("dynamic.ai.agent.conversations.pii.custom-patterns.EMPLOYEE_ID", "E-\\d{6}");
         props.put("dynamic.ai.agent.security.api-keys.enabled", "true");
         props.put("dynamic.ai.agent.security.api-keys.pepper",
                 java.util.Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef".getBytes()));
@@ -691,5 +693,35 @@ class HostApplicationIT {
 
         call("DELETE", keys + "/" + issued.get("id").asString(), "admin", null, 204);
         assertThat(mcpWithKey(apiKey, ws, list).getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void personalDataIsMaskedInWhatIsStoredButTheModelStillGetsTheQuestion() throws Exception {
+        String ws = workspaceWithTeam("pii-ws");
+        String agent = publish(ws, "AGENT", "pii-agent", JSON.writeValueAsString(Map.of(
+                "displayName", "Echo", "systemPrompt", "You help.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("carol"), "role", "CONSUMER"), 201);
+        grant(ws, "carol", "agent:invoke", agent);
+        var answer = call("POST", "/dynamic-ai/api/agents/pii-agent/chat", "carol", Map.of("message",
+                "Email jane.doe@example.com, card 4111 1111 1111 1111, employee E-123456"), 200);
+        String conversation = answer.get("conversationId").asString();
+
+        // the transcript is written by a background writer, a moment after the answer
+        String transcript = "[]";
+        for (int attempt = 0; attempt < 50 && transcript.length() < 10; attempt++) {
+            transcript = call("GET", "/dynamic-ai/api/conversations/" + conversation + "/messages", "carol", null, 200)
+                    .toString();
+            if (transcript.length() < 10) {
+                Thread.sleep(100);
+            }
+        }
+        assertThat(transcript).contains("[EMAIL]").contains("[CREDIT_CARD]").contains("[EMPLOYEE_ID]")
+                .doesNotContain("jane.doe").doesNotContain("4111").doesNotContain("E-123456");
+        // the model's chat memory is stored through the same redactor
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class));
+        assertThat(jdbc.queryForList("select content from dynamic_ai.dai_chat_memory_message").toString())
+                .doesNotContain("jane.doe").doesNotContain("4111");
     }
 }

@@ -54,4 +54,34 @@ class MessageRedactorTest {
         assertThatThrownBy(() -> new MessageRedactor(new SecretScanner(), 10))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void personalDataIsMaskedByLabelOrTheWholeMessageIsRemovedOrNothingHappens() {
+        var detector = com.springaimcpservercommon.core.lint.RegexPiiDetector.defaults();
+        String text = "Contact jane@example.com about card 4111 1111 1111 1111 please";
+
+        var masked = new MessageRedactor(new SecretScanner(), 300, detector, DaiPiiProperties.Mode.MASK).apply(text);
+        assertThat(masked.content()).isEqualTo("Contact [EMAIL] about card [CREDIT_CARD] please");
+        assertThat(masked.redacted()).isTrue();
+
+        var removed = new MessageRedactor(new SecretScanner(), 300, detector, DaiPiiProperties.Mode.REMOVE).apply(text);
+        assertThat(removed.content()).isEqualTo(MessageRedactor.REMOVED_PII).doesNotContain("jane");
+
+        var off = new MessageRedactor(new SecretScanner(), 300, detector, DaiPiiProperties.Mode.OFF).apply(text);
+        assertThat(off.content()).isEqualTo(text);
+        assertThat(off.redacted()).isFalse();
+
+        var clean = new MessageRedactor(new SecretScanner(), 300, detector, DaiPiiProperties.Mode.MASK)
+                .apply("Show me the open orders");
+        assertThat(clean.redacted()).isFalse();
+    }
+
+    @Test
+    void aDetectorThatFailsNeverLetsThePersonalDataThrough() {
+        var broken = new MessageRedactor(new SecretScanner(), 300, t -> {
+            throw new IllegalStateException("model down");
+        }, DaiPiiProperties.Mode.MASK).apply("call me on +44 20 7946 0958");
+        assertThat(broken.content()).isEqualTo(MessageRedactor.REMOVED_PII);
+        assertThat(broken.redacted()).isTrue();
+    }
 }

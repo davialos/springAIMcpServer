@@ -1,9 +1,11 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.core.lint.PiiDetector;
 import com.springaimcpservercommon.core.lint.SecretScanner;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -12,8 +14,9 @@ import java.util.Objects;
  * <p>A message that contains a credential (private key, cloud or API token, JWT, URL with credentials, password
  * assignment; the {@link SecretScanner} defaults) is <em>replaced</em> by a placeholder and flagged
  * {@code redacted}, because masking only the matched part of free text is not reliable; the credential never
- * reaches the store. Longer messages are cut at the storage limit. Configurable PII detectors (F-76) are not
- * implemented yet (OQ-44).
+ * reaches the store. Personal data found by the {@link PiiDetector} is masked (each match replaced by its label,
+ * for example {@code [EMAIL]}) or the whole message is replaced, per {@link DaiPiiProperties.Mode} (F-76, OQ-44).
+ * Longer messages are cut at the storage limit.
  */
 @NullMarked
 final class MessageRedactor {
@@ -27,14 +30,25 @@ final class MessageRedactor {
      * A message ready to store.
      *
      * @param content  the text to store
-     * @param redacted whether the original was replaced because it contained a credential
+     * @param redacted whether the original was replaced or masked because it contained a credential or personal data
      */
     record Redacted(String content, boolean redacted) {}
 
+    /** Placeholder stored instead of a message that contained personal data, in {@code REMOVE} mode. */
+    static final String REMOVED_PII = "[message removed: it contained personal data]";
+
     private final SecretScanner scanner;
     private final int maxChars;
+    private final PiiDetector pii;
+    private final DaiPiiProperties.Mode piiMode;
 
     MessageRedactor(SecretScanner scanner, int maxChars) {
+        this(scanner, maxChars, PiiDetector.NONE, DaiPiiProperties.Mode.OFF);
+    }
+
+    MessageRedactor(SecretScanner scanner, int maxChars, PiiDetector pii, DaiPiiProperties.Mode piiMode) {
+        this.pii = Objects.requireNonNull(pii, "pii");
+        this.piiMode = Objects.requireNonNull(piiMode, "piiMode");
         this.scanner = Objects.requireNonNull(scanner, "scanner");
         if (maxChars < 100) {
             throw new IllegalArgumentException("maxChars must be at least 100");
@@ -52,10 +66,33 @@ final class MessageRedactor {
         if (scanner.findSecret(text).isPresent()) {
             return new Redacted(REMOVED, true);
         }
-        if (text.length() > maxChars) {
-            return new Redacted(text.substring(0, maxChars - TRUNCATED.length()) + TRUNCATED, false);
+        boolean masked = false;
+        if (piiMode != DaiPiiProperties.Mode.OFF) {
+            List<PiiDetector.Match> matches;
+            try {
+                matches = pii.find(text);
+            } catch (RuntimeException e) {
+                // a detector that fails must not let personal data through: keep nothing of this message
+                return new Redacted(REMOVED_PII, true);
+            }
+            if (!matches.isEmpty()) {
+                if (piiMode == DaiPiiProperties.Mode.REMOVE) {
+                    return new Redacted(REMOVED_PII, true);
+                }
+                StringBuilder out = new StringBuilder(text.length());
+                int from = 0;
+                for (PiiDetector.Match m : matches) {
+                    out.append(text, from, m.start()).append('[').append(m.label()).append(']');
+                    from = m.end();
+                }
+                text = out.append(text, from, text.length()).toString();
+                masked = true;
+            }
         }
-        return new Redacted(text, false);
+        if (text.length() > maxChars) {
+            return new Redacted(text.substring(0, maxChars - TRUNCATED.length()) + TRUNCATED, masked);
+        }
+        return new Redacted(text, masked);
     }
 
     /**

@@ -14,7 +14,10 @@ Requires JDK 25 and Maven 3.9.6+ (a Maven wrapper will be added with `mvn -N wra
 ```
 mvn test              # unit tests
 mvn verify            # + *IT Testcontainers integration tests (needs Docker)
+scripts/build-offline.sh   # same, with no network: dependencies come from ./offline-repo
 ```
+
+See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency repository.
 
 ## Modules
 

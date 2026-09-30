@@ -45,3 +45,6 @@ scripts/
 # Dependency bundle — large, not needed in the Docker build context
 dist/
 
+
+# Vendored dependency repository (not needed inside the image build context)
+offline-repo/

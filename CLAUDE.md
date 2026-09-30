@@ -9,9 +9,12 @@ configured at runtime from an admin control plane and governed by the host's exi
 
 - Design docs (`docs/`) are the specification. Implement against them; if code must deviate, update the
   LLD/ADR in the same commit and say why in the commit body.
-- **Do not run Maven builds yet** (product owner decision 2026-09-28): Maven/Docker are not installed on the
-  dev machine. Write code and tests so that they compile and pass once run; keep APIs verified against the
-  versions below (check docs.spring.io / javadoc when unsure — never guess an API).
+- **Builds are allowed** (product owner decision 2026-09-30, superseding 2026-09-28): the reactor compiles and its
+  unit + Testcontainers integration tests pass on JDK 25 (`openjdk-25-jdk-headless`) + Maven 3.9.x. Keep APIs
+  verified against the versions below — when unsure, `javap` the resolved jar rather than guessing.
+- **Offline build:** every dependency and Maven plugin is vendored in `offline-repo/`; run
+  `scripts/build-offline.sh [-DskipITs]` (docs/offline-build.md). When a pom change adds or upgrades a dependency,
+  refresh the repo in the same commit (procedure in that doc).
 - Unresolved items go to `docs/open-questions.md` — never silently assume.
 
 ## Baseline (verified 2026-09-28, see docs/research/spring-ai-2-notes.md)

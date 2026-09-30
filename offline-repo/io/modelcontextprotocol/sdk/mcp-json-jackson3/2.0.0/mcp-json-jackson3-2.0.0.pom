@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.modelcontextprotocol.sdk</groupId>
+  <artifactId>mcp-json-jackson3</artifactId>
+  <version>2.0.0</version>
+  <name>Java MCP SDK JSON Jackson 3</name>
+  <description>Java MCP SDK JSON implementation based on Jackson 3</description>
+  <url>https://github.com/modelcontextprotocol/java-sdk</url>
+  <organization>
+    <name>Anthropic</name>
+    <url>https://www.anthropic.com</url>
+  </organization>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://www.opensource.org/licenses/mit-license.php</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <name>Christian Tzolov</name>
+    </developer>
+    <developer>
+      <name>Dariusz Jędrzejczyk</name>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git://github.com/modelcontextprotocol/java-sdk.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/modelcontextprotocol/java-sdk.git</developerConnection>
+    <url>https://github.com/modelcontextprotocol/java-sdk</url>
+  </scm>
+  <dependencies>
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp-core</artifactId>
+      <version>2.0.0</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>3.0.3</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.networknt</groupId>
+      <artifactId>json-schema-validator</artifactId>
+      <version>3.0.0</version>
+      <scope>compile</scope>
+    </dependency>
+  </dependencies>
+</project>

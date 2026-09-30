@@ -16,8 +16,6 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -70,18 +68,56 @@ class HostApplicationIT {
         }
 
         @Bean
-        InMemoryUserDetailsManager users() {
-            return new InMemoryUserDetailsManager(
-                    User.withUsername("alice").password("{noop}pw").roles("USER").build(),
-                    User.withUsername("admin").password("{noop}pw").roles("ADMIN").build());
+        org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder() throws com.nimbusds.jose.JOSEException {
+            return org.springframework.security.oauth2.jwt.NimbusJwtDecoder.withPublicKey(KEY.toRSAPublicKey())
+                    .build();
         }
 
+        /** The host's own chain: everything authenticated, bearer tokens, Spring's default CSRF. */
         @Bean
         SecurityFilterChain hostChain(HttpSecurity http) throws Exception {
             return http.authorizeHttpRequests(a -> a.anyRequest().authenticated())
-                    .httpBasic(Customizer.withDefaults())
+                    .oauth2ResourceServer(rs -> rs.jwt(Customizer.withDefaults()))
                     .build();
         }
+
+        /** One host endpoint, to prove the library's chains leave the host's protection alone. */
+        @org.springframework.web.bind.annotation.RestController
+        static class HostEndpoint {
+            @org.springframework.web.bind.annotation.GetMapping("/host/ping")
+            String ping() {
+                return "pong";
+            }
+        }
+    }
+
+    private static final com.nimbusds.jose.jwk.RSAKey KEY;
+
+    static {
+        try {
+            KEY = new com.nimbusds.jose.jwk.gen.RSAKeyGenerator(2048).keyID("test").generate();
+        } catch (com.nimbusds.jose.JOSEException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** A token as the host's IdP would issue it. */
+    private static String token(String subject, String scope) {
+        try {
+            var claims = new com.nimbusds.jwt.JWTClaimsSet.Builder().subject(subject).issuer("https://idp.test")
+                    .claim("scope", scope).expirationTime(new java.util.Date(System.currentTimeMillis() + 600_000))
+                    .build();
+            var jwt = new com.nimbusds.jwt.SignedJWT(new com.nimbusds.jose.JWSHeader.Builder(
+                    com.nimbusds.jose.JWSAlgorithm.RS256).keyID("test").build(), claims);
+            jwt.sign(new com.nimbusds.jose.crypto.RSASSASigner(KEY));
+            return "Bearer " + jwt.serialize();
+        } catch (com.nimbusds.jose.JOSEException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String bearer(String user) {
+        return user.startsWith("admin") ? token(user, "openid dai.admin") : token(user, "openid");
     }
 
     @BeforeAll
@@ -95,7 +131,7 @@ class HostApplicationIT {
                 "dynamic.ai.agent.environment.tier", "DEV",
                 "dynamic.ai.agent.environment.application-name", "host-it",
                 "dynamic.ai.agent.security.static-role-mappings[0].source", "AUTHORITY",
-                "dynamic.ai.agent.security.static-role-mappings[0].match-value", "ROLE_ADMIN",
+                "dynamic.ai.agent.security.static-role-mappings[0].match-value", "SCOPE_dai.admin",
                 "dynamic.ai.agent.security.static-role-mappings[0].role", "PLATFORM_ADMIN"));
         app.setWebApplicationType(org.springframework.boot.WebApplicationType.SERVLET);
         // a mock servlet environment, as @SpringBootTest uses: no embedded server needed
@@ -131,10 +167,6 @@ class HostApplicationIT {
         POSTGRES.stop();
     }
 
-    private static String basic(String user) {
-        return "Basic " + java.util.Base64.getEncoder().encodeToString((user + ":pw").getBytes());
-    }
-
     @Test
     void theStoreIsMigratedInTheHostsDatabase() {
         assertThat(context.getBeanNamesForType(com.springaimcpservercommon.persistence.unit.DaiStore.class))
@@ -143,13 +175,106 @@ class HostApplicationIT {
 
     @Test
     void theAdminApiAnswersAnAuthenticatedCaller() throws Exception {
-        String me = mvc.perform(get("/dynamic-ai/admin/api/v1/me").header("Authorization", basic("admin")))
+        String me = mvc.perform(get("/dynamic-ai/admin/api/v1/me").header("Authorization", bearer("admin")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(me).contains("admin");
+        assertThat(me).contains("PLATFORM_ADMIN");
     }
 
     @Test
-    void anAnonymousCallerIsRefused() throws Exception {
+    void anAnonymousCallerIsRefusedWithABearerChallengeOnEveryPlane() throws Exception {
         mvc.perform(get("/dynamic-ai/admin/api/v1/me")).andExpect(status().isUnauthorized());
+        var api = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/dynamic-ai/api/agents/helper/chat").contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized()).andReturn().getResponse();
+        assertThat(api.getHeader("WWW-Authenticate")).startsWith("Bearer");
+    }
+
+    @Test
+    void theHostsOwnEndpointsKeepTheHostsProtection() throws Exception {
+        mvc.perform(get("/host/ping")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/host/ping").header("Authorization", bearer("alice"))).andExpect(status().isOk());
+        // the host's chain, not ours, still applies CSRF to the host's own state-changing requests
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/host/ping")
+                .with(r -> { r.setRemoteUser(null); return r; })).andExpect(status().is4xxClientError());
+    }
+
+    @Test
+    void theLibrarysChainsAreRegisteredAfterTheHosts() {
+        assertThat(context.getBeanNamesForType(SecurityFilterChain.class))
+                .contains("hostChain", "daiAdminSecurityFilterChain", "daiMcpSecurityFilterChain",
+                        "daiApiSecurityFilterChain");
+    }
+
+    // ─── the product flow, over HTTP only ─────────────────────────────────────────────────────────────────
+
+    private static final tools.jackson.databind.json.JsonMapper JSON = tools.jackson.databind.json.JsonMapper.builder()
+            .build();
+
+    /** Performs a call; returns the response, failing with the body when the status is not the expected one. */
+    private static tools.jackson.databind.JsonNode call(String method, String path, String user, Object body,
+                                                          int expected) throws Exception {
+        return call(method, path, user, body, expected, null);
+    }
+
+    /** Same, with {@code If-Match} (the API's optimistic concurrency on state transitions). */
+    private static tools.jackson.databind.JsonNode call(String method, String path, String user, Object body,
+                                                          int expected, Long rowVersion) throws Exception {
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .request(org.springframework.http.HttpMethod.valueOf(method), path)
+                .header("Authorization", bearer(user));
+        if (rowVersion != null) {
+            request.header("If-Match", "\"" + rowVersion + "\"");
+        }
+        if (body != null) {
+            request.contentType("application/json").content(JSON.writeValueAsString(body));
+        }
+        var response = mvc.perform(request).andReturn().getResponse();
+        String text = response.getContentAsString();
+        assertThat(response.getStatus()).as("%s %s as %s -> %s", method, path, user, text).isEqualTo(expected);
+        return text.isBlank() ? JSON.nullNode() : JSON.readTree(text);
+    }
+
+    @Test
+    void anAgentIsAuthoredApprovedPublishedAndThenAnswersAUser() throws Exception {
+        var workspace = call("POST", "/dynamic-ai/admin/api/v1/workspaces", "admin",
+                Map.of("slug", "support", "name", "Support"), 201);
+        String ws = workspace.get("id").asString();
+        // platform admins run the platform; authoring is a workspace role (segregation of duties)
+        String author = call("GET", "/dynamic-ai/admin/api/v1/me", "admin", null, 200)
+                .get("principal").get("principalId").asString();
+        String reviewer = call("GET", "/dynamic-ai/admin/api/v1/me", "admin2", null, 200)
+                .get("principal").get("principalId").asString();
+        String members = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members";
+        call("POST", members, "admin", Map.of("principalId", author, "role", "AUTHOR"), 201);
+        // the author may also approve in general, just never their own revision
+        call("POST", members, "admin", Map.of("principalId", author, "role", "APPROVER"), 201);
+        call("POST", members, "admin", Map.of("principalId", reviewer, "role", "APPROVER"), 201);
+
+        String spec = "{\"displayName\":\"Helper\",\"systemPrompt\":\"You help.\","
+                + "\"model\":{\"providerId\":\"openai\",\"modelName\":\"scripted\"}}";
+        var created = call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/resources", "admin",
+                Map.of("kind", "AGENT", "slug", "helper", "specJson", spec, "changeSummary", "first"), 201);
+        String resource = created.get("resourceId").asString();
+        String revision = created.get("id").asString();
+        String base = "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/resources/" + resource + "/revisions/" + revision;
+
+        long version = created.get("rowVersion").asLong();
+        version = call("POST", base + ":submit", "admin", Map.of(), 200, version).get("rowVersion").asLong();
+        var self = call("POST", base + ":approve", "admin", Map.of("comment", "self"), 403, version);
+        assertThat(self.get("detail").asString()).contains("Separation of duties");
+        version = call("POST", base + ":approve", "admin2", Map.of("comment", "ok"), 200, version)
+                .get("rowVersion").asLong();
+        call("POST", base + ":publish", "admin", Map.of(), 200, version);
+
+        String alice = call("GET", "/dynamic-ai/admin/api/v1/me", "alice", null, 200)
+                .get("principal").get("principalId").asString();
+        call("POST", members, "admin", Map.of("principalId", alice, "role", "CONSUMER"), 201);
+        // default deny: consumers hold nothing until granted
+        call("POST", "/dynamic-ai/api/agents/helper/chat", "alice", Map.of("message", "hi"), 403);
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/grants", "admin", Map.of("principalId", alice,
+                "permission", "agent:invoke", "targetType", "RESOURCE", "resourceId", resource), 201);
+
+        var answer = call("POST", "/dynamic-ai/api/agents/helper/chat", "alice", Map.of("message", "hi"), 200);
+        assertThat(answer.toString()).contains("Hello from the model");
     }
 }

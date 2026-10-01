@@ -9,6 +9,8 @@
 | Related ADRs | ADR-0015 |
 | Input | Product-owner design note "Streaming AI responses & MCP best practices" (2026-09-28) — evaluated in §10 |
 
+> **Superseded in part by [LLD-16](16-chat-ui-protocol.md):** the event contract of §3 evolves into `dai-stream/2` (surfaces, interrupts, `interaction.end`, `state.snapshot`), and §7 resumption becomes cross-node in LLD-16 §8.5. The transport rules (§2, §4–§6, §8) stand.
+
 ## 1. Purpose & responsibilities
 Deliver agent turns as a live stream of typed events (text deltas, tool activity, UI-component
 payloads, proposals, usage, errors) over Server-Sent Events, with correct completion, cancellation,

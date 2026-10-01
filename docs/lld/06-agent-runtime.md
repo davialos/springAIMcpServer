@@ -60,6 +60,7 @@ every model call passes the provider rate governor (LLD-14 §4).
 |----------|---------|
 | `POST {base}/api/agents/{slug}/chat` | Sync turn → `{conversationId, message, toolCalls[], usage}` |
 | `POST {base}/api/agents/{slug}/chat/stream` | SSE stream — event contract, completion, heartbeat, cancellation and errors in **LLD-13** |
+| `POST {base}/api/agents/{slug}/interactions` | Canonical input for messages, answers, actions and cancel; JSON UI surfaces and interrupts — **LLD-16** (the two chat endpoints above remain as aliases) |
 | `{base}/api/proposals/**` | Review/edit/confirm/reject change proposals (LLD-11 §8) |
 | `GET/DELETE {base}/api/agents/{slug}/conversations/{id}` | History (own only) / erase (right to be forgotten) |
 

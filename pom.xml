@@ -29,6 +29,7 @@
         <module>spring-ai-mcp-server-common-webmvc</module>
         <module>spring-ai-mcp-server-common-autoconfigure</module>
         <module>spring-ai-mcp-server-common-spring-boot-starter</module>
+        <module>spring-ai-mcp-server-common-loadtest</module>
         <!-- Developer tool, not part of the starter: JFR recording analyzer (docs/tools/jfr-analyzer.md) -->
         <module>spring-ai-mcp-server-common-jfr-analyzer</module>
     </modules>

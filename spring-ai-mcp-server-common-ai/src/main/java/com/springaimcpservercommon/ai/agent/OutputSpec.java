@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.ai.agent;
 
+import com.springaimcpservercommon.core.display.DisplayTemplate;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
@@ -9,8 +10,10 @@ import java.util.Objects;
  *
  * @param mode       output mode
  * @param jsonSchema JSON Schema string when mode is {@link Mode#JSON_SCHEMA}; {@code null} otherwise
+ * @param display    backend-controlled layout of the answer shown to users (LLD-06 §8.3); {@code null} = automatic
+ *                   layout
  */
-public record OutputSpec(Mode mode, @Nullable String jsonSchema) {
+public record OutputSpec(Mode mode, @Nullable String jsonSchema, @Nullable DisplayTemplate display) {
 
     /** Free-form text response. */
     public static final OutputSpec TEXT = new OutputSpec(Mode.TEXT, null);
@@ -32,5 +35,15 @@ public record OutputSpec(Mode mode, @Nullable String jsonSchema) {
                 throw new IllegalArgumentException("jsonSchema must not be blank for JSON_SCHEMA mode");
             }
         }
+    }
+
+    /**
+     * Output specification with the automatic display layout.
+     *
+     * @param mode       output mode
+     * @param jsonSchema JSON Schema string when mode is {@link Mode#JSON_SCHEMA}; {@code null} otherwise
+     */
+    public OutputSpec(Mode mode, @Nullable String jsonSchema) {
+        this(mode, jsonSchema, null);
     }
 }

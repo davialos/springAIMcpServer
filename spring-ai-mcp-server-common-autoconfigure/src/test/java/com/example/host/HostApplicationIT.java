@@ -780,8 +780,12 @@ class HostApplicationIT {
         // the transcript is written by a background writer, a moment after the answer
         String transcript = "[]";
         for (int attempt = 0; attempt < 50 && transcript.length() < 10; attempt++) {
-            transcript = call("GET", "/dynamic-ai/api/conversations/" + conversation + "/messages", "carol", null, 200)
-                    .toString();
+            try {
+                transcript = call("GET", "/dynamic-ai/api/conversations/" + conversation + "/messages", "carol", null,
+                        200).toString();
+            } catch (AssertionError notWrittenYet) {
+                transcript = "[]"; // 404 until the background writer has created the conversation
+            }
             if (transcript.length() < 10) {
                 Thread.sleep(100);
             }

@@ -816,6 +816,27 @@ public class DaiPersistenceAutoConfiguration {
     }
 
     /**
+     * Delegates for {@code criteria} tool bindings (LLD-05 §12): describe the data model, check and run a read query
+     * the model builds itself, over entities the catalog exposes to AI, as the caller, through the same validator and
+     * {@link QueryExecutor} as published queries. Off with {@code dynamic.ai.agent.query.ai-criteria=false}; each tool
+     * still needs a published binding and a grant.
+     *
+     * @param executors the query executor (absent when the host has no JPA: describe and check still work)
+     * @param props     framework properties
+     * @return the factory
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.CriteriaCallbackFactory.class)
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.query", name = "ai-criteria", havingValue = "true", matchIfMissing = true)
+    ToolBridge.CriteriaCallbackFactory criteriaCallbackFactory(
+            org.springframework.beans.factory.ObjectProvider<QueryExecutor> executors, DaiProperties props) {
+        var engine = new com.springaimcpservercommon.query.adhoc.CriteriaQueryEngine();
+        return (source, binding, principal, catalog) -> new CriteriaToolCallback(source, binding, principal, catalog,
+                engine, executors.getIfAvailable());
+    }
+
+    /**
      * Background maintenance of this node (OQ-46): partition maintenance and retention on the cron, node heartbeat
      * with the applied generation, snapshot polling, stale-approval expiry, silent-node pruning and reconciliation
      * of proposals stuck in APPLYING. Off with {@code dynamic.ai.agent.store.maintenance.enabled=false}.

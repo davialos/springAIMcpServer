@@ -28,7 +28,12 @@ import java.util.UUID;
  *   "source": {"kind": "operation", "ref": "op:com.acme.OrderService#find(java.lang.String)"}
  *          | {"kind": "query", "ref": "<query resource uuid>"}
  *          | {"kind": "agent", "ref": "<agent resource uuid>"}
- *          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"},
+ *          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"}
+ *          | {"kind": "criteria", "tool": "describe" | "validate" | "execute",   // model-built queries, LLD-05 §12
+ *             "entities": ["Order", "entity:com.acme.Customer"],               // optional allow-list; default all
+ *             "maxRows": 50},                                                  // optional, default 50
+ *                                                     // toolName defaults to describe_data_model,
+ *                                                     // check_data_query or run_data_query
  *   "writeMode": "EXECUTE" | "PROPOSE",              // default EXECUTE (a read tool)
  *   "change": "create" | "update" | "delete",        // what a PROPOSE tool does; default update, delete needs an approver
  *   "entityIdArgument": "orderId",                   // the argument holding the changed record's id (update/delete)
@@ -60,12 +65,19 @@ final class ToolBindingSpecs {
             throw new IllegalArgumentException("tool binding spec is not valid JSON");
         }
         Map<String, Object> spec = object(root, "spec");
-        String toolName = string(spec.get("toolName"), "toolName");
+        // criteria tools have well-known default names; every other binding names its tool
+        boolean criteriaSource = spec.get("source") instanceof Map<?, ?> src && src.get("kind") instanceof String k
+                && k.equalsIgnoreCase("criteria");
+        String toolName = spec.get("toolName") == null && criteriaSource ? null
+                : string(spec.get("toolName"), "toolName");
+        ToolSource source = source(object(spec.get("source"), "source"));
+        if (toolName == null) {
+            toolName = CriteriaToolCallback.defaultToolName(((ToolSource.CriteriaSource) source).tool());
+        }
         WriteMode mode = spec.get("writeMode") == null ? WriteMode.EXECUTE
                 : parseEnum(WriteMode.class, spec.get("writeMode"), "writeMode");
         Object description = spec.get("description");
         Map<String, Object> result = spec.get("result") == null ? Map.of() : object(spec.get("result"), "result");
-        ToolSource source = source(object(spec.get("source"), "source"));
         if (mode == WriteMode.PROPOSE && !(source instanceof ToolSource.OperationSource)) {
             throw new IllegalArgumentException("writeMode PROPOSE needs an operation source");
         }
@@ -92,6 +104,10 @@ final class ToolBindingSpecs {
             case "agent" -> new ToolSource.AgentSource(uuid(source.get("ref"), "source.ref"));
             case "mcp" -> new ToolSource.McpSource(uuid(source.get("serverId"), "source.serverId"),
                     string(source.get("remoteTool"), "source.remoteTool"));
+            case "criteria" -> new ToolSource.CriteriaSource(
+                    parseEnum(ToolSource.CriteriaTool.class, source.get("tool"), "source.tool"),
+                    strings(source.get("entities"), "source.entities"),
+                    (int) bounded(source.get("maxRows"), 50, 1, 1000, "source.maxRows"));
             default -> throw new IllegalArgumentException("unknown source kind");
         };
     }
@@ -129,6 +145,20 @@ final class ToolBindingSpecs {
             return s;
         }
         throw new IllegalArgumentException(field + " must be a non-empty string");
+    }
+
+    private static java.util.Set<String> strings(@Nullable Object value, String field) {
+        if (value == null) {
+            return java.util.Set.of();
+        }
+        if (!(value instanceof java.util.List<?> list)) {
+            throw new IllegalArgumentException(field + " must be a list of names");
+        }
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (Object item : list) {
+            out.add(string(item, field));
+        }
+        return out;
     }
 
     private static UUID uuid(@Nullable Object value, String field) {

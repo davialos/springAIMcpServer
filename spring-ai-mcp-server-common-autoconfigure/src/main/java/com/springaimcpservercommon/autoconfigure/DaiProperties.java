@@ -385,10 +385,13 @@ public record DaiProperties(
      *
      * @param maxConcurrency maximum concurrent JPA queries per node (bulkhead size)
      * @param timeout        maximum query execution time before the bulkhead times out
+     * @param aiCriteria     whether {@code criteria} tool bindings work (model-built read queries, LLD-05 §12); they
+     *                       still need a published binding and a grant, like every tool. {@code false} skips them all
      */
     public record Query(
             @DefaultValue("20") int maxConcurrency,
-            @DefaultValue("30s") Duration timeout) {}
+            @DefaultValue("30s") Duration timeout,
+            @DefaultValue("true") boolean aiCriteria) {}
 
     /**
      * {@code @Ai*} annotation scan settings ({@code dynamic.ai.agent.scan.*}).

@@ -787,6 +787,37 @@ Every row of that entity returned by a query (to an agent or an MCP client) carr
 the column means. The column keeps all its rules: sensitive, disabled and above-clearance columns are never delivered,
 and the text is cut at `maxChars`. The AI is told the notes are information, never instructions.
 
+## Letting the AI build its own read queries (criteria tools)
+
+Instead of authoring one query per question, give an agent three tools and it writes the query itself, as JPA
+Criteria over the entities you annotated, running as the user who asked (LLD-05 §12). Publish three tool bindings
+in a workspace; the tool names default to `describe_data_model`, `check_data_query` and `run_data_query`:
+
+```json
+{"source": {"kind": "criteria", "tool": "describe", "entities": ["Order", "Customer"]}}
+{"source": {"kind": "criteria", "tool": "validate", "entities": ["Order", "Customer"]}}
+{"source": {"kind": "criteria", "tool": "execute",  "entities": ["Order", "Customer"], "maxRows": 50}}
+```
+
+Add the bindings to an agent's `tools` (or set `"mcpExposed": true` for MCP clients) and grant `tool:invoke` on each,
+like any tool. Granting `describe` and `validate` without `execute` lets the AI draft and explain queries without
+reading data. The model then works in a loop: describe the entity → build a request such as
+
+```json
+{"entity": "Order", "select": ["id", "status", "customer.name"],
+ "where": {"all": [{"path": "customerId", "op": "EQ", "principal": "customerId"},
+                   {"path": "status", "op": "IN", "value": ["OPEN", "SHIPPED"]}]},
+ "orderBy": [{"path": "id", "direction": "desc"}], "limit": 20}
+```
+
+→ check it (problems come back with their location, e.g. `where.all[1].value: 'LOST' is not one of [OPEN, SHIPPED]`)
+→ run it and page with `nextCursor`. What it can reach is what your annotations allow: only `@AiContext` entities
+that are enabled, never `sensitive` columns, never columns above the user's clearance, only relations to entities that
+are exposed too, and an entity's `@AiQueryConstraints` mandatory filters must be bound to the user's own attributes
+(`"principal"`), so the AI cannot ask for another tenant's rows. Leave `entities` empty to allow every exposed entity;
+a name the catalog does not expose is refused when the binding is saved. Turn the feature off everywhere with
+`dynamic.ai.agent.query.ai-criteria=false`.
+
 ## API keys for machine clients (service accounts)
 
 ```yaml

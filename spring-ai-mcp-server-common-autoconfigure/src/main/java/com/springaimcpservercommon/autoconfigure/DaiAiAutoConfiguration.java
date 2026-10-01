@@ -244,6 +244,7 @@ public class DaiAiAutoConfiguration {
      * @param operationFactory     builds operation-backed callbacks
      * @param queryFactory         builds query-backed callbacks
      * @param agentFactoryProvider optional sub-agent callback factory
+     * @param criteriaFactoryProvider optional factory of the model-built query tools (LLD-05 §12)
      * @param permissionChecker    runtime per-call permission check
      * @param proposalService      creates ChangeProposal records for PROPOSE-mode tools
      * @param toolCallRecorder     receives one record per tool call
@@ -259,12 +260,13 @@ public class DaiAiAutoConfiguration {
                                   ToolBridge.OperationCallbackFactory operationFactory,
                                   ToolBridge.QueryCallbackFactory queryFactory,
                                   ObjectProvider<ToolBridge.AgentCallbackFactory> agentFactoryProvider,
+                                  ObjectProvider<ToolBridge.CriteriaCallbackFactory> criteriaFactoryProvider,
                                   SecuredToolCallback.ToolPermissionChecker permissionChecker,
                                   ProposalService proposalService,
                                   ToolCallRecorder toolCallRecorder,
                                   ObjectProvider<ObservationRegistry> observationRegistry) {
         return new ToolBridge(bindingLoader, operationFactory, queryFactory,
-                agentFactoryProvider.getIfAvailable(),
+                agentFactoryProvider.getIfAvailable(), criteriaFactoryProvider.getIfAvailable(),
                 permissionChecker, proposalService, toolCallRecorder, java.time.Clock.systemUTC(),
                 observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }

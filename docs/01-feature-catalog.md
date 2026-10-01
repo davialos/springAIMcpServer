@@ -65,6 +65,7 @@ Owner: control-plane-designer · Status: Draft v1
 | F-33 | **Aggregations** (count, sum, avg, group by) | v1.x | |
 | F-34 | **Row-level security policies** (predicate templates bound to principal attributes) | MVP | Policy applied to every query, including agent-invoked ones |
 | F-35 | **Named native SQL (admin-only, reviewed)** for reporting DBs | v2 | Four-eyes approval, read-only connection |
+| F-36 | **Model-built criteria queries** — agents describe the data model, build, check and run their own read queries as the caller (`describe_data_model`, `check_data_query`, `run_data_query`) | v1.0 | Implemented (LLD-05 §12): AI-exposed, non-sensitive, cleared columns only; typed values; mandatory filters bound to the caller; grants per tool |
 
 ### E. Agents (P4, P6)
 | ID | Feature | Tier | Acceptance criteria |

@@ -117,3 +117,56 @@ Timer `dynamic.ai.agent.query.executions{query,outcome}`, histogram rows returne
 ## 11. Test strategy
 Testcontainers PostgreSQL + MySQL; property-based tests (AST generator → compile → run →
 never throws SQL grammar errors, row policy always applied); injection corpus; explain-plan snapshots for sample queries.
+
+## 12. Model-built criteria queries (F-36)
+
+Published queries are authored by a person and reviewed; F-36 lets an **agent build its own read query** from a user's
+question, over the same AST, validator and Criteria executor. It is offered as three tools, bound like every other
+tool (a `TOOL_BINDING` with `"source": {"kind": "criteria", ...}`, LLD-07 §2), so grants, kill switches, the per-turn
+call limit, the read-only scope (ADR-0014), recording and MCP exposure apply unchanged.
+
+| Tool (default name) | `source.tool` | What it does |
+|---|---|---|
+| `describe_data_model` | `describe` | Entities the caller may query; for one entity its columns (type, meaning, operators, enum values, identifier), relations (to-many marked "filter only") and mandatory filters, plus the *names* of the caller's principal attributes |
+| `check_data_query` | `validate` | Checks a request and returns it explained in SQL-like form with the defaults filled in, or every problem with its location (`where.all[1].op: unknown operator 'EQUALS'; use one of …`). Reads no data |
+| `run_data_query` | `execute` | Checks, then runs as the caller; one page of rows with `hasMore`/`nextCursor`, the explained query in `applied.filters.query`, `_context` per row (`@AiRowContext`) |
+
+**Request format** (`query.adhoc.CriteriaQueryEngine`):
+
+```json
+{"entity": "Order",
+ "select": ["id", "status", "customer.name", {"path": "total", "as": "amount"}],
+ "where": {"all": [{"path": "customerId", "op": "EQ", "principal": "customerId"},
+                   {"path": "status", "op": "IN", "value": ["OPEN", "SHIPPED"]},
+                   {"any": [{"path": "total", "op": "GT", "value": 100},
+                            {"not": {"path": "notes", "op": "IS_NULL"}}]}]},
+ "orderBy": [{"path": "placedOn", "direction": "desc"}],
+ "limit": 20, "cursor": "<nextCursor>"}
+```
+
+**Rules — stricter than for authored queries, because nobody reviewed the request:**
+
+1. Only entities the catalog exposes (enabled, not above the caller's clearance) and allowed by the binding's
+   `entities` list; only attributes that are enabled, **not sensitive** and not above the caller's clearance — for
+   select, filter *and* sort; relations only to such entities, at most `max-join-depth` hops.
+2. Select and sort cannot cross a to-many relation; a filter can (the query becomes `DISTINCT`).
+3. Values are JSON literals **converted to the attribute's Java type** (numbers exact, `LocalDate`/`Instant`/… ISO-8601,
+   UUID, enum by name case-insensitively) or `"principal": "<attr>"` — the caller's own attribute, bound server-side;
+   nothing can bind another user's value. `null` is refused (use `IS_NULL`); `LIKE_PREFIX`/`CONTAINS_CI` take plain text.
+4. Operators are restricted by type (strings: comparisons, IN, LIKE_PREFIX, CONTAINS_CI; numbers and dates:
+   comparisons, IN, BETWEEN; booleans, UUIDs, enums: equality, IN).
+5. An entity's **mandatory filters** (`@AiQueryConstraints`) must be bound to a principal attribute with EQ/IN in the
+   top-level `all` group; a literal never satisfies them.
+6. Limits: 30 columns, 40 comparisons, nesting 6, page size `min(binding maxRows (default 50), entity maxLimit,
+   max-page-size)` — a larger `limit` is reduced with a warning. The identifier is appended to the sort so keyset
+   pages are stable; the query id is derived from the request, so a cursor continues the same query.
+7. The compiled `QueryDefinition` then passes `QueryValidator.validateAtPublish` (with the caller as author) and
+   `validateAtRuntime` (catalog fingerprint, mandatory filters, clearance) before it may run; execution uses the
+   `QueryExecutor` bean (bulkhead, timeout, read-only transaction).
+
+Failures the model sees: `invalid_query` (problems in `hints`), `unknown_entity`, `query_timeout`,
+`temporarily_unavailable` (bulkhead), `not_permitted` (no grant). Host exception text never reaches the model.
+`dynamic.ai.agent.query.ai-criteria=false` disables every criteria binding. Row policies are not applied to *any*
+query path yet (§5, same as published queries); mandatory filters are the enforced tenant boundary until they are.
+Aggregations (F-33) are not offered to models yet.
+

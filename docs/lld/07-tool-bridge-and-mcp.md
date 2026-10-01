@@ -17,7 +17,7 @@ Convert allow-listed host capabilities into Spring AI `ToolCallback`s that execu
 // design sketch
 public record ToolBinding(ResourceId id, int revision, WorkspaceId workspace,
         String toolName,                    // ^[a-z][a-z0-9_]{2,63}$, unique per agent
-        ToolSource source,                  // sealed: OperationSource(opRef) | QuerySource(queryId) | McpSource(serverId, remoteTool) | AgentSource(agentId, v2)
+        ToolSource source,                  // sealed: OperationSource(opRef) | QuerySource(queryId) | McpSource(serverId, remoteTool) | AgentSource(agentId, v2) | CriteriaSource(tool, entities, maxRows)
         String descriptionOverride,         // null ⇒ effective catalog description (@AiExposedAction.intent + policy layers)
         Map<String, ArgConstraint> argConstraints,  // e.g. customerId must equal principal.customerId, max ranges
         WriteMode writeMode,                // READ (execute) | PROPOSE; mutating sources are always PROPOSE (LLD-11), never direct write
@@ -34,7 +34,10 @@ public record ToolBinding(ResourceId id, int revision, WorkspaceId workspace,
   "source": {"kind": "operation", "ref": "op:com.acme.OrderService#find(java.lang.String)"}
           | {"kind": "query", "ref": "<query resource uuid>"}
           | {"kind": "agent", "ref": "<agent resource uuid>"}
-          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"},
+          | {"kind": "mcp", "serverId": "<uuid>", "remoteTool": "name"}
+          | {"kind": "criteria", "tool": "describe | validate | execute",   // model-built read queries, LLD-05 §12
+             "entities": ["Order"], "maxRows": 50},                       // toolName optional: describe_data_model,
+                                                                          // check_data_query, run_data_query
   "writeMode": "EXECUTE | PROPOSE",            // PROPOSE needs an operation source (LLD-11)
   "change": "create | update | delete",        // what a PROPOSE tool does; default update, delete needs an approver
   "entityIdArgument": "orderId",               // the argument holding the changed record's id (update/delete): enables the version check
@@ -45,7 +48,8 @@ public record ToolBinding(ResourceId id, int revision, WorkspaceId workspace,
   "result": {"maxChars": 0, "maskSensitive": true},
   "mcpExposed": false }
 ```
-`mcp` sources are parsed but not yet executed (the remote-MCP client is v1.x, §6). Argument constraints are enforced
+`criteria` sources are always read tools (PROPOSE is refused); their `entities` list is checked against the catalog
+when the binding is saved. `mcp` sources are parsed but not yet executed (the remote-MCP client is v1.x, §6). Argument constraints are enforced
 by `SecuredToolCallback` (`ArgConstraints`): `principalAttr` and `literal` overwrite what the model sent, a missing
 caller attribute refuses the call, a `range` violation refuses it. A binding whose spec does not parse is skipped
 with a warning; the others keep working.

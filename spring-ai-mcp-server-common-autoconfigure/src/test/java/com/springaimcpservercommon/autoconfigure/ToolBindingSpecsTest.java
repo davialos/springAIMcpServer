@@ -71,6 +71,26 @@ class ToolBindingSpecsTest {
     }
 
     @Test
+    void criteriaSourcesGetDefaultNamesAndLimits() {
+        ToolBinding run = ToolBindingSpecs.parse(resource("""
+                {"source":{"kind":"criteria","tool":"execute","entities":["Order"],"maxRows":10}}"""));
+        assertThat(run.toolName()).isEqualTo("run_data_query");
+        assertThat(run.source()).isEqualTo(new ToolSource.CriteriaSource(ToolSource.CriteriaTool.EXECUTE,
+                java.util.Set.of("Order"), 10));
+        assertThat(ToolBindingSpecs.parse(resource("""
+                {"source":{"kind":"criteria","tool":"describe"}}""")).toolName()).isEqualTo("describe_data_model");
+        ToolBinding named = ToolBindingSpecs.parse(resource("""
+                {"toolName":"check_sales_query","source":{"kind":"criteria","tool":"validate"}}"""));
+        assertThat(named.toolName()).isEqualTo("check_sales_query");
+        assertThat(((ToolSource.CriteriaSource) named.source()).maxRows()).isEqualTo(50);
+        assertThatThrownBy(() -> ToolBindingSpecs.parse(resource("""
+                {"source":{"kind":"criteria","tool":"drop"}}"""))).hasMessageContaining("source.tool");
+        assertThatThrownBy(() -> ToolBindingSpecs.parse(resource("""
+                {"writeMode":"propose","source":{"kind":"criteria","tool":"execute"}}""")))
+                .hasMessageContaining("PROPOSE");
+    }
+
+    @Test
     void invalidSpecsAreRejectedWithoutEchoingValues() {
         assertThatThrownBy(() -> ToolBindingSpecs.parse(resource("{oops"))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ToolBindingSpecs.parse(resource("{\"source\":{}}")))

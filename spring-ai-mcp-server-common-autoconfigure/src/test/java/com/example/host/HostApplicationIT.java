@@ -66,6 +66,11 @@ class HostApplicationIT {
                         return new ChatResponse(List.of(new Generation(new AssistantMessage(
                                 prompt.getSystemMessage().getText()))));
                     }
+                    if (text.startsWith("calltool ")) {
+                        // "calltool <tool name> <json arguments>": a model that builds its own tool call
+                        String[] parts = text.split(" ", 3);
+                        return toolCall(parts[1], parts.length > 2 ? parts[2] : "{}");
+                    }
                     if (text.startsWith("myorders")) {
                         return toolCall("find_my_orders", "{\"status\":\"OPEN\"}");
                     }
@@ -539,6 +544,70 @@ class HostApplicationIT {
         assertThat(noPack.toString()).contains("no-such-pack").contains("handbook");
         call("POST", resources, "admin", Map.of("kind", "TOOL_BINDING", "slug", "bad-binding", "specJson",
                 JSON.writeValueAsString(Map.of("toolName", "x_tool"))), 400);
+    }
+
+    @Test
+    void anAgentDescribesTheDataModelAndBuildsChecksAndRunsItsOwnReadQueriesAsTheCaller() throws Exception {
+        seedOrders();
+        String ws = workspaceWithTeam("orders-criteria");
+        String describe = publish(ws, "TOOL_BINDING", "describe-data", JSON.writeValueAsString(Map.of(
+                "source", Map.of("kind", "criteria", "tool", "describe", "entities", List.of("Order")))));
+        String check = publish(ws, "TOOL_BINDING", "check-query", JSON.writeValueAsString(Map.of(
+                "source", Map.of("kind", "criteria", "tool", "validate", "entities", List.of("Order")))));
+        String run = publish(ws, "TOOL_BINDING", "run-query", JSON.writeValueAsString(Map.of(
+                "source", Map.of("kind", "criteria", "tool", "execute", "entities", List.of("Order"), "maxRows", 10))));
+        String agent = publish(ws, "AGENT", "data-analyst", JSON.writeValueAsString(Map.of(
+                "displayName", "Data", "systemPrompt", "You answer questions from the data.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "tools", List.of(Map.of("bindingId", describe, "revision", 1), Map.of("bindingId", check, "revision", 1),
+                        Map.of("bindingId", run, "revision", 1)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("alice"), "role", "CONSUMER"), 201);
+        grant(ws, "alice", "agent:invoke", agent);
+        grant(ws, "alice", "tool:invoke", describe);
+        grant(ws, "alice", "tool:invoke", check);
+        String chat = "/dynamic-ai/api/agents/data-analyst/chat";
+
+        // 1. the model learns what it may query: columns, types, operators; never the sensitive or restricted ones
+        String model = call("POST", chat, "alice", Map.of("message", "calltool describe_data_model {\"entity\":\"Order\"}"),
+                200).toString();
+        assertThat(model).contains("customerId").contains("status").contains("operators").contains("principalAttributes")
+                .doesNotContain("cardNumber").doesNotContain("privateNotes").doesNotContain("fraudNotes");
+
+        // 2. a broken query comes back with every problem to fix, and nothing runs
+        String broken = call("POST", chat, "alice", Map.of("message", "calltool check_data_query "
+                + JSON.writeValueAsString(Map.of("entity", "Order", "select", List.of("id", "cardNumber"),
+                "where", Map.of("path", "status", "op", "EQUALS", "value", "OPEN")))), 200).toString();
+        assertThat(broken).contains("invalid_query").contains("cardNumber").contains("unknown operator");
+
+        // 3. a valid query is explained without reading data
+        String own = JSON.writeValueAsString(Map.of("entity", "Order", "select", List.of("id", "status"),
+                "where", Map.of("all", List.of(Map.of("path", "customerId", "op", "EQ", "principal", "customerId"),
+                        Map.of("path", "status", "op", "IN", "value", List.of("OPEN", "SHIPPED")))),
+                "limit", 50));
+        String checked = call("POST", chat, "alice", Map.of("message", "calltool check_data_query " + own), 200)
+                .toString();
+        assertThat(checked).contains("SELECT id, status FROM Order WHERE (customerId = <your customerId> AND status IN")
+                .contains("reduced from 50 to 20").doesNotContain("o1");
+
+        // 4. running needs its own grant (default deny) ...
+        assertThat(call("POST", chat, "alice", Map.of("message", "calltool run_data_query " + own), 200).toString())
+                .contains("not_permitted").doesNotContain("o1");
+        grant(ws, "alice", "tool:invoke", run);
+        // ... then it reads real rows, as alice: her own orders only, the per-record context travels along
+        String rows = call("POST", chat, "alice", Map.of("message", "calltool run_data_query " + own), 200).toString();
+        assertThat(rows).contains("o1").contains("o2").doesNotContain("o3").doesNotContain("4111")
+                .contains("Customer notes");
+        // another user's orders cannot be named as a literal for an entity outside the allow-list either
+        assertThat(call("POST", chat, "alice", Map.of("message", "calltool run_data_query "
+                + JSON.writeValueAsString(Map.of("entity", "Customer"))), 200).toString())
+                .contains("invalid_query").contains("no entity 'Customer'");
+
+        // an allow-list naming an entity the catalog does not expose is refused when the binding is saved
+        var bad = call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/resources", "admin",
+                Map.of("kind", "TOOL_BINDING", "slug", "bad-criteria", "specJson", JSON.writeValueAsString(Map.of(
+                        "source", Map.of("kind", "criteria", "tool", "execute", "entities", List.of("Invoice"))))), 400);
+        assertThat(bad.toString()).contains("Invoice").contains("not an entity exposed to AI");
     }
 
     private static org.springframework.mock.web.MockHttpServletResponse mcpWithKey(String apiKey, String workspace,

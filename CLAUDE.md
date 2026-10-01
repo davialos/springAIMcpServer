@@ -55,6 +55,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `autoconfigure` | `…autoconfigure` | `@AutoConfiguration` classes + `@ConfigurationProperties` only | all above (optional) |
 | `spring-boot-starter` | — | dependency aggregator | autoconfigure + defaults |
 | `loadtest` | `…loadtest` | dev tool (not in the starter/BOM): API discovery → k6 suite generator, data providers, CLI (ADR-0022, LLD-16) | jackson 3, postgresql driver; **no Spring** |
+| `jfr-analyzer` | `…jfranalyzer` | developer CLI: JFR file → HTML/JSON hot-spot report (docs/tools/jfr-analyzer.md); not in the BOM | core (CanonicalJson only) |
 
 ## Coding conventions
 
@@ -80,6 +81,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 - `docs/README.md` index · `docs/01-feature-catalog.md` · `docs/02-architecture-overview.md` · `docs/lld/*.md`
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`)
+- `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
 

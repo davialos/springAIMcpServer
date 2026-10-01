@@ -34,3 +34,4 @@ See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency
 | `-webmvc` | Dynamic endpoints, admin API, SSE streaming |
 | `-autoconfigure` | Spring Boot auto-configuration |
 | `-spring-boot-starter` | The one dependency hosts add |
+| `-jfr-analyzer` | Developer tool, not shipped to hosts: JFR recording → HTML + JSON hot-spot report (`scripts/jfr-analyze.sh`, [docs](docs/tools/jfr-analyzer.md)) |

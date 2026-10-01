@@ -54,6 +54,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `webmvc` | `…webmvc` | dynamic endpoints, admin API, SSE streaming, problem details | core, security |
 | `autoconfigure` | `…autoconfigure` | `@AutoConfiguration` classes + `@ConfigurationProperties` only | all above (optional) |
 | `spring-boot-starter` | — | dependency aggregator | autoconfigure + defaults |
+| `jfr-analyzer` | `…jfranalyzer` | developer CLI: JFR file → HTML/JSON hot-spot report (docs/tools/jfr-analyzer.md); not in the BOM | core (CanonicalJson only) |
 
 ## Coding conventions
 

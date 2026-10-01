@@ -90,7 +90,7 @@ the same filters. Latency cost ≈ one small chunk; configurable per agent (`gua
 **Implemented (F-76):** `StreamingPiiRedactor` keeps **128** characters back (longer than any built-in value
 format), releases text only up to a whitespace boundary that is not inside a detected value, and releases a single
 unbroken run longer than 8,192 characters at the window limit to bound memory. Not configurable per agent yet;
-exfiltration and blocked-term filtering of the output are not implemented (OQ-54). `JSON_SCHEMA` answers are
+exfiltration and blocked-term filtering of the output are not implemented (OQ-55). `JSON_SCHEMA` answers are
 held back whole (OQ-51) and redacted inside the document.
 
 ## 6. Client rendering responsibilities (JS client & Web Components)

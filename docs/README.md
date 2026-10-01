@@ -27,7 +27,10 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 14 | [security/02-threat-model.md](security/02-threat-model.md) | access-management-architect | Draft v1 |
 | 15 | [production-readiness.md](production-readiness.md) — go-live gates | production-readiness-reviewer | Draft v1 |
 | 16 | [lld/15-database-schema.md](lld/15-database-schema.md) — PostgreSQL schema: tables, keys, indexes, partitions, retention | lld-chief-architect | Draft v1 |
+| 16b | [lld/16-load-test-generator.md](lld/16-load-test-generator.md) — k6 load-test generator: API discovery, data providers, load modes (developer tool, ADR-0022) | lld-chief-architect | Implemented v1 |
+| 17b | [integration/load-testing-guide.md](integration/load-testing-guide.md) — how to generate and run k6 load tests for a project | lld-chief-architect | v1 |
 | 17 | [integration/host-integration-guide.md](integration/host-integration-guide.md) — how a host app adopts the starter | control-plane-designer | Draft v1 |
+| 18 | [integration/annotation-best-practices.md](integration/annotation-best-practices.md) — `@Ai*` annotation best practices, centralized configuration, per-annotation scenarios | metadata-extraction-designer | Draft v1 |
 | — | [../scripts/db/postgresql/](../scripts/db/postgresql/) — DBA scripts: roles, database, schema, grants, verification | — | v1 |
 | — | [adr/](adr/) — architecture decisions | lld-chief-architect | — |
 | — | [open-questions.md](open-questions.md) | all | Living |

@@ -34,3 +34,19 @@ See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency
 | `-webmvc` | Dynamic endpoints, admin API, SSE streaming |
 | `-autoconfigure` | Spring Boot auto-configuration |
 | `-spring-boot-starter` | The one dependency hosts add |
+| `-loadtest` | Developer tool (not in the starter): generates Grafana k6 load tests for any Spring Boot project |
+
+## Load testing any Spring Boot project (k6)
+
+`spring-ai-mcp-server-common-loadtest` discovers a project's REST APIs (Java sources, OpenAPI, actuator
+mappings), generates a k6 suite with a data provider per API and per request DTO — dummy, random, real
+(sampled from and checked against the project's database, or harvested from the running API) and
+user-supplied values — and runs it in smoke, load, stress, spike, soak or breakpoint mode, per API or as a
+weighted mix of all APIs (`mixed-spike`, `mixed-stress`, …).
+
+```
+scripts/loadtest.sh generate --project ../my-service              # writes ../my-service/load-tests
+cd ../my-service/load-tests && ./run.sh smoke                      # then: ./run.sh mixed-spike mixed
+```
+
+Design: [`docs/lld/16-load-test-generator.md`](docs/lld/16-load-test-generator.md), [ADR-0022](docs/adr/0022-k6-load-test-generator-module.md).

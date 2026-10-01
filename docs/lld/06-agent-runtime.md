@@ -148,9 +148,9 @@ Order in `InvocationGuardAdvisor.checkInput` (also run by the stream path before
   `StreamingPiiRedactor` (hold-back window, LLD-13 §5). `JSON_SCHEMA` answers are redacted inside the document
   (`redactJson`) so they stay valid JSON; values under sensitive keys are masked there too.
 - **`maxOutputChars`** is enforced (text agents; sync and stream), the answer ending in ` …[truncated]`.
-- **Exfiltration patterns** in the output (Markdown images with query data) are not stripped yet (OQ-54).
+- **Exfiltration patterns** in the output (Markdown images with query data) are not stripped yet (OQ-55).
 - Transcripts record the redacted prompt and answer. Chat memory stores the model's own (unredacted) answer so
-  follow-ups stay coherent; it is protected like the transcript (OQ-45, OQ-54).
+  follow-ups stay coherent; it is protected like the transcript (OQ-45, OQ-55).
 
 ### 8.3 Structured display (backend-controlled)
 Every answer (when `structured-display` is on, default) also gets a **display tree** (`StructuredResponse`):

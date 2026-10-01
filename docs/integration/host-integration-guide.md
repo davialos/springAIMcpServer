@@ -677,8 +677,9 @@ Auditors see the workspace's conversations, including erased ones still on hold,
 
 Each successful turn stores the user message and the answer, after redaction: a message that contains a
 credential (private key, API or cloud token, JWT, URL with credentials, password assignment) is replaced by a
-placeholder, never stored in part. Refused, failed and cancelled turns store nothing. PII detectors are not
-implemented yet. The stored conversation uses the conversation id the client sends and is found again through a
+placeholder, never stored in part. Refused, failed and cancelled turns store nothing. With output PII redaction on
+(the default, see "Guardrails" below) the stored answer is the redacted one users saw; the user message is
+PII-redacted only with `redact-input-pii` (or the agent's `piiRedactionInput`). The stored conversation uses the conversation id the client sends and is found again through a
 hash of (principal, agent, conversation id), so another user cannot read or append to it. A conversation the user
 erased or closed is not written to again. This is the history shown to users, not the memory the model reads.
 
@@ -696,6 +697,87 @@ dynamic.ai.agent.memory:
 ```
 
 Expired memories are deleted by the same background job as expired conversations.
+
+### Guardrails: prompt validation, PII redaction and structured answers
+
+Every agent turn passes the guardrails of LLD-06 §8. The host sets a floor; an agent's spec can switch more on,
+never off.
+
+```yaml
+dynamic.ai.agent.guardrails:
+  threat-detection: true     # default; reject prompt injection, jailbreaks, SQL/script/command injection,
+                             # exfiltration requests and hidden/encoded payloads (code input_malicious)
+  business-scope: false      # reject prompts unrelated to your domain (code off_topic); see below
+  min-relevance: 0.25        # share of a prompt's content words that must relate to the domain
+  min-terms-to-judge: 2      # shorter prompts (greetings, follow-ups) are not judged for scope
+  scope-keywords: []         # extra in-scope terms for every agent, e.g. [returns, warranty]
+  redact-input-pii: false    # true: the model provider never sees personal data typed by users
+  redact-output-pii: true    # default; answers never show e-mails, phones, cards, IBANs, SSNs, IPs, credentials
+  structured-display: true   # default; every answer also carries a structured display tree
+```
+
+**Business scope is judged against what you told the library about your code**: the `@AiContext` names,
+descriptions and keywords of your entities, the `@AiEntityProperty` meanings, and the intents and keywords of your
+exposed operations (after policy layers), plus the agent's `topicAllowList` and `scopeKeywords`. Good descriptions
+and keywords make the check accurate; enable it per agent first, watch the `off_topic` rejections in the logs, then
+consider the host-wide switch. A rejected prompt never reaches the model: a streamed turn ends with an error event
+(`off-topic`, `input-malicious`), a synchronous turn answers `[off_topic] …` like the other input guardrails.
+
+Per agent (in the agent spec):
+
+```json
+{"guardrails": {
+   "piiRedactionInput": true,
+   "inputValidation": {"threatDetection": true, "businessScope": true, "minRelevance": 0.3,
+                       "scopeKeywords": ["returns", "refund"]}},
+ "output": {"mode": "text", "display": {"version": 1, "blocks": [
+   {"type": "text", "title": "Answer"},
+   {"type": "fields", "title": "Customer", "source": "customer", "fields": [
+     {"path": "name", "label": "Name"},
+     {"path": "cardNumber", "label": "Card", "mask": "partial"}]},
+   {"type": "table", "title": "Orders", "source": "orders", "maxRows": 20, "columns": [
+     {"path": "id", "label": "Order #"},
+     {"path": "total", "label": "Total", "format": "number"},
+     {"path": "shippedOn", "label": "Shipped", "format": "date"}]}]}}}
+```
+
+**The display template is decided by the backend, not the model.** It names the values to show (dot paths into the
+answer's JSON: the whole answer for `JSON_SCHEMA` agents, or a fenced `json` block in a text answer — say so in the
+system prompt) with labels, formats and masks. Anything the template does not name is not displayed. Without a
+template the answer is laid out automatically (prose, object → fields, array of objects → table). In both cases
+values under sensitive keys (`sensitive = true` attributes, disabled attributes, credential-like names) are always
+masked and every value is PII-redacted. Node types: `text` (`title`), `fields` (`title`, `source`, `fields`),
+`table` (`title`, `source`, `columns`, `maxRows` 1–1000, default 100), `section` (`title`, `blocks`); field keys
+`path`, `label`, `format` (`text|number|boolean|date|datetime`), `mask` (`none|partial|full`). An invalid template
+makes that agent fail to load, with every error and its JSON path in the log.
+
+Where clients find it: the sync response has a `display` object next to `message`; the stream sends a
+`ui.component` event with `componentType: "structured-response"` (its `payload` is the same tree as a JSON string)
+before `usage`/`turn.end`. Shape: `{"version":1,"blocks":[{"type":"text","text":…},{"type":"fields","title":…,
+"items":[{"key","label","format","value"}]},{"type":"table","columns":[{"key","label","format"}],"rows":[[…]],
+"totalRows":n,"truncated":bool},{"type":"section","title":…,"blocks":[…]}],"redactions":{"EMAIL":1},"masked":0}`.
+
+**Extending it** — declare beans; they are added to the built-in ones:
+
+```java
+@Bean
+PromptValidator noInvestmentAdvice() {          // runs after the built-in validators; first rejection wins
+    return request -> request.prompt().toLowerCase(Locale.ROOT).contains("stock tip")
+            ? PromptVerdict.reject("regulated_advice", "I can't give investment advice.", List.of("advice"))
+            : PromptVerdict.allow();
+}
+
+@Bean
+PiiDetector employeeNumbers() {                 // your own identifier formats
+    Pattern p = Pattern.compile("\\bEMP-\\d{6}\\b");
+    return text -> p.matcher(text).results()
+            .map(m -> new PiiMatch(PiiType.OTHER, m.start(), m.end())).toList();
+}
+```
+
+Validators and detectors must be thread-safe, fast and must not log the text they see; one that throws rejects the
+prompt / withholds the answer (fail closed). Replace the whole pipeline with your own `TurnSafety` or `PiiRedactor`
+bean if you need to.
 
 ## 10. Operations
 

@@ -114,7 +114,7 @@ Owner: control-plane-designer · Status: Draft v1
 | F-73 | **Kill switch** per agent/endpoint/workspace/global | MVP | Takes effect cluster-wide ≤ 10 s |
 | F-74 | **Config export/import & GitOps mode** (YAML bundles, signed) | v1.x | Round-trip lossless |
 | F-75 | **Environment promotion** dev→staging→prod | v1.x | Bundle signature verified on import |
-| F-76 | **PII redaction** in prompts/logs/traces | MVP | Configurable detectors; tests with seeded PII |
+| F-76 | **PII redaction** in prompts/logs/traces, **prompt validation** (malicious content, business scope against the catalog) and a **backend-controlled structured display** of answers | MVP | Configurable detectors and validators (SPIs); tests with seeded PII and attack prompts (LLD-06 §8) |
 | F-78 | **Audit evidence mode** — opt-in, encrypted capture of prompts, outputs and returned rows for regulated workspaces | v1.x | Auditor-only access (audited); crypto-shredding per data subject; standard audit keeps only hashes |
 | F-77 | **Data residency / provider allow-list** per workspace | v1.x | Classification RESTRICTED ⇒ only on-prem/approved models |
 

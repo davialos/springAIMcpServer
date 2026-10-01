@@ -60,7 +60,7 @@ import java.util.Set;
 public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
-            "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values");
+            "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -146,17 +146,27 @@ public final class LoadTestCli {
         Path projectDir = project == null ? null : Path.of(project);
         Map<String, String> headers = headers(a);
         List<ApiCatalog> catalogs = new ArrayList<>();
-        // Precedence: OpenAPI (authoritative contract) > sources (constraints, entities) > browser recordings
-        // (observed shapes and values) > actuator (live routes)
-        if (a.get("openapi") != null) {
-            catalogs.add(new OpenApiReader(this::log).read(Documents.text(a.get("openapi"), headers)));
-        }
         ProjectSettings settings = ProjectSettings.DEFAULTS;
         if (projectDir != null) {
             if (!Files.isDirectory(projectDir)) {
                 throw new IllegalArgumentException("--project " + project + " is not a directory");
             }
             settings = ProjectSettings.read(projectDir);
+        }
+        // Precedence: OpenAPI (authoritative contract) > sources (constraints, entities) > browser recordings
+        // (observed shapes and values) > actuator (live routes)
+        List<String> specs = new ArrayList<>(a.all("openapi"));
+        if (specs.isEmpty() && projectDir != null && !a.flag("no-bundled-openapi")) {
+            for (Path spec : SpringSourceScanner.bundledOpenApiSpecs(projectDir)) {
+                log("openapi: using the project's bundled " + projectDir.relativize(spec));
+                specs.add(spec.toString());
+            }
+        }
+        for (String spec : specs) {
+            ApiCatalog c = new OpenApiReader(this::log).read(Documents.text(spec, headers));
+            catalogs.add(projectDir == null ? c : relativeToContext(c, settings.contextPath()));
+        }
+        if (projectDir != null) {
             catalogs.add(new SpringSourceScanner(this::log).scan(projectDir));
         }
         String basePath = basePath(a, settings, catalogs);
@@ -185,6 +195,23 @@ public final class LoadTestCli {
         ApiCatalog filtered = CatalogMerger.filter(merged, a.all("include"), excludes);
         log(filtered.endpoints().size() + " APIs selected (" + merged.endpoints().size() + " discovered)");
         return new Discovery(filtered, settings, projectDir, recordings, basePath);
+    }
+
+    /**
+     * Makes an OpenAPI catalog's paths relative to the servlet context path, like the source scan's: a server URL
+     * of {@code /petclinic/api} with context path {@code /petclinic} prefixes every path with {@code /api}.
+     */
+    private ApiCatalog relativeToContext(ApiCatalog c, @Nullable String contextPath) {
+        String server = c.basePath() == null ? "" : c.basePath();
+        String context = contextPath == null ? "" : contextPath;
+        if (server.length() > context.length() && server.startsWith(context)
+                && (context.isEmpty() || server.charAt(context.length()) == '/')) {
+            String prefix = server.substring(context.length());
+            log("openapi: server path " + server + " = context path " + (context.isEmpty() ? "/" : context)
+                    + " + " + prefix + "; paths rebased onto the context path");
+            return CatalogMerger.rebase(c, prefix, contextPath);
+        }
+        return CatalogMerger.rebase(c, "", contextPath);
     }
 
     /** The servlet context path: from --base-url, the project's settings, or the OpenAPI server URL. */
@@ -477,7 +504,8 @@ public final class LoadTestCli {
 
                 Discovery (discover, generate)
                   --project <dir>           Spring Boot project: sources, application.yml, JPA entities
-                  --openapi <url|file>      OpenAPI 3 document, e.g. http://localhost:8080/v3/api-docs
+                  --openapi <url|file>      OpenAPI 3 document, e.g. http://localhost:8080/v3/api-docs (repeatable;
+                                            default: specs bundled in the project, --no-bundled-openapi to skip)
                   --actuator <url|file>     /actuator/mappings of the running app (also sees dynamic routes)
                   --har <file>              browser recording: DevTools ▸ Network ▸ Export HAR (repeatable). Adds
                                             the API calls seen, their recorded values, and a replayable journey

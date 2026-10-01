@@ -32,7 +32,7 @@ class DataPlanTest {
         assertThat(pool(plan, "getCustomer.path.id")).isEqualTo("customers.id");
         assertThat(pool(plan, "getOrder.path.orderId")).isEqualTo("orders.id");
         assertThat(pool(plan, "CreateOrderRequest.customerId")).isEqualTo("customers.id");
-        assertThat(pool(plan, "searchOrder.query.customerId")).isEqualTo("customers.id");
+        assertThat(pool(plan, "searchOrders.query.customerId")).isEqualTo("customers.id");
         assertThat(pool(plan, "OrderLine.productSku")).isEqualTo("product.sku");
         assertThat(pool(plan, "getProduct.path.sku")).isEqualTo("product.sku");
         assertThat(pool(plan, "listCustomers.query.email")).isEqualTo("customers.email");

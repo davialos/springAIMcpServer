@@ -59,6 +59,9 @@ final class JpaEntityScanner {
         Map<String, String> refs = new LinkedHashMap<>();
         Map<String, String> joins = new LinkedHashMap<>();
         Set<String> sensitive = new HashSet<>();
+        Map<String, Integer> lengths = new LinkedHashMap<>();
+        Set<String> unique = new HashSet<>();
+        boolean idGenerated = false;
         TypeMapper helper = new TypeMapper(trees, false);
         for (VariableTree f : fields(ct, new HashSet<>())) {
             var mods = f.getModifiers();
@@ -80,12 +83,21 @@ final class JpaEntityScanner {
             if (isId && idField == null) {
                 idField = field;
                 idColumn = column;
+                idGenerated = SourceTrees.has(mods, "GeneratedValue");
+            }
+            Optional<AnnotationTree> col = SourceTrees.annotation(mods, "Column");
+            if (TypeMapper.simpleName(f.getType()).equals("String")) {
+                lengths.put(field, col.flatMap(a -> trees.string(a, "length")).map(Integer::valueOf).orElse(255));
+            }
+            if (col.flatMap(a -> trees.string(a, "unique")).map("true"::equals).orElse(false)) {
+                unique.add(field);
             }
             if (helper.sensitive(f, field) || (confidentialEntity && !isId)) {
                 sensitive.add(field);
             }
         }
-        return new EntityTable(name, schema, tableName, idField, idColumn, columns, refs, joins, sensitive);
+        return new EntityTable(name, schema, tableName, idField, idColumn, columns, refs, joins, sensitive, lengths,
+                unique, idGenerated);
     }
 
     /** Fields of an entity and of its parsed {@code @MappedSuperclass} ancestors. */

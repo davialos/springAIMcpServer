@@ -73,6 +73,7 @@ public final class FieldKindClassifier {
         return switch (format.toLowerCase(Locale.ROOT)) {
             case "email", "idn-email" -> FieldKind.EMAIL;
             case "uuid" -> FieldKind.UUID;
+            case "data-rest-link" -> FieldKind.ID; // a Spring Data REST association: the target's id, as a URI
             case "date" -> n.contains("birth") || n.equals("dob") ? FieldKind.BIRTH_DATE : FieldKind.DATE;
             case "date-time" -> FieldKind.DATE_TIME;
             case "time" -> FieldKind.TIME;

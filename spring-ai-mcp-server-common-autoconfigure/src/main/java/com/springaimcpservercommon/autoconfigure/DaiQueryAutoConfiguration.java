@@ -88,8 +88,11 @@ public class DaiQueryAutoConfiguration {
         DaiProperties.Query q = props.query();
         int maxConcurrent = clamp(q.maxConcurrency(), 1, 200, CriteriaQueryExecutor.DEFAULT_MAX_CONCURRENT);
         int timeoutMs = clampMs(q.timeout(), CriteriaQueryExecutor.DEFAULT_TIMEOUT_MS);
-        QueryExecutor executor = new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent,
-                timeoutMs);
+        // the transaction boundary is explicit: @Transactional on the executor needs a proxy, which a traced (wrapped)
+        // executor never is, and tool calls run off the request thread
+        QueryExecutor executor = new TransactionalQueryExecutor(
+                new CriteriaQueryExecutor(entityManagerFactory, new CriteriaCompiler(), maxConcurrent, timeoutMs),
+                entityManagerFactory);
         io.micrometer.observation.ObservationRegistry registry = observations.getIfAvailable();
         return registry == null || registry.isNoop() ? executor : new ObservedQueryExecutor(executor, registry);
     }

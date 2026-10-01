@@ -3,13 +3,14 @@ package com.springaimcpservercommon.ai.tool;
 import com.springaimcpservercommon.core.catalog.CatalogElementRef;
 
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
  * The source of a tool binding (LLD-07 §2): where the tool's implementation comes from.
  */
 public sealed interface ToolSource permits ToolSource.OperationSource, ToolSource.QuerySource,
-        ToolSource.McpSource, ToolSource.AgentSource {
+        ToolSource.McpSource, ToolSource.AgentSource, ToolSource.CriteriaSource {
 
     /**
      * A host bean method annotated with {@code @AiExposedAction} (LLD-02 §2).
@@ -63,5 +64,36 @@ public sealed interface ToolSource permits ToolSource.OperationSource, ToolSourc
         public AgentSource {
             Objects.requireNonNull(agentId, "agentId");
         }
+    }
+
+    /**
+     * One of the tools that let a model read data with queries it builds itself (LLD-05 §12): describe the data
+     * model, check a query, or run it. Always read-only; the query runs as the caller over entities the catalog
+     * exposes to AI.
+     *
+     * @param tool     which of the three tools
+     * @param entities entities the tool may reach, by simple name, class name or {@code entity:} reference; empty
+     *                 means every entity the catalog exposes to AI
+     * @param maxRows  rows per page this binding allows (also capped by each entity and the global limit)
+     */
+    record CriteriaSource(CriteriaTool tool, Set<String> entities, int maxRows) implements ToolSource {
+        /** Validates fields and copies the entity list. */
+        public CriteriaSource {
+            Objects.requireNonNull(tool, "tool");
+            entities = Set.copyOf(entities);
+            if (maxRows < 1 || maxRows > 1000) {
+                throw new IllegalArgumentException("maxRows must be in [1, 1000]");
+            }
+        }
+    }
+
+    /** The three criteria tools. */
+    enum CriteriaTool {
+        /** Lists the entities, columns, types, operators and relations the caller may query. */
+        DESCRIBE,
+        /** Checks a query and explains it without reading data. */
+        VALIDATE,
+        /** Checks and runs a query, returning one page of rows. */
+        EXECUTE
     }
 }

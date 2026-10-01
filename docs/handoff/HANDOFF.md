@@ -48,19 +48,17 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
 ## 4. What is left, in suggested order
 
 **Should do next (product-relevant gaps)**
-1. **API keys for service accounts (OQ-37).** `ApiKeyService`, `ApiKeyAuthenticationFilter` exist but have no
-   auto-configuration and there is no issuance endpoint, so machine clients need JWTs. Needs an
-   `ApiKeyPepperProvider` SPI default, the service bean, an issuance endpoint, and wiring into the security chains
-   (`DynamicAiSecurityOptions(apiKeysEnabled=true)`); extend `HostApplicationIT`.
-2. **MCP end to end in `HostApplicationIT`** (endpoint enabled, a published tool binding, `tools/list`, `tools/call`
-   under a bearer token and the client-approval rule). MCP gaps in OQ-49: stateful sessions and
+1. (API keys for service accounts are done, OQ-37.)
+2. (`HostApplicationIT` now also proves annotated host code end to end: a read tool with `principalAttr`/`range` constraints, a saved query over the host entity that cannot reach sensitive columns, and a PROPOSE tool whose write only runs through the host method after the owner confirms.)
+2. (MCP end to end is done, with an MCP client admin API.) MCP gaps in OQ-49: stateful sessions and
    `tools/list_changed`, resources/prompts, `insufficient_scope` step-up, per-client rate limits, SDK transport.
-3. **Break-glass production override is not configurable (OQ-53).** Bind `environment.production-override.*`.
-4. **Per-kind spec validation at authoring time (OQ-41)** and **budget reservation (OQ-40).**
+3. (Break-glass production override is bound and audited, OQ-53.)
+4. Per-kind spec validation at save time is done for QUERY/AGENT/TOOL_BINDING (OQ-41: remaining kinds, `catalogHash` stamping, drift re-validation). **Budget reservation (OQ-40)** is open.
 5. **Guardrails follow-ups (OQ-44, OQ-55)** — prompt validation (malicious content, business scope against the
    catalog), PII redaction of prompts/answers/transcripts and the backend-controlled structured display are in
-   (`core.guard`, `core.display`, `ai.safety.TurnSafety`, LLD-06 §8); remaining: sync rejections as problem
-   responses, output exfiltration filtering, per-workspace redaction policy, authoring-time template validation.
+   (`core.guard`, `core.display`, `ai.safety.TurnSafety`, LLD-06 §8), and stored transcripts and chat memory are
+   masked (`MessageRedactor`, `conversations.pii.*`); remaining: sync rejections as problem responses, output
+   exfiltration filtering, per-workspace redaction policy, authoring-time template validation, a NER detector for names.
 
 **Smaller / known limits**
 - Load-test generator (LLD-16 §11): multipart bodies skipped, Kotlin sources not scanned, request chaining is a

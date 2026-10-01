@@ -251,6 +251,7 @@ public class DaiAiAutoConfiguration {
      * @param operationFactory     builds operation-backed callbacks
      * @param queryFactory         builds query-backed callbacks
      * @param agentFactoryProvider optional sub-agent callback factory
+     * @param criteriaFactoryProvider optional factory of the model-built query tools (LLD-05 §12)
      * @param permissionChecker    runtime per-call permission check
      * @param proposalService      creates ChangeProposal records for PROPOSE-mode tools
      * @param toolCallRecorder     receives one record per tool call
@@ -266,12 +267,13 @@ public class DaiAiAutoConfiguration {
                                   ToolBridge.OperationCallbackFactory operationFactory,
                                   ToolBridge.QueryCallbackFactory queryFactory,
                                   ObjectProvider<ToolBridge.AgentCallbackFactory> agentFactoryProvider,
+                                  ObjectProvider<ToolBridge.CriteriaCallbackFactory> criteriaFactoryProvider,
                                   SecuredToolCallback.ToolPermissionChecker permissionChecker,
                                   ProposalService proposalService,
                                   ToolCallRecorder toolCallRecorder,
                                   ObjectProvider<ObservationRegistry> observationRegistry) {
         return new ToolBridge(bindingLoader, operationFactory, queryFactory,
-                agentFactoryProvider.getIfAvailable(),
+                agentFactoryProvider.getIfAvailable(), criteriaFactoryProvider.getIfAvailable(),
                 permissionChecker, proposalService, toolCallRecorder, java.time.Clock.systemUTC(),
                 observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
@@ -289,14 +291,16 @@ public class DaiAiAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(ChatMemory.class)
-    public ChatMemory chatMemory(ObjectProvider<ChatMemoryStore> storeProvider, DaiProperties props) {
+    public ChatMemory chatMemory(ObjectProvider<ChatMemoryStore> storeProvider, DaiProperties props,
+                                 ObjectProvider<ConversationPii> pii) {
         ChatMemoryRepository repository = new InMemoryChatMemoryRepository();
         ChatMemoryStore store = storeProvider.getIfAvailable();
         DaiProperties.Memory memory = props.memory();
         if (store != null && memory.persistent()) {
             repository = new StoreChatMemoryRepository(store,
                     new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(),
-                            memory.maxStoredChars()),
+                            memory.maxStoredChars(),
+                            pii.getIfAvailable(ConversationPii::off)),
                     memory.retention());
         }
         return MessageWindowChatMemory.builder().chatMemoryRepository(repository).build();
@@ -357,6 +361,8 @@ public class DaiAiAutoConfiguration {
      * @param chatMemory               conversation history store
      * @param schemaValidatorProvider  optional JSON Schema conformance validator
      * @param turnSafety               prompt validation, PII redaction and structured display (F-76)
+     * @param knowledgeStore           bundled knowledge packs, if any
+     * @param knowledgeProperties      knowledge settings ({@code dynamic.ai.agent.knowledge.*}), if bound
      * @return the invoker
      */
     @Bean
@@ -374,7 +380,9 @@ public class DaiAiAutoConfiguration {
             ObjectProvider<ObservationRegistry> observationRegistry,
             ChatMemory chatMemory,
             ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider,
-            TurnSafety turnSafety) {
+            TurnSafety turnSafety,
+            ObjectProvider<com.springaimcpservercommon.ai.knowledge.KnowledgeStore> knowledgeStore,
+            ObjectProvider<DaiKnowledgeProperties> knowledgeProperties) {
         return new DefaultAgentInvoker(
                 modelRouter,
                 toolBridgeProvider.getIfAvailable(),
@@ -387,7 +395,10 @@ public class DaiAiAutoConfiguration {
                 observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP),
                 chatMemory,
                 schemaValidatorProvider.getIfAvailable(),
-                turnSafety);
+                turnSafety,
+                knowledgeStore.getIfAvailable(),
+                knowledgeProperties.getIfAvailable(() -> new DaiKnowledgeProperties(true, null, 6000,
+                        new DaiKnowledgeProperties.Index(false, null, null, null, 1200, false))).maxContextChars());
     }
 
     /**

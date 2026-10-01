@@ -80,10 +80,29 @@ public final class ToolBridge {
                                       DaiPrincipal principal, Authentication authentication);
     }
 
+    /**
+     * Port: creates a delegate {@link ToolCallback} for a {@link ToolSource.CriteriaSource} binding — the tools that let
+     * a model describe the data model and build, check and run its own read queries (LLD-05 §12). Optional — when
+     * absent, criteria bindings are skipped gracefully (logged at {@code WARN}).
+     */
+    @FunctionalInterface
+    public interface CriteriaCallbackFactory {
+        /**
+         * @param source    which criteria tool and its limits
+         * @param binding   the governing tool binding
+         * @param principal the calling principal
+         * @param catalog   the effective catalog snapshot of this turn
+         * @return the delegate callback
+         */
+        ToolCallback create(ToolSource.CriteriaSource source, ToolBinding binding, DaiPrincipal principal,
+                            EffectiveCatalog catalog);
+    }
+
     private final ToolBindingLoader bindingLoader;
     private final OperationCallbackFactory operationFactory;
     private final QueryCallbackFactory queryFactory;
     private final @Nullable AgentCallbackFactory agentFactory;
+    private final @Nullable CriteriaCallbackFactory criteriaFactory;
     private final SecuredToolCallback.ToolPermissionChecker permissionChecker;
     private final ProposalService proposalService;
     private final ToolCallRecorder recorder;
@@ -173,6 +192,35 @@ public final class ToolBridge {
                        ToolCallRecorder recorder,
                        java.time.Clock clock,
                        io.micrometer.observation.ObservationRegistry observations) {
+        this(bindingLoader, operationFactory, queryFactory, agentFactory, null, permissionChecker, proposalService,
+                recorder, clock, observations);
+    }
+
+    /**
+     * Constructs the bridge with every port, including the model-built criteria query tools.
+     *
+     * @param bindingLoader     loads ToolBindings from the catalog store
+     * @param operationFactory  builds delegate callbacks for operation-backed tools
+     * @param queryFactory      builds delegate callbacks for query-backed tools
+     * @param agentFactory      builds delegate callbacks for agent-backed tools; {@code null} disables AgentSource routing
+     * @param criteriaFactory   builds delegate callbacks for criteria tools; {@code null} disables CriteriaSource routing
+     * @param permissionChecker runtime permission check per call
+     * @param proposalService   creates ChangeProposal records for PROPOSE-mode tools
+     * @param recorder          receives one record per tool call made through callbacks built with a scope
+     * @param clock             time source for call timing
+     * @param observations      registry for the {@code dai.tool} spans
+     */
+    public ToolBridge(ToolBindingLoader bindingLoader,
+                       OperationCallbackFactory operationFactory,
+                       QueryCallbackFactory queryFactory,
+                       @Nullable AgentCallbackFactory agentFactory,
+                       @Nullable CriteriaCallbackFactory criteriaFactory,
+                       SecuredToolCallback.ToolPermissionChecker permissionChecker,
+                       ProposalService proposalService,
+                       ToolCallRecorder recorder,
+                       java.time.Clock clock,
+                       io.micrometer.observation.ObservationRegistry observations) {
+        this.criteriaFactory = criteriaFactory; // optional
         this.observations = Objects.requireNonNull(observations, "observations");
         this.bindingLoader = Objects.requireNonNull(bindingLoader, "bindingLoader");
         this.operationFactory = Objects.requireNonNull(operationFactory, "operationFactory");
@@ -329,6 +377,14 @@ public final class ToolBridge {
                 // If no MCP factory has been registered (it's optional), skip gracefully.
                 LOG.debug("MCP-backed tool {} has no registered factory; skipping", binding.toolName());
                 yield null;
+            }
+            case ToolSource.CriteriaSource criteria -> {
+                if (criteriaFactory == null) {
+                    LOG.warn("Criteria tool {} cannot be resolved: no CriteriaCallbackFactory registered; skipping",
+                            binding.toolName());
+                    yield null;
+                }
+                yield criteriaFactory.create(criteria, binding, principal, catalog);
             }
             case ToolSource.AgentSource(var agentId) -> {
                 if (agentFactory == null) {

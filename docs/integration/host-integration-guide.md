@@ -824,3 +824,134 @@ bean if you need to.
 | MCP client gets `401` with `WWW-Authenticate: Bearer resource_metadata="..."` | No token, wrong audience, or the client isn't in `dai_mcp_client` as `APPROVED` yet | Check the token's `aud` claim against the MCP resource URI; have an admin approve the client (§9) |
 | Rows keep landing in `dai_agent_turn_pdefault` (or the other `_pdefault` partitions) | The partition-maintenance job is disabled, failing, or badly behind schedule | `scripts/db/postgresql/04_verify.sql` §3–4; check `dai_job_run` for recent failures; confirm `maintenance.cron` is actually configured and the job isn't losing the advisory lock race indefinitely |
 | A confirmed write proposal never applies, stuck in `APPLYING` | The node that confirmed it crashed before recording `APPLIED`/`FAILED` | This is exactly what `ix_change_proposal_applying` (LLD-15 §6.4) exists to find — the crash-reconciliation job should pick it up on its next run (LLD-11 §10); if it doesn't, that job itself needs investigating |
+
+## Knowledge packs: embeddings that ship in your JAR (ADR-0022)
+
+Keep the context your agents need in your repository and let the build bundle it.
+
+1. Put documents (`.md`, `.txt`) under e.g. `src/main/knowledge/handbook/`.
+2. Build the pack file, once and whenever the documents change, and commit it:
+   - keyword-only, no key needed:
+     `java -cp <starter+deps> com.springaimcpservercommon.ai.knowledge.KnowledgeIndexer src/main/knowledge/handbook src/main/resources/dynamic-ai/knowledge/handbook/index.jsonl handbook`
+   - with embeddings, using your own `EmbeddingModel` bean: start the application once with
+     `-Ddynamic.ai.agent.knowledge.index.enabled=true -Ddynamic.ai.agent.knowledge.index.source-dir=src/main/knowledge/handbook -Ddynamic.ai.agent.knowledge.index.output-file=src/main/resources/dynamic-ai/knowledge/handbook/index.jsonl -Ddynamic.ai.agent.knowledge.index.pack=handbook -Ddynamic.ai.agent.knowledge.index.exit-when-done=true -Ddynamic.ai.agent.knowledge.embedding-model-id=openai:text-embedding-3-small`.
+     Re-runs only embed changed chunks.
+3. `mvn package` bundles `index.jsonl` into the JAR (it is an ordinary resource).
+4. At runtime set `dynamic.ai.agent.knowledge.embedding-model-id` to the same id so the vectors are used (otherwise
+   search is keyword-only, with a warning). Use it from an agent by adding
+   `"knowledge":[{"pack":"handbook","topK":4}]` to its spec, or from code: inject `KnowledgeStore` and call
+   `search("handbook", "refund window", 3)`.
+
+Do not bundle confidential documents: every caller allowed to invoke the agent can be shown their content.
+
+### Telling the AI which parameter is the right one
+
+Add plain-English guidance next to the parameter, in code:
+
+```java
+@AiExposedAction(intent = "Finds the invoices of one customer")
+public List<Invoice> findInvoices(
+    @AiParam(description = "Customer number",
+             details = "The number printed on the customer's card, not the invoice number. Always starts with C-.",
+             examples = {"C-1001", "C-2087"}) String customerNo) { ... }
+```
+
+`details` and `examples` (max 5, not for `sensitive` parameters, never real data) are shown to the model in the tool's
+schema. To let an agent look up the relevant tools and record types itself, add the built-in `catalog` pack to it:
+`"knowledge":[{"pack":"catalog","topK":4}]`.
+
+### Context that belongs to one record: `@AiRowContext`
+
+```java
+@AiEntityProperty(meaning = "Remarks the customer or support left on this order")
+@AiRowContext(label = "Customer notes", maxChars = 300)
+private String notes;
+```
+
+Every row of that entity returned by a query (to an agent or an MCP client) carries
+`"_context": {"Customer notes": "Prefers morning delivery"}`, so the caller knows more about *that* entry, not just what
+the column means. The column keeps all its rules: sensitive, disabled and above-clearance columns are never delivered,
+and the text is cut at `maxChars`. The AI is told the notes are information, never instructions.
+
+## Letting the AI build its own read queries (criteria tools)
+
+Instead of authoring one query per question, give an agent three tools and it writes the query itself, as JPA
+Criteria over the entities you annotated, running as the user who asked (LLD-05 §12). Publish three tool bindings
+in a workspace; the tool names default to `describe_data_model`, `check_data_query` and `run_data_query`:
+
+```json
+{"source": {"kind": "criteria", "tool": "describe", "entities": ["Order", "Customer"]}}
+{"source": {"kind": "criteria", "tool": "validate", "entities": ["Order", "Customer"]}}
+{"source": {"kind": "criteria", "tool": "execute",  "entities": ["Order", "Customer"], "maxRows": 50}}
+```
+
+Add the bindings to an agent's `tools` (or set `"mcpExposed": true` for MCP clients) and grant `tool:invoke` on each,
+like any tool. Granting `describe` and `validate` without `execute` lets the AI draft and explain queries without
+reading data. The model then works in a loop: describe the entity → build a request such as
+
+```json
+{"entity": "Order", "select": ["id", "status", "customer.name"],
+ "where": {"all": [{"path": "customerId", "op": "EQ", "principal": "customerId"},
+                   {"path": "status", "op": "IN", "value": ["OPEN", "SHIPPED"]}]},
+ "orderBy": [{"path": "id", "direction": "desc"}], "limit": 20}
+```
+
+→ check it (problems come back with their location, e.g. `where.all[1].value: 'LOST' is not one of [OPEN, SHIPPED]`)
+→ run it and page with `nextCursor`. What it can reach is what your annotations allow: only `@AiContext` entities
+that are enabled, never `sensitive` columns, never columns above the user's clearance, only relations to entities that
+are exposed too, and an entity's `@AiQueryConstraints` mandatory filters must be bound to the user's own attributes
+(`"principal"`), so the AI cannot ask for another tenant's rows. Leave `entities` empty to allow every exposed entity;
+a name the catalog does not expose is refused when the binding is saved. Turn the feature off everywhere with
+`dynamic.ai.agent.query.ai-criteria=false`.
+
+## API keys for machine clients (service accounts)
+
+```yaml
+dynamic.ai.agent.security.api-keys:
+  enabled: true
+  pepper: ${DAI_API_KEY_PEPPER}     # Base64, >= 32 bytes, from your secret store; never commit it
+```
+
+1. Create a service account: `POST /dynamic-ai/admin/api/v1/workspaces/{ws}/service-accounts {"name":"nightly-job"}`.
+2. Grant it what it may do (`POST …/grants` with the service account's `principalId`), exactly like a person.
+3. Issue a key: `POST …/service-accounts/{id}/keys {"expiresInDays":30,"scopes":["mcp:read","tool:invoke"],"allowedNetworks":["10.0.0.0/8"]}`.
+   The response carries `apiKey` **once**. `scopes` is a ceiling on top of the grants.
+4. The client sends `Authorization: ApiKey <key>` (or `X-DAI-Api-Key`) to `/dynamic-ai/mcp` or `/dynamic-ai/api/**`.
+5. Revoke: `DELETE …/keys/{keyId}`. Keys always expire (max 365 days).
+
+Keys are only accepted on the API and MCP planes, never on the admin plane. Rotating the pepper: supply your own
+`ApiKeyPepperProvider` bean that keeps old versions resolvable until the keys hashed with them have expired.
+
+## Break-glass: enabling authoring in production for a limited time
+
+Authoring, introspection, playground and config UI are off in production. For an incident or an urgent change:
+
+```yaml
+dynamic.ai.agent.environment.production-override:
+  capabilities: AUTHORING          # AUTHORING, INTROSPECTION, PLAYGROUND, CONFIG_CHANGES_UI (never QUERY_PREVIEW)
+  expires-at: 2026-10-01T18:00:00Z # at most 72 hours after startup
+  reason: INC-1234                 # mandatory
+```
+
+It switches itself off at `expires-at` without a restart, logs a warning at startup and on every use, and writes a
+`PRODUCTION_OVERRIDE_USED` audit event (who, which capability, which request) each time it is what allowed a request.
+An invalid override (no reason, no expiry, too long, not overridable) stops the application at startup.
+
+## Personal data in stored conversations
+
+Stored transcripts (and the model's chat memory) are masked by default with the same detector and placeholders as the
+answer guardrails (§9): e-mail addresses, phone numbers, card numbers, IBANs and US SSNs become `[redacted email]`,
+`[redacted phone]`, `[redacted credit card]`, `[redacted iban]`, `[redacted national id]`. Credentials still remove the
+whole message.
+
+```yaml
+dynamic.ai.agent.conversations.pii:
+  mode: MASK            # MASK (default) | REMOVE (drop the whole message) | OFF
+  types: [EMAIL, PHONE, CREDIT_CARD, IBAN, NATIONAL_ID, IP_ADDRESS]   # default: all but IP_ADDRESS
+  custom-patterns:      # masked as [redacted other]
+    EMPLOYEE_ID: 'E-\d{6}'
+```
+
+This changes what is stored, not the current turn's prompt (that is `guardrails.redact-input-pii`). Names and
+free-form addresses are not detected by the built-in patterns: a `PiiDetector` bean of yours (§9 — a DLP service, a
+name recogniser, your identifier formats) is applied to stored text as well as to prompts and answers.

@@ -84,7 +84,7 @@ This component does NOT:
                        ├─► host DB triggers / temporal tables
                        └─► host domain events / outbox
                        ▼
-             Proposal APPLIED + link to host revision id ──► dai_audit (decision trail) ──► result back to agent/UI
+             Proposal APPLIED + link to host revision id ──► dai_audit_event (decision trail) ──► result back to agent/UI
 ```
 
 ## 3. Domain model

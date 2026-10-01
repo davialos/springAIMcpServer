@@ -1,5 +1,7 @@
 package com.springaimcpservercommon.autoconfigure;
 
+import com.springaimcpservercommon.persistence.audit.AuditCategory;
+import com.springaimcpservercommon.persistence.audit.AuditPlane;
 import com.springaimcpservercommon.core.environment.Capability;
 import com.springaimcpservercommon.core.environment.EnvironmentIdentity;
 import com.springaimcpservercommon.core.environment.EnvironmentSafetyPolicy;
@@ -24,6 +26,7 @@ import org.springframework.http.ResponseEntity;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -38,6 +41,8 @@ import java.util.UUID;
 @NullMarked
 final class AdminApi {
 
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(AdminApi.class);
+
     static final MediaType PROBLEM_JSON = MediaType.parseMediaType("application/problem+json;charset=UTF-8");
 
     /** Default page size for admin list endpoints. */
@@ -51,6 +56,7 @@ final class AdminApi {
     private final AuthorizationEngine authorizationEngine;
     private final EnvironmentSafetyPolicy safetyPolicy;
     private final EnvironmentSignals environmentSignals;
+    private final @Nullable AdminAudit audit;
 
     /**
      * Result of {@link #gate}: either the authenticated, authorized principal or a ready problem response.
@@ -72,6 +78,16 @@ final class AdminApi {
 
     AdminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine authorizationEngine,
              EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals environmentSignals) {
+        this(principalResolver, authorizationEngine, safetyPolicy, environmentSignals, null);
+    }
+
+    /**
+     * @param audit records every use of a capability that only a break-glass override enables, or {@code null}
+     */
+    AdminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine authorizationEngine,
+             EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals environmentSignals,
+             @Nullable AdminAudit audit) {
+        this.audit = audit;
         this.principalResolver = Objects.requireNonNull(principalResolver, "principalResolver");
         this.authorizationEngine = Objects.requireNonNull(authorizationEngine, "authorizationEngine");
         this.safetyPolicy = Objects.requireNonNull(safetyPolicy, "safetyPolicy");
@@ -89,10 +105,30 @@ final class AdminApi {
     @Nullable ResponseEntity<String> capabilityDenied(Capability capability, HttpServletRequest request) {
         EnvironmentIdentity identity = safetyPolicy.identify(environmentSignals);
         if (safetyPolicy.isEnabled(capability, identity)) {
+            if (safetyPolicy.enabledByOverride(capability, identity)) {
+                recordOverrideUse(capability, request);
+            }
             return null;
         }
         return problem(ProblemCode.CAPABILITY_DISABLED, "Capability disabled",
                 capability.name() + " is not available in the " + identity.tier().name() + " environment.", request);
+    }
+
+    /** Every use of a capability that only the break-glass override allows is logged and audited (LLD-12 §2.3). */
+    private void recordOverrideUse(Capability capability, HttpServletRequest request) {
+        LOGGER.warn("Production override in use: {} on {} {}", capability, request.getMethod(),
+                request.getRequestURI());
+        if (audit == null) {
+            return;
+        }
+        try {
+            DaiPrincipal caller = principalResolver.resolve(request);
+            audit.record(caller, AuditCategory.SECURITY, AuditPlane.CONTROL, "PRODUCTION_OVERRIDE_USED", null,
+                    "capability", capability.name(), null, null,
+                    Map.of("method", request.getMethod(), "path", request.getRequestURI()));
+        } catch (RuntimeException e) {
+            LOGGER.debug("Override use not attributed to a caller ({})", e.getClass().getSimpleName());
+        }
     }
 
     /**

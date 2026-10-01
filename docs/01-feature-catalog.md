@@ -65,6 +65,7 @@ Owner: control-plane-designer · Status: Draft v1
 | F-33 | **Aggregations** (count, sum, avg, group by) | v1.x | |
 | F-34 | **Row-level security policies** (predicate templates bound to principal attributes) | MVP | Policy applied to every query, including agent-invoked ones |
 | F-35 | **Named native SQL (admin-only, reviewed)** for reporting DBs | v2 | Four-eyes approval, read-only connection |
+| F-36 | **Model-built criteria queries** — agents describe the data model, build, check and run their own read queries as the caller (`describe_data_model`, `check_data_query`, `run_data_query`) | v1.0 | Implemented (LLD-05 §12): AI-exposed, non-sensitive, cleared columns only; typed values; mandatory filters bound to the caller; grants per tool |
 
 ### E. Agents (P4, P6)
 | ID | Feature | Tier | Acceptance criteria |
@@ -79,7 +80,7 @@ Owner: control-plane-designer · Status: Draft v1
 | F-52 | **Review UI components** — record-diff, record-form, delete-confirm, bulk-change-table with before/after, version, history, validation | MVP | Server-generated from proposal; editable fields limited to writable attributes |
 | F-53 | **Embeddable Web Components** (`<saimcp-*>`) for host UIs + JS client | MVP | Works in React/Angular/Thymeleaf hosts; WCAG 2.2 AA; themable via CSS variables |
 | F-46 | **Structured output** agents (JSON schema responses) | v1.x | Validated with retry |
-| F-47 | **RAG over host documents** (vector store integration) | v1.x | Document ACLs enforced at retrieval |
+| F-47 | **RAG over host documents** (vector store integration). *Bundled knowledge packs shipped in the JAR are implemented (ADR-0022); an external vector store with document ACLs is not.* | v1.x | Document ACLs enforced at retrieval |
 | F-48 | **Evaluation suites** — golden Q&A, tool-trajectory checks, run on publish | v1.x | Publish blocked if eval score < threshold |
 | F-49 | **Model routing & fallback** (primary/secondary provider, per-agent) | v1.x | Failover on provider error/timeout |
 | F-54 | **Parallel read tool calls** within a turn (bounded) | MVP | 4 × 200 ms reads complete in ≈ 250 ms |

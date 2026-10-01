@@ -42,6 +42,16 @@ public record EffectiveAttribute(CatalogElementRef ref, AttributeDescriptor desc
     }
 
     /**
+     * Whether the column is per-record context that is delivered with every row (see {@code @AiRowContext}) and may
+     * be, in this catalog generation: enabled and not sensitive.
+     *
+     * @return {@code true} if row context is to be delivered
+     */
+    public boolean rowContext() {
+        return descriptor.rowContext() && exposable();
+    }
+
+    /**
      * Whether the attribute may be shown to a model: enabled and not sensitive.
      *
      * @return {@code true} if exposable

@@ -431,6 +431,8 @@ public final class SecuredToolCallback implements ToolCallback {
             case ToolSource.OperationSource s -> s.opRef();
             case ToolSource.QuerySource s -> new CatalogElementRef(CatalogElementRef.Kind.QUERY, s.queryId().toString());
             case ToolSource.AgentSource s -> new CatalogElementRef(CatalogElementRef.Kind.AGENT, s.agentId().toString());
+            case ToolSource.CriteriaSource s -> new CatalogElementRef(CatalogElementRef.Kind.QUERY,
+                    "criteria/" + s.tool().name().toLowerCase(java.util.Locale.ROOT));
             case ToolSource.McpSource s -> new CatalogElementRef(CatalogElementRef.Kind.MCP,
                     safeValue(s.serverId() + "/" + s.remoteTool()));
         };

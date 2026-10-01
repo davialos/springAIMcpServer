@@ -15,8 +15,9 @@ import java.util.regex.Pattern;
  *
  * <ul>
  *   <li>{@link PiiType#EMAIL} — {@code local@domain.tld}</li>
- *   <li>{@link PiiType#PHONE} — {@code +<country> …} with 8–15 digits, or North American {@code (555) 123-4567}
- *       / {@code 555-123-4567}; bare digit runs are not treated as phone numbers</li>
+ *   <li>{@link PiiType#PHONE} — {@code +<country> …} with 8–15 digits, North American {@code (555) 123-4567}
+ *       / {@code 555-123-4567}, or national format with a trunk {@code 0} and separators ({@code 020 7946 0958},
+ *       9–12 digits); bare digit runs are not treated as phone numbers</li>
  *   <li>{@link PiiType#CREDIT_CARD} — 13–19 digits, optionally grouped by spaces or dashes, Luhn-valid</li>
  *   <li>{@link PiiType#IBAN} — ISO 13616, mod-97 valid, compact or grouped by spaces</li>
  *   <li>{@link PiiType#NATIONAL_ID} — US social security number {@code 123-45-6789} (dashes required)</li>
@@ -36,6 +37,9 @@ public final class RegexPiiDetector implements PiiDetector {
             "(?<![\\w+])\\+\\d{1,3}(?:[ .-]?\\(?\\d{1,5}\\)?){1,6}(?!\\w)");
     private static final Pattern PHONE_NORTH_AMERICA = Pattern.compile(
             "(?<![\\w(])(?:\\(\\d{3}\\) ?|\\d{3}[ .-])\\d{3}[ .-]\\d{4}(?!\\w)");
+    /** National format with a trunk prefix and separators: {@code 020 7946 0958}, {@code 0711-123456}. */
+    private static final Pattern PHONE_NATIONAL = Pattern.compile(
+            "(?<![\\w+.-])(?<!\\d )0[1-9]\\d{0,3}(?:[ -]\\d{2,8}){1,3}(?![\\w-])");
     private static final Pattern CARD = Pattern.compile("(?<![\\w-])(?:\\d[ -]?){12,18}\\d(?![\\w-])");
     private static final Pattern IBAN = Pattern.compile("(?<![A-Za-z0-9])[A-Z]{2}\\d{2}(?: ?[A-Z0-9]){11,32}");
     private static final Pattern US_SSN = Pattern.compile(
@@ -78,6 +82,13 @@ public final class RegexPiiDetector implements PiiDetector {
         while (m.find()) {
             int digits = countDigits(text, m.start(), m.end());
             if (digits >= 8 && digits <= 15) {
+                out.add(new PiiMatch(PiiType.PHONE, m.start(), m.end()));
+            }
+        }
+        m = PHONE_NATIONAL.matcher(text);
+        while (m.find()) {
+            int digits = countDigits(text, m.start(), m.end());
+            if (digits >= 9 && digits <= 12) {
                 out.add(new PiiMatch(PiiType.PHONE, m.start(), m.end()));
             }
         }

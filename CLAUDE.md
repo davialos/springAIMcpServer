@@ -82,6 +82,8 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`)
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
+- `docs/data/schema-usecase-map.md` — table → use case → business flow → feature/requirement map (behaviour; structure stays in LLD-15);
+  regenerate with `scripts/schema-usecase-map/` + the `schema-usecase-mapper` agent
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
 

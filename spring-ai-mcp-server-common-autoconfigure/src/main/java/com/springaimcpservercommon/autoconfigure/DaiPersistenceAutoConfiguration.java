@@ -56,6 +56,7 @@ import com.springaimcpservercommon.query.ast.Operator;
 import com.springaimcpservercommon.query.ast.PageSpec;
 import com.springaimcpservercommon.query.ast.Projection;
 import com.springaimcpservercommon.query.ast.QueryDefinition;
+import com.springaimcpservercommon.query.validation.QueryValidationException;
 import com.springaimcpservercommon.query.ast.QueryParam;
 import com.springaimcpservercommon.query.ast.SortSpec;
 import com.springaimcpservercommon.query.execution.QueryBulkheadException;
@@ -104,7 +105,7 @@ import java.util.stream.Collectors;
  */
 // After Boot's DataSource auto-configuration: the persistence unit needs the host's DataSource bean, and
 // @ConditionalOnBean only sees beans defined by earlier configurations (by name: spring-boot-jdbc is optional).
-@AutoConfiguration(after = DaiCoreAutoConfiguration.class,
+@AutoConfiguration(after = {DaiCoreAutoConfiguration.class, DaiQueryAutoConfiguration.class},
         afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -437,10 +438,12 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(TelemetryStore.class)
     @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
             prefix = "dynamic.ai.agent.conversations", name = "enabled", havingValue = "true")
-    public ConversationRecorder storeConversationRecorder(TelemetryStore store, DaiProperties props) {
+    public ConversationRecorder storeConversationRecorder(TelemetryStore store, DaiProperties props,
+            org.springframework.beans.factory.ObjectProvider<ConversationPii> pii) {
         DaiProperties.Conversations c = props.conversations();
         return new StoreConversationRecorder(store,
-                new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(), c.maxStoredChars()),
+                new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(), c.maxStoredChars(),
+                        pii.getIfAvailable(ConversationPii::off)),
                 c.retention());
     }
 
@@ -566,6 +569,32 @@ public class DaiPersistenceAutoConfiguration {
     public ResourceStatusView storeResourceStatusView(ConfigStore configStore) {
         return new StoreSecurityPorts.ResourceStatuses(configStore, Duration.ofSeconds(5),
                 java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Lets the admin write path make a publish visible to authorization at once (same hook the snapshot caches
+     * use). Without it a resource checked while still a draft reads as unpublished for up to the cache TTL after
+     * it is published.
+     *
+     * @param status the status port
+     * @return the refresh hook, or a no-op for a host-supplied port
+     */
+    @Bean
+    @ConditionalOnBean(ResourceStatusView.class)
+    SnapshotView resourceStatusRefresh(ResourceStatusView status) {
+        return new SnapshotView() {
+            @Override
+            public void refreshNow() {
+                if (status instanceof StoreSecurityPorts.ResourceStatuses statuses) {
+                    statuses.invalidateAll();
+                }
+            }
+
+            @Override
+            public long loadedGeneration() {
+                return 0;
+            }
+        };
     }
 
     /**
@@ -767,12 +796,41 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnBean(ConfigStore.class)
     ToolBridge.QueryCallbackFactory queryCallbackFactory(
             org.springframework.beans.factory.ObjectProvider<DispatchingBackingExecutor.QueryBackingHandler> handlers,
-            org.springframework.beans.factory.ObjectProvider<DaiQueryAutoConfiguration.QueryDefinitionLoader> loaders) {
+            org.springframework.beans.factory.ObjectProvider<DaiQueryAutoConfiguration.QueryDefinitionLoader> loaders,
+            org.springframework.beans.factory.ObjectProvider<MetadataRegistry> registry) {
         return (queryId, binding, principal) -> {
             DaiQueryAutoConfiguration.QueryDefinitionLoader loader = loaders.getIfAvailable();
-            return BackingToolCallback.forQuery(queryId, loader == null ? null : loader.load(queryId), binding,
-                    principal, handlers.getObject());
+            QueryDefinition definition = loader == null ? null : loader.load(queryId);
+            MetadataRegistry live = registry.getIfAvailable();
+            boolean rowContext = definition != null && live != null
+                    && live.current().entity(definition.root())
+                            .map(e -> e.enabled() && e.attributes().values().stream()
+                                    .anyMatch(com.springaimcpservercommon.core.catalog.EffectiveAttribute::rowContext))
+                            .orElse(false);
+            return BackingToolCallback.forQuery(queryId, definition, binding, principal, handlers.getObject(),
+                    rowContext);
         };
+    }
+
+    /**
+     * Delegates for {@code criteria} tool bindings (LLD-05 §12): describe the data model, check and run a read query
+     * the model builds itself, over entities the catalog exposes to AI, as the caller, through the same validator and
+     * {@link QueryExecutor} as published queries. Off with {@code dynamic.ai.agent.query.ai-criteria=false}; each tool
+     * still needs a published binding and a grant.
+     *
+     * @param executors the query executor (absent when the host has no JPA: describe and check still work)
+     * @param props     framework properties
+     * @return the factory
+     */
+    @Bean
+    @ConditionalOnMissingBean(ToolBridge.CriteriaCallbackFactory.class)
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "dynamic.ai.agent.query", name = "ai-criteria", havingValue = "true", matchIfMissing = true)
+    ToolBridge.CriteriaCallbackFactory criteriaCallbackFactory(
+            org.springframework.beans.factory.ObjectProvider<QueryExecutor> executors, DaiProperties props) {
+        var engine = new com.springaimcpservercommon.query.adhoc.CriteriaQueryEngine();
+        return (source, binding, principal, catalog) -> new CriteriaToolCallback(source, binding, principal, catalog,
+                engine, executors.getIfAvailable());
     }
 
     /**
@@ -889,6 +947,16 @@ public class DaiPersistenceAutoConfiguration {
                 throw new GenericDynamicHandler.BackingException(
                         ProblemCode.RESOURCE_SUSPENDED, "Query " + queryId + " is not published.");
             }
+            // The executor trusts its query (QueryExecutor contract): enforce the catalog allow-list here, on every
+            // run, against the live catalog, so a stored query can never reach a sensitive, hidden or disabled
+            // attribute or entity, whatever was published (LLD-05 §4). Publish-time validation is OQ-41.
+            try {
+                QUERY_VALIDATOR.validateAtPublish(def, registry.current(), null);
+            } catch (QueryValidationException e) {
+                LOG.warn("Query {} refused: {} violation(s): {}", queryId, e.violations().size(), e.violations());
+                throw new GenericDynamicHandler.BackingException(
+                        ProblemCode.EXECUTION_ERROR, "The query is not allowed by the catalog.");
+            }
             try {
                 QueryResult result = executor.execute(def, principal, bindings,
                         List.of(), registry.current(), 0);
@@ -902,6 +970,9 @@ public class DaiPersistenceAutoConfiguration {
             }
         };
     }
+
+    private static final com.springaimcpservercommon.query.validation.QueryValidator QUERY_VALIDATOR =
+            new com.springaimcpservercommon.query.validation.QueryValidator();
 
     private static String queryResultToJson(QueryResult result) {
         java.util.LinkedHashMap<String, Object> m = new java.util.LinkedHashMap<>();
@@ -1139,7 +1210,17 @@ public class DaiPersistenceAutoConfiguration {
                 toLimitSpec(spec.limits),
                 toOutputSpec(spec.output),
                 toReferences(spec.references),
-                spec.catalogHash != null ? spec.catalogHash : "sha256:unknown");
+                spec.catalogHash != null ? spec.catalogHash : "sha256:unknown",
+                toKnowledge(spec.knowledge));
+    }
+
+    private static List<com.springaimcpservercommon.ai.agent.KnowledgeRef> toKnowledge(
+            @Nullable List<KnowledgeRefJson> list) {
+        if (list == null) return List.of();
+        return list.stream()
+                .filter(k -> k.pack != null)
+                .map(k -> new com.springaimcpservercommon.ai.agent.KnowledgeRef(k.pack, k.topK, k.minSimilarity))
+                .toList();
     }
 
     private static ModelSelection toModelSelection(@Nullable ModelSpecJson m) {
@@ -1269,7 +1350,14 @@ public class DaiPersistenceAutoConfiguration {
         public @Nullable LimitSpecJson limits;
         public @Nullable OutputSpecJson output;
         public @Nullable List<RefJson> references;
+        public @Nullable List<KnowledgeRefJson> knowledge;
         public @Nullable String catalogHash;
+    }
+
+    static final class KnowledgeRefJson {
+        public @Nullable String pack;
+        public int topK = 4;
+        public double minSimilarity = 0.0;
     }
 
     static final class ModelSpecJson {

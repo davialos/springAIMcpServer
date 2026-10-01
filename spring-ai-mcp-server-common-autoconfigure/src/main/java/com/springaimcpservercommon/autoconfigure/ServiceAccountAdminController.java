@@ -4,6 +4,10 @@ import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import com.springaimcpservercommon.persistence.audit.AuditCategory;
 import com.springaimcpservercommon.persistence.audit.AuditPlane;
 import com.springaimcpservercommon.persistence.identity.ApiKeyStore;
+import com.springaimcpservercommon.security.apikey.GeneratedApiKey;
+import com.springaimcpservercommon.security.apikey.ApiKeyService;
+import com.springaimcpservercommon.persistence.identity.NewApiKey;
+import com.springaimcpservercommon.persistence.identity.ApiKeyHashAlgorithm;
 import com.springaimcpservercommon.persistence.identity.ApiKeyView;
 import com.springaimcpservercommon.persistence.identity.ServiceAccountView;
 import com.springaimcpservercommon.security.permission.Permission;
@@ -35,9 +39,10 @@ import java.util.UUID;
  * Service account and API key admin API (F-65). Requires {@link Permission#SERVICEACCOUNT_MANAGE} in the
  * workspace. Key listings never include the stored hash or any secret.
  *
- * <p>Issuing a new key is intentionally not exposed yet: it needs the security module's
- * {@code ApiKeyService} (pepper provider), which has no auto-configuration (OQ-37). Revoking keys works
- * today; verified keys may stay usable for up to the verification cache TTL (30 s) after revocation.
+ * <p>Issuing a key needs {@code dynamic.ai.agent.security.api-keys.enabled=true} (and a pepper); without it the
+ * endpoint answers 404. The secret is returned once, in the response to the issuing request, and cannot be shown
+ * again. Revoking works at once on this node; verified keys may stay usable on other nodes for up to the
+ * verification cache TTL (30 s) after revocation.
  *
  * <p>Not a {@code @Component}; registered by {@link DaiAdminAutoConfiguration}.
  */
@@ -96,6 +101,8 @@ public final class ServiceAccountAdminController {
     }
 
     private final ApiKeyStore store;
+    private final @Nullable ApiKeyService keys;
+    private final int defaultLifetimeDays;
     private final AdminAudit audit;
     private final AdminApi api;
     private final Clock clock;
@@ -110,6 +117,17 @@ public final class ServiceAccountAdminController {
      * @param identityChanged called after a change that alters callers' roles (drops the principal-mapping cache)
      */
     ServiceAccountAdminController(ApiKeyStore store, AdminAudit audit, AdminApi api, Clock clock, Runnable identityChanged) {
+        this(store, audit, api, clock, identityChanged, null, 90);
+    }
+
+    /**
+     * @param keys                API key service, or {@code null} when API keys are not enabled
+     * @param defaultLifetimeDays lifetime of a key issued without an explicit one
+     */
+    ServiceAccountAdminController(ApiKeyStore store, AdminAudit audit, AdminApi api, Clock clock,
+                                  Runnable identityChanged, @Nullable ApiKeyService keys, int defaultLifetimeDays) {
+        this.keys = keys;
+        this.defaultLifetimeDays = defaultLifetimeDays;
         this.identityChanged = Objects.requireNonNull(identityChanged, "identityChanged");
         this.store = Objects.requireNonNull(store, "store");
         this.audit = Objects.requireNonNull(audit, "audit");
@@ -213,6 +231,87 @@ public final class ServiceAccountAdminController {
     }
 
     /**
+     * Issue request.
+     *
+     * @param expiresInDays   lifetime, 1..365; the configured default when absent
+     * @param scopes          what the key may ever do, a ceiling on top of the service account's grants:
+     *                        {@code mcp:read}, {@code mcp:propose}, {@code mcp:agents} and grantable permissions such
+     *                        as {@code tool:invoke}, {@code agent:invoke}; default {@code mcp:read} and
+     *                        {@code tool:invoke}
+     * @param allowedNetworks optional CIDR allow-list; empty = any network
+     */
+    public record IssueRequest(@Nullable Integer expiresInDays, @Nullable List<String> scopes,
+                               @Nullable List<String> allowedNetworks) {}
+
+    /**
+     * Issues an API key for a service account. The secret is in this response only.
+     *
+     * @param workspaceId workspace
+     * @param id          service account
+     * @param body        lifetime, scopes, networks
+     * @param request     current request
+     * @return 201 with the key metadata and {@code apiKey} (once); 400; 404 when unknown or API keys are off
+     */
+    @PostMapping("/{id}/keys")
+    public ResponseEntity<?> issueKey(@PathVariable UUID workspaceId, @PathVariable UUID id,
+                                      @RequestBody(required = false) @Nullable IssueRequest body,
+                                      HttpServletRequest request) {
+        var gate = api.gate(request, Permission.SERVICEACCOUNT_MANAGE, workspaceId);
+        if (!gate.open()) {
+            return gate.denied();
+        }
+        if (keys == null || !inWorkspace(workspaceId, id)) {
+            return AdminApi.problem(ProblemCode.NOT_FOUND, "Service account not found", null, request);
+        }
+        List<FieldViolation> errors = new ArrayList<>();
+        int days = body == null || body.expiresInDays() == null ? defaultLifetimeDays : body.expiresInDays();
+        if (days < 1 || days > 365) {
+            errors.add(new FieldViolation("expiresInDays", "must be 1..365"));
+        }
+        Set<String> scopes = new TreeSet<>();
+        if (body == null || body.scopes() == null || body.scopes().isEmpty()) {
+            scopes.add(Permission.MCP_READ.value());
+            scopes.add(Permission.TOOL_INVOKE.value());
+        } else {
+            for (String scope : body.scopes()) {
+                boolean known = java.util.Arrays.stream(Permission.values())
+                        .anyMatch(p -> p.kind() != Permission.Kind.ROLE && p.value().equals(scope));
+                if (known) {
+                    scopes.add(scope);
+                } else {
+                    errors.add(new FieldViolation("scopes", "unknown scope: " + scope));
+                }
+            }
+        }
+        List<String> networks = body == null || body.allowedNetworks() == null ? List.of() : body.allowedNetworks();
+        if (!errors.isEmpty()) {
+            return AdminApi.validation(request, errors);
+        }
+        Instant expires = clock.instant().plus(java.time.Duration.ofDays(days));
+        GeneratedApiKey generated = keys.generate(expires);
+        ApiKeyView stored;
+        try {
+            stored = store.createKey(new NewApiKey(id, generated.keyPrefix(), generated.keyHash(),
+                    ApiKeyHashAlgorithm.HMAC_SHA256, expires, scopes, networks, gate.caller().principalId()));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return AdminApi.validation(request, List.of(new FieldViolation("allowedNetworks",
+                    "invalid, or the service account is disabled")));
+        }
+        audit.record(gate.caller(), AuditCategory.ADMIN, AuditPlane.CONTROL, "API_KEY_ISSUED", workspaceId, "api_key",
+                stored.id().toString(), null, null, Map.of("serviceAccountId", id.toString(),
+                        "keyPrefix", stored.keyPrefix()));
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("id", stored.id());
+        response.put("keyPrefix", stored.keyPrefix());
+        response.put("expiresAt", stored.expiresAt());
+        response.put("scopes", scopes);
+        response.put("allowedNetworks", networks);
+        response.put("apiKey", generated.plaintext());
+        response.put("note", "Store this key now: it is shown only once.");
+        return ResponseEntity.status(HttpStatus.CREATED).header("Cache-Control", "no-store").body(response);
+    }
+
+    /**
      * Revokes a key. Idempotent for already revoked keys (404 is returned only for unknown keys).
      *
      * @param workspaceId workspace
@@ -232,7 +331,12 @@ public final class ServiceAccountAdminController {
             return AdminApi.problem(ProblemCode.NOT_FOUND, "API key not found", null, request);
         }
         DaiPrincipal caller = gate.caller();
+        String prefix = store.keysOf(id).stream().filter(k -> k.id().equals(keyId)).map(ApiKeyView::keyPrefix)
+                .findFirst().orElse(null);
         if (store.revoke(keyId, caller.principalId())) {
+            if (keys != null && prefix != null) {
+                keys.evict(prefix); // this node stops accepting it now; others within the cache TTL
+            }
             audit.record(caller, AuditCategory.ADMIN, AuditPlane.CONTROL, "API_KEY_REVOKED", workspaceId, "api_key",
                     keyId.toString(), null, null, Map.of("serviceAccountId", id.toString()));
         }

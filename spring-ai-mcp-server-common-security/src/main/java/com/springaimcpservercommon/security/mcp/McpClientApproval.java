@@ -101,7 +101,11 @@ public final class McpClientApproval {
                     scopes.add(scope.value());
                 }
             }
-            registry.recordConsent(mcpClientId, principal.principalId(), scopes);
+            // a token without any MCP scope has nothing to consent to (the scope check refuses it right after);
+            // recording an empty consent is rejected by the store and used to fail the request with a 500
+            if (!scopes.isEmpty()) {
+                registry.recordConsent(mcpClientId, principal.principalId(), scopes);
+            }
         }
         return new Approved(mcpClientId, clientId);
     }

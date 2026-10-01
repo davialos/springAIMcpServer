@@ -40,7 +40,7 @@ import java.util.Map;
 @AutoConfiguration
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         prefix = "dynamic.ai.agent", name = "enabled", havingValue = "true", matchIfMissing = true)
-@EnableConfigurationProperties(DaiProperties.class)
+@EnableConfigurationProperties({DaiProperties.class, DaiProductionOverrideProperties.class, DaiPiiProperties.class})
 @NullMarked
 public class DaiCoreAutoConfiguration {
 
@@ -71,12 +71,57 @@ public class DaiCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(EnvironmentSafetyPolicy.class)
-    public EnvironmentSafetyPolicy environmentSafetyPolicy(DaiProperties props, Environment environment) {
+    public EnvironmentSafetyPolicy environmentSafetyPolicy(DaiProperties props, Environment environment,
+                                                           DaiProductionOverrideProperties overrideProps) {
         DaiProperties.Environment envProps = props.environment();
         List<String> prodPatterns = envProps.prodProfilePatterns() != null && !envProps.prodProfilePatterns().isEmpty()
                 ? envProps.prodProfilePatterns()
                 : DefaultEnvironmentSafetyPolicy.DEFAULT_PROD_PROFILE_PATTERNS;
-        return new DefaultEnvironmentSafetyPolicy(prodPatterns, null, java.time.Clock.systemUTC());
+        java.time.Clock clock = java.time.Clock.systemUTC();
+        return new DefaultEnvironmentSafetyPolicy(prodPatterns, productionOverride(overrideProps, clock), clock);
+    }
+
+    /**
+     * The break-glass override from configuration, validated; {@code null} when none is configured. A misconfigured
+     * override stops the application at startup (a half-understood break-glass must not silently do nothing or
+     * something else).
+     */
+    static com.springaimcpservercommon.core.environment.@org.jspecify.annotations.Nullable ProductionOverride productionOverride(
+            DaiProductionOverrideProperties props, java.time.Clock clock) {
+        if (props.capabilities().isEmpty() && props.expiresAt() == null && props.reason() == null) {
+            return null;
+        }
+        if (props.capabilities().isEmpty() || props.expiresAt() == null || props.reason() == null) {
+            throw new IllegalStateException("dynamic.ai.agent.environment.production-override needs capabilities, "
+                    + "expires-at and reason together");
+        }
+        try {
+            var override = com.springaimcpservercommon.core.environment.ProductionOverride.validated(
+                    java.util.EnumSet.copyOf(props.capabilities()), props.expiresAt(), props.reason(), clock);
+            log.warn("PRODUCTION OVERRIDE configured: {} until {} (reason: {}). Every use is audited.",
+                    override.capabilities(), override.expiresAt(), override.reason());
+            return override;
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("dynamic.ai.agent.environment.production-override is invalid: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * How personal data is masked in stored conversation text (F-76, OQ-44): the guardrails' detector restricted to
+     * {@code dynamic.ai.agent.conversations.pii.types}, the configured custom patterns and every host
+     * {@link com.springaimcpservercommon.core.guard.PiiDetector} bean (a DLP service, a name recogniser), so one
+     * detector bean covers prompts, answers and storage.
+     *
+     * @param props         PII settings
+     * @param hostDetectors host detector beans
+     * @return the policy
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConversationPii.class)
+    ConversationPii daiConversationPii(DaiPiiProperties props,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.core.guard.PiiDetector> hostDetectors) {
+        return ConversationPii.of(props, hostDetectors.orderedStream().toList());
     }
 
     /**

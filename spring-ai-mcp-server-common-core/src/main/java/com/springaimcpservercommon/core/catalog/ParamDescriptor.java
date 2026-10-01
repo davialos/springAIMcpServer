@@ -2,6 +2,7 @@ package com.springaimcpservercommon.core.catalog;
 
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -15,9 +16,18 @@ import java.util.Objects;
  * @param required    whether the model must supply it
  * @param sensitive   value redacted in traces, audit and echoed filters
  * @param kind        what the parameter is used for
+ * @param details     {@code @AiParam.details}: plain-English notes on how to tell a right value from a wrong one
+ * @param examples    {@code @AiParam.examples}: made-up example values (empty for a sensitive parameter)
  */
 public record ParamDescriptor(String name, int index, String javaType, @Nullable String description,
-                              boolean required, boolean sensitive, Kind kind) {
+                              boolean required, boolean sensitive, Kind kind, @Nullable String details,
+                              List<String> examples) {
+
+    /** Creates a parameter without details or examples. */
+    public ParamDescriptor(String name, int index, String javaType, @Nullable String description,
+                           boolean required, boolean sensitive, Kind kind) {
+        this(name, index, javaType, description, required, sensitive, kind, null, List.of());
+    }
 
     /** Role of a parameter. */
     public enum Kind {
@@ -36,6 +46,7 @@ public record ParamDescriptor(String name, int index, String javaType, @Nullable
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(javaType, "javaType");
         Objects.requireNonNull(kind, "kind");
+        examples = List.copyOf(examples);
         if (index < 0) {
             throw new IllegalArgumentException("index must be >= 0");
         }

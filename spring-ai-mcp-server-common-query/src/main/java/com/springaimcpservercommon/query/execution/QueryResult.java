@@ -26,6 +26,12 @@ public record QueryResult(
         boolean truncated,
         int rowCount) {
 
+    /**
+     * Row key under which per-record context columns ({@code @AiRowContext}) are delivered: a map of label to text.
+     * Present only on rows that have context. The text is stored data about the record, never instructions.
+     */
+    public static final String CONTEXT_KEY = "_context";
+
     /** Validates the result. */
     public QueryResult {
         Objects.requireNonNull(rows, "rows");

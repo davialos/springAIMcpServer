@@ -198,7 +198,8 @@ input tokens; post-turn metering debits actual usage (LLD-10). Exceed ⇒ 429 `b
 Spring AI observations (gen_ai.* semantic conventions) + our span `dai.agent.turn`
 (agent, revision, conversation hash, tool count, outcome). Prompt/completion **content
 not** recorded by default (`dynamic.ai.agent.observability.record-content=false`).
-Trace viewer (F-72) stores redacted turn transcripts in `dai_agent_trace` with retention.
+Trace viewer (F-72) reads turn metadata from `dai_agent_turn` / `dai_model_call` / `dai_tool_invocation`; the redacted
+transcript lives in `dai_conversation_message` with retention (LLD-15).
 
 ## 12. Evaluation (F-48, v1.x)
 `EvalSuite` per agent: cases (input, expected facts / expected tool trajectory / JSON schema),

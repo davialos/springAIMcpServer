@@ -76,8 +76,9 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean({GenericDynamicHandler.DaiPrincipalResolver.class, AuthorizationEngine.class,
                         EnvironmentSafetyPolicy.class, EnvironmentSignals.class})
     AdminApi adminApi(GenericDynamicHandler.DaiPrincipalResolver principalResolver, AuthorizationEngine engine,
-                      EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals signals) {
-        return new AdminApi(principalResolver, engine, safetyPolicy, signals);
+                      EnvironmentSafetyPolicy safetyPolicy, EnvironmentSignals signals,
+                      org.springframework.beans.factory.ObjectProvider<AdminAudit> audit) {
+        return new AdminApi(principalResolver, engine, safetyPolicy, signals, audit.getIfAvailable());
     }
 
     /**
@@ -274,9 +275,45 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnBean({ApiKeyStore.class, AdminAudit.class, AdminApi.class})
     public ServiceAccountAdminController serviceAccountAdminController(ApiKeyStore store, AdminAudit audit,
                                                                        AdminApi api,
-            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers) {
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.principal.AuthorityMapper> mappers,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.security.apikey.ApiKeyService> keys,
+            org.springframework.beans.factory.ObjectProvider<DaiApiKeyProperties> keyProperties) {
         return new ServiceAccountAdminController(store, audit, api, java.time.Clock.systemUTC(),
-                () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll));
+                () -> mappers.ifAvailable(com.springaimcpservercommon.security.principal.AuthorityMapper::invalidateAll),
+                keys.getIfAvailable(), keyProperties.getIfAvailable(
+                        () -> new DaiApiKeyProperties(false, null, 1, null, true, 90)).defaultLifetimeDays());
+    }
+
+    /**
+     * Content checks of saved specs against the live catalog (OQ-41).
+     *
+     * @param registry  the live catalog
+     * @param knowledge the knowledge packs (an agent may only name existing ones)
+     * @return the checker
+     */
+    @Bean
+    @ConditionalOnMissingBean(ResourceSpecChecker.class)
+    ResourceSpecChecker resourceSpecChecker(
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.core.catalog.MetadataRegistry> registry,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.ai.knowledge.KnowledgeStore> knowledge) {
+        return new CatalogSpecChecker(registry, knowledge);
+    }
+
+    /**
+     * MCP client admin API (register, approve, revoke the OAuth clients the MCP endpoint serves).
+     *
+     * @param store MCP client store
+     * @param audit audit recorder
+     * @param api   admin gate
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(McpClientAdminController.class)
+    @ConditionalOnBean({com.springaimcpservercommon.persistence.identity.McpClientStore.class, AdminAudit.class,
+            AdminApi.class})
+    public McpClientAdminController mcpClientAdminController(
+            com.springaimcpservercommon.persistence.identity.McpClientStore store, AdminAudit audit, AdminApi api) {
+        return new McpClientAdminController(store, audit, api);
     }
 
     /**
@@ -418,8 +455,10 @@ public class DaiAdminAutoConfiguration {
     @ConditionalOnMissingBean(ResourceAdminController.class)
     @ConditionalOnBean({ConfigStore.class, AdminAudit.class, AdminApi.class})
     public ResourceAdminController resourceAdminController(ConfigStore configStore, AdminAudit audit, AdminApi api,
-                                                           DaiProperties props, org.springframework.beans.factory.ObjectProvider<DaiPersistenceAutoConfiguration.SnapshotView> views) {
+                                                           DaiProperties props, org.springframework.beans.factory.ObjectProvider<DaiPersistenceAutoConfiguration.SnapshotView> views,
+                                                           org.springframework.beans.factory.ObjectProvider<ResourceSpecChecker> checker) {
         return new ResourceAdminController(configStore, audit, api, props.review().requiredApprovals(),
-                () -> views.orderedStream().forEach(DaiPersistenceAutoConfiguration.SnapshotView::refreshNow));
+                () -> views.orderedStream().forEach(DaiPersistenceAutoConfiguration.SnapshotView::refreshNow),
+                checker.getIfAvailable(() -> ResourceSpecChecker.NONE));
     }
 }

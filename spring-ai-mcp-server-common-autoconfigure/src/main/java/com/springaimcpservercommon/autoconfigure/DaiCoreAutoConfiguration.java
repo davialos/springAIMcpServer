@@ -108,29 +108,20 @@ public class DaiCoreAutoConfiguration {
     }
 
     /**
-     * Finds personal data in text that is about to be stored (F-76): the built-in patterns plus the host's own.
-     * Declare your own {@link com.springaimcpservercommon.core.lint.PiiDetector} to use a DLP service or a name
-     * recogniser.
+     * How personal data is masked in stored conversation text (F-76, OQ-44): the guardrails' detector restricted to
+     * {@code dynamic.ai.agent.conversations.pii.types}, the configured custom patterns and every host
+     * {@link com.springaimcpservercommon.core.guard.PiiDetector} bean (a DLP service, a name recogniser), so one
+     * detector bean covers prompts, answers and storage.
      *
-     * @param props PII settings
-     * @return the detector
+     * @param props         PII settings
+     * @param hostDetectors host detector beans
+     * @return the policy
      */
     @Bean
-    @ConditionalOnMissingBean(com.springaimcpservercommon.core.lint.PiiDetector.class)
-    public com.springaimcpservercommon.core.lint.PiiDetector daiConversationPiiDetector(DaiPiiProperties props) {
-        java.util.Map<String, java.util.regex.Pattern> custom = new java.util.LinkedHashMap<>();
-        props.customPatterns().forEach((label, regex) -> {
-            try {
-                custom.put(label, java.util.regex.Pattern.compile(regex));
-            } catch (java.util.regex.PatternSyntaxException e) {
-                throw new IllegalStateException("dynamic.ai.agent.conversations.pii.custom-patterns." + label
-                        + " is not a valid regular expression");
-            }
-        });
-        java.util.Set<com.springaimcpservercommon.core.lint.RegexPiiDetector.Type> types = props.types().isEmpty()
-                ? com.springaimcpservercommon.core.lint.RegexPiiDetector.DEFAULT_TYPES
-                : java.util.Set.copyOf(props.types());
-        return new com.springaimcpservercommon.core.lint.RegexPiiDetector(types, custom);
+    @ConditionalOnMissingBean(ConversationPii.class)
+    ConversationPii daiConversationPii(DaiPiiProperties props,
+            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.core.guard.PiiDetector> hostDetectors) {
+        return ConversationPii.of(props, hostDetectors.orderedStream().toList());
     }
 
     /**

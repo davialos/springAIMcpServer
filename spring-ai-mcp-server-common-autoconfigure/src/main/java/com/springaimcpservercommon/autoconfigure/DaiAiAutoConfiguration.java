@@ -292,8 +292,7 @@ public class DaiAiAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(ChatMemory.class)
     public ChatMemory chatMemory(ObjectProvider<ChatMemoryStore> storeProvider, DaiProperties props,
-                                 ObjectProvider<com.springaimcpservercommon.core.lint.PiiDetector> pii,
-                                 ObjectProvider<DaiPiiProperties> piiProperties) {
+                                 ObjectProvider<ConversationPii> pii) {
         ChatMemoryRepository repository = new InMemoryChatMemoryRepository();
         ChatMemoryStore store = storeProvider.getIfAvailable();
         DaiProperties.Memory memory = props.memory();
@@ -301,9 +300,7 @@ public class DaiAiAutoConfiguration {
             repository = new StoreChatMemoryRepository(store,
                     new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(),
                             memory.maxStoredChars(),
-                            pii.getIfAvailable(() -> com.springaimcpservercommon.core.lint.PiiDetector.NONE),
-                            piiProperties.getIfAvailable(() -> new DaiPiiProperties(DaiPiiProperties.Mode.OFF,
-                                    java.util.List.of(), java.util.Map.of())).mode()),
+                            pii.getIfAvailable(ConversationPii::off)),
                     memory.retention());
         }
         return MessageWindowChatMemory.builder().chatMemoryRepository(repository).build();

@@ -439,14 +439,11 @@ public class DaiPersistenceAutoConfiguration {
     @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
             prefix = "dynamic.ai.agent.conversations", name = "enabled", havingValue = "true")
     public ConversationRecorder storeConversationRecorder(TelemetryStore store, DaiProperties props,
-            org.springframework.beans.factory.ObjectProvider<com.springaimcpservercommon.core.lint.PiiDetector> pii,
-            org.springframework.beans.factory.ObjectProvider<DaiPiiProperties> piiProperties) {
+            org.springframework.beans.factory.ObjectProvider<ConversationPii> pii) {
         DaiProperties.Conversations c = props.conversations();
         return new StoreConversationRecorder(store,
                 new MessageRedactor(new com.springaimcpservercommon.core.lint.SecretScanner(), c.maxStoredChars(),
-                        pii.getIfAvailable(() -> com.springaimcpservercommon.core.lint.PiiDetector.NONE),
-                        piiProperties.getIfAvailable(() -> new DaiPiiProperties(DaiPiiProperties.Mode.OFF,
-                                java.util.List.of(), java.util.Map.of())).mode()),
+                        pii.getIfAvailable(ConversationPii::off)),
                 c.retention());
     }
 

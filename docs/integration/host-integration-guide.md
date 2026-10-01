@@ -939,17 +939,19 @@ An invalid override (no reason, no expiry, too long, not overridable) stops the 
 
 ## Personal data in stored conversations
 
-Stored transcripts (and the model's chat memory) are masked by default: e-mail addresses, phone numbers, card numbers,
-IBANs and US SSNs become `[EMAIL]`, `[PHONE]`, `[CREDIT_CARD]`, `[IBAN]`, `[US_SSN]`. Credentials still remove the
+Stored transcripts (and the model's chat memory) are masked by default with the same detector and placeholders as the
+answer guardrails (§9): e-mail addresses, phone numbers, card numbers, IBANs and US SSNs become `[redacted email]`,
+`[redacted phone]`, `[redacted credit card]`, `[redacted iban]`, `[redacted national id]`. Credentials still remove the
 whole message.
 
 ```yaml
 dynamic.ai.agent.conversations.pii:
   mode: MASK            # MASK (default) | REMOVE (drop the whole message) | OFF
-  types: [EMAIL, PHONE, CREDIT_CARD, IBAN, US_SSN, IPV4]   # default: all but IPV4
-  custom-patterns:
+  types: [EMAIL, PHONE, CREDIT_CARD, IBAN, NATIONAL_ID, IP_ADDRESS]   # default: all but IP_ADDRESS
+  custom-patterns:      # masked as [redacted other]
     EMPLOYEE_ID: 'E-\d{6}'
 ```
 
-This changes what is stored, not the current turn's prompt. Names and free-form addresses are not detected by the
-built-in patterns: declare your own `PiiDetector` bean (a DLP service, a name recogniser) to cover them.
+This changes what is stored, not the current turn's prompt (that is `guardrails.redact-input-pii`). Names and
+free-form addresses are not detected by the built-in patterns: a `PiiDetector` bean of yours (§9 — a DLP service, a
+name recogniser, your identifier formats) is applied to stored text as well as to prompts and answers.

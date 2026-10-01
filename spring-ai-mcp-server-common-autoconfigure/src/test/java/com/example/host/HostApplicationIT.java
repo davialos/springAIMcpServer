@@ -792,7 +792,8 @@ class HostApplicationIT {
                 Thread.sleep(100);
             }
         }
-        assertThat(transcript).contains("[EMAIL]").contains("[CREDIT_CARD]").contains("[EMPLOYEE_ID]")
+        assertThat(transcript).contains("[redacted email]").contains("[redacted credit card]")
+                .contains("[redacted other]")
                 .doesNotContain("jane.doe").doesNotContain("4111").doesNotContain("E-123456");
         // the model's chat memory is stored through the same redactor
         var jdbc = new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class));

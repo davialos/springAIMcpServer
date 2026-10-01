@@ -17,6 +17,25 @@ authoritative contract), and `--actuator http://localhost:8080/actuator/mappings
 exist at run time (e.g. this library's dynamic endpoints). Narrow with `--include '/api/**'`, drop with
 `--exclude 'DELETE /**'` or an API id.
 
+## 1b. Or start from a browser recording
+
+Record the flow you want to load-test in Chrome/Edge: DevTools ▸ **Network** (tick *Preserve log*), click
+through the app, then **Export HAR** (the download icon; the default *sanitized* export is enough).
+
+```
+scripts/loadtest.sh discover --har shop-checkout.har                    # what was recorded
+scripts/loadtest.sh generate --har shop-checkout.har --out shop-load    # suite from the recording alone
+scripts/loadtest.sh generate --project ../shop --har shop-checkout.har  # recording + sources (best)
+```
+
+You get every API the page called (with URL templates such as `/orders/{orderId}`), the values that were
+sent (as user data, so `auto` mode reuses them), and `data/journey.json`: the calls in order, with their
+pauses, where ids returned by one call (the order just created) feed the next ones. Replay it under any
+profile: `./run.sh journey-preview`, `./run.sh journey-smoke`, `./run.sh journey-spike`, `./run.sh
+journey-stress dummy` (same flow, generated values). Calls to other hosts (analytics, CDNs) are ignored unless
+you pass `--har-host`. Cookies, tokens, CSRF headers and password fields are never kept; pass
+`--har-no-values` to keep the APIs and the flow but none of the recorded values.
+
 ## 2. Generate
 
 ```
@@ -62,6 +81,8 @@ API=createOrder ./run.sh stress dummy # find where one API degrades
 | `spike` / `mixed-spike` | baseline, 10x within 10 s, hold, recover |
 | `soak` / `mixed-soak` | base VUs for 1 h |
 | `breakpoint` / `mixed-breakpoint` | arrival rate ramps to 20x; aborts at the first failed threshold |
+
+Every profile also has a `journey-<profile>` form that replays the recorded browser flow (section 1b).
 
 | Data mode (`DATA_MODE`) | Values |
 |---|---|

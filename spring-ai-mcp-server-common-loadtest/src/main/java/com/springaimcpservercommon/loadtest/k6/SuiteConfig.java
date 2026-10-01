@@ -78,6 +78,7 @@ final class SuiteConfig {
         thresholds.putArray("checks").add("rate>0.95");
         root.putObject("defaults").put("p95Ms", 800).put("maxErrorRate", 0.01);
         root.putObject("perApi").put("schedule", "sequential").put("gap", "5s");
+        root.putObject("journey").put("pauseScale", 1.0).put("maxPauseMs", 5000);
 
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {

@@ -135,9 +135,17 @@ export function buildRequest(api, hooks) {
   return { req, ctx };
 }
 
-/** Builds, sends and checks one request. */
+/** Builds, sends and checks one request, then pauses for the configured think time. */
 export function call(api, runtime, auth, hooks) {
   const { req, ctx } = buildRequest(api, hooks);
+  const res = send(api, req, ctx, runtime, auth, hooks);
+  const think = runtime.config.thinkTime || {};
+  if (think.max > 0) sleep(think.min + Math.random() * (think.max - think.min));
+  return res;
+}
+
+/** Sends a built request: URL, auth and JSON body, tags, expected-status check, afterResponse hook. */
+export function send(api, req, ctx, runtime, auth, hooks) {
   const config = runtime.config;
   const url = runtime.baseUrl + fillPath(api.path, req.path) + queryString(req.query);
   const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, (auth && auth.headers) || {});
@@ -155,9 +163,123 @@ export function call(api, runtime, auth, hooks) {
   });
   check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, { api: api.id });
   if (hooks && typeof hooks.afterResponse === 'function') hooks.afterResponse(api.id, res, req, ctx);
-  const think = config.thinkTime || {};
-  if (think.max > 0) sleep(think.min + Math.random() * (think.max - think.min));
   return res;
+}
+
+// ── Journey: replay of a recorded browser flow (data/journey.json) ──────────────────────────────────────
+// Each step: { api, path, query, headers, body, fill: [paths], pauseMs, recordedStatus }. A value
+// { "$from": i, "at": "content.0.id", "alt": [{ "$from": j, "at": "id" }], "recorded": 41 } is taken from step
+// i's response this run, else from the alternatives, else the recorded value. In auto/user data mode the recorded values are sent; sensitive fields (listed in
+// fill) are generated. In dummy/random/real/mixed mode only the order, pauses and correlations are replayed.
+
+function getPath(obj, path) {
+  return String(path || '').split('.').filter((k) => k !== '').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+
+function setPath(obj, path, value) {
+  const keys = String(path).split('.');
+  let o = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (o[keys[i]] == null || typeof o[keys[i]] !== 'object') o[keys[i]] = /^\d+$/.test(keys[i + 1]) ? [] : {};
+    o = o[keys[i]];
+  }
+  if (value === undefined) delete o[keys[keys.length - 1]];
+  else o[keys[keys.length - 1]] = value;
+}
+
+function resolveRefs(value, results) {
+  if (Array.isArray(value)) return value.map((v) => resolveRefs(v, results));
+  if (value && typeof value === 'object') {
+    if (value.$from !== undefined) {
+      for (const source of [value].concat(value.alt || [])) {
+        const v = getPath(results[source.$from], source.at);
+        if (v !== undefined && v !== null && typeof v !== 'object') return v;
+      }
+      return value.recorded;
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = resolveRefs(v, results);
+    return out;
+  }
+  return value;
+}
+
+function onlyRefs(values, results) {
+  const out = {};
+  for (const [k, v] of Object.entries(values || {})) {
+    if (v && typeof v === 'object' && v.$from !== undefined) out[k] = resolveRefs(v, results);
+  }
+  return out;
+}
+
+function stepRequest(step, api, runtime, results) {
+  const ctx = data.context(api.id);
+  const req = api.mod.build(ctx);
+  if (runtime.dataMode === 'auto' || runtime.dataMode === 'user') {
+    req.path = Object.assign({}, req.path, resolveRefs(step.path, results));
+    req.query = resolveRefs(step.query || {}, results);
+    req.headers = Object.assign({}, req.headers, step.headers || {});
+    if (step.body !== undefined) {
+      const generated = req.body;
+      const body = resolveRefs(step.body, results);
+      for (const p of step.fill || []) setPath(body, p, getPath(generated, p));
+      req.body = body;
+    }
+    for (const k of Object.keys(step.path || {})) ctx.sources[`path.${k}`] = 'recorded';
+  } else {
+    Object.assign(req.path, onlyRefs(step.path, results)); // created ids still flow from step to step
+  }
+  return { req, ctx };
+}
+
+/** Replays the whole recorded flow once (one iteration). Steps of disabled APIs (e.g. DELETE) are skipped. */
+export function replay(runtime, steps, auth, hooks) {
+  const allowed = {};
+  for (const a of runtime.apis) allowed[a.id] = true;
+  const cfg = runtime.config.journey || {};
+  const maxPause = cfg.maxPauseMs !== undefined ? cfg.maxPauseMs : 5000;
+  const scale = cfg.pauseScale !== undefined ? cfg.pauseScale : 1;
+  const results = [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const api = runtime.byId[step.api];
+    if (!api || !allowed[step.api]) {
+      results.push(undefined);
+      continue;
+    }
+    const pause = Math.min(step.pauseMs || 0, maxPause) * scale;
+    if (i > 0 && pause > 0) sleep(pause / 1000);
+    let { req, ctx } = stepRequest(step, api, runtime, results);
+    if (hooks && typeof hooks.beforeRequest === 'function') req = hooks.beforeRequest(api.id, req, ctx) || req;
+    const res = send(api, req, ctx, runtime, auth, hooks);
+    let json;
+    try {
+      json = res.json();
+    } catch (e) {
+      json = undefined;
+    }
+    results.push(json);
+  }
+}
+
+/** MODE=journey-preview: prints every step as it would be sent (correlations show their recorded value). */
+export function previewJourney(runtime, steps, hooks) {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const api = runtime.byId[step.api];
+    if (!api) continue;
+    const { req, ctx } = stepRequest(step, api, runtime, []);
+    console.log(JSON.stringify({
+      step: i,
+      api: api.id,
+      request: `${api.method} ${fillPath(api.path, req.path)}${queryString(req.query)}`,
+      headers: req.headers,
+      body: req.body,
+      pauseMs: step.pauseMs,
+      dataMode: runtime.dataMode,
+      skipped: runtime.apis.every((a) => a.id !== api.id) || undefined,
+    }));
+  }
 }
 
 /** MODE=preview: prints PREVIEW_COUNT requests per API, with the data source of every field. Sends nothing. */

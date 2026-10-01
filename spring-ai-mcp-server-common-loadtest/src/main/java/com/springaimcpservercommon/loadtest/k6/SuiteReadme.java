@@ -38,11 +38,16 @@ final class SuiteReadme {
         md.append("```\n\nOr directly: `k6 run -e MODE=mixed-stress -e DATA_MODE=real main.js`. ")
                 .append("Reports land in `reports/` (JSON + Markdown) and a per-API table is printed.\n\n");
 
-        md.append("## Modes (`MODE`)\n\n| Mode | Per-API form | Mixed form | What it does |\n|---|---|---|---|\n");
+        md.append("## Modes (`MODE`)\n\n| Profile | Per-API | Mixed | Recorded journey | What it does |\n"
+                + "|---|---|---|---|---|\n");
         for (LoadMode m : LoadMode.values()) {
             md.append("| ").append(m.id()).append(" | `").append(m.id()).append("` | `mixed-").append(m.id())
-                    .append("` | ").append(m.description()).append(" |\n");
+                    .append("` | `journey-").append(m.id()).append("` | ").append(m.description()).append(" |\n");
         }
+        md.append("\nJourney modes replay `data/journey.json` — the API calls of a browser recording (Chrome DevTools ")
+                .append("▸ Network ▸ Export HAR, then `generate --har`) in order, with their pauses; ids returned ")
+                .append("by one call and sent by a later one are correlated. `./run.sh journey-preview` prints the ")
+                .append("steps.\n");
         md.append("\nPer-API modes run each API in its own scenario, one after the other (`PER_API=parallel` to ")
                 .append("overlap them; `API=a,b` to pick). Mixed modes run one scenario that picks an API per ")
                 .append("iteration by `apis.<id>.weight`. Profiles live in `loadtest.config.json → modes`; scale ")

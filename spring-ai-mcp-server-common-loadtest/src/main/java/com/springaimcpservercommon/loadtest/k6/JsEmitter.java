@@ -275,7 +275,7 @@ final class JsEmitter {
                 import { SharedArray } from 'k6/data';
                 import * as data from './lib/data.js';
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
-                import { prepare, call, setupAuth, preview as previewRequests } from './lib/http.js';
+                import { prepare, call, replay, setupAuth, preview as previewRequests, previewJourney as printJourney } from './lib/http.js';
                 import { summary } from './lib/report.js';
                 import * as hooks from './hooks.js';
                 %s
@@ -299,10 +299,13 @@ final class JsEmitter {
                   userPayloads: sharedPools('payload', USER_TEXT, (d) => d.payloads),
                 });
 
+                // Recorded browser flow (generate --har): replayed by MODE=journey-<profile>.
+                const JOURNEY = new SharedArray('journey', () => JSON.parse(open('./data/journey.json')));
+
                 const MODULES = [
                 %s];
                 const RUNTIME = prepare(CONFIG, MODULES);
-                export const options = buildOptions(CONFIG, RUNTIME);
+                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length);
 
                 export function setup() {
                   return parseMode(__ENV.MODE).mode === 'preview' ? { headers: {} } : setupAuth(CONFIG);
@@ -316,8 +319,16 @@ final class JsEmitter {
                   for (const api of RUNTIME.apis) call(api, RUNTIME, auth, hooks);
                 }
 
+                export function journey(auth) {
+                  replay(RUNTIME, JOURNEY, auth, hooks);
+                }
+
                 export function preview() {
                   previewRequests(RUNTIME, hooks);
+                }
+
+                export function previewJourney() {
+                  printJourney(RUNTIME, JOURNEY, hooks);
                 }
 
                 export default function (auth) {

@@ -29,6 +29,19 @@ public final class Fixtures {
     }
 
     /**
+     * The browser recording of the sample shop ({@code src/test/resources/sample-shop.har}), as text.
+     *
+     * @return HAR JSON
+     */
+    public static String sampleShopHar() {
+        try {
+            return Files.readString(Path.of(Fixtures.class.getResource("/sample-shop.har").toURI()));
+        } catch (java.io.IOException | URISyntaxException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
      * The k6 executable, if installed.
      *
      * @return path to k6

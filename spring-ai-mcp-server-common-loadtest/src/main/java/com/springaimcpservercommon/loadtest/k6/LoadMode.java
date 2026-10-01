@@ -9,8 +9,9 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Load-test profiles. Each one runs per API (every API on its own, in turn — isolates which endpoint degrades)
- * or, with the {@code mixed-} prefix, as one weighted mix of all APIs (realistic production-like traffic).
+ * Load-test profiles. Each one runs per API (every API on its own, in turn — isolates which endpoint degrades),
+ * with the {@code mixed-} prefix as one weighted mix of all APIs (realistic production-like traffic), or with the
+ * {@code journey-} prefix as replays of a recorded browser flow (each iteration = the whole recorded sequence).
  * The defaults below seed {@code loadtest.config.json → modes}; the suite reads the profile from there, so
  * teams tune stages without regenerating.
  */
@@ -54,7 +55,8 @@ public enum LoadMode {
     }
 
     /**
-     * Every {@code MODE} value the suite accepts: each profile, its {@code mixed-} form and {@code preview}.
+     * Every {@code MODE} value the suite accepts: each profile, its {@code mixed-} and {@code journey-} forms,
+     * {@code preview} and {@code journey-preview}.
      *
      * @return mode names
      */
@@ -66,7 +68,11 @@ public enum LoadMode {
         for (LoadMode m : values()) {
             out.add("mixed-" + m.id());
         }
+        for (LoadMode m : values()) {
+            out.add("journey-" + m.id());
+        }
         out.add("preview");
+        out.add("journey-preview");
         return out;
     }
 

@@ -145,6 +145,28 @@ final class ProjectFiles {
     }
 
     /**
+     * SQL scripts that define the database schema: Flyway migrations, Liquibase formatted-SQL changelogs and
+     * Spring's {@code schema*.sql} init scripts under {@code src/main/resources}. Data-only scripts
+     * ({@code data*.sql}) are left out.
+     *
+     * @param projectDir project root
+     * @return schema scripts, unordered
+     */
+    static List<Path> schemaScripts(Path projectDir) {
+        List<Path> out = new ArrayList<>();
+        for (Path p : walk(projectDir, ".sql")) {
+            String s = p.toString().replace('\\', '/').toLowerCase(Locale.ROOT);
+            String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (s.contains("/src/main/resources/") && !name.startsWith("data")
+                    && (s.contains("/migration") || s.contains("/changelog") || s.contains("/changes/")
+                    || s.contains("/flyway/") || s.contains("/liquibase/") || name.startsWith("schema"))) {
+                out.add(p);
+            }
+        }
+        return out;
+    }
+
+    /**
      * OpenAPI/Swagger documents bundled with the project (API-first projects generate their controllers from
      * them): YAML/JSON files under {@code src/main/resources} or a top-level {@code api}/{@code openapi}/
      * {@code spec}/{@code contracts} directory whose content starts like an OpenAPI document.

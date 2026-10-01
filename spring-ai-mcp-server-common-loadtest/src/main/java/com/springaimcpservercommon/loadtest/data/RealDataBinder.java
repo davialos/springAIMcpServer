@@ -15,6 +15,8 @@ import java.util.Optional;
  *   <li>explicit bindings ({@code --bind key=table.column} or {@code user.json → bindings}) always win;</li>
  *   <li>identifiers: {@code {id}} → primary key of the collection named before it ({@code /orders/{id}} →
  *       {@code orders.id}); {@code customerId}/{@code customer_id} → primary key of {@code customer(s)};</li>
+ *   <li>other path parameters ({@code /articles/{slug}}, {@code /profiles/{username}}) → that column of the
+ *       resource's table, else the one table where a column of that name is unique;</li>
  *   <li>query filters of the resource ({@code GET /users?email=}) → the matching column, so searches hit rows;</li>
  *   <li>never a sensitive field (secrets, personal identifiers, CONFIDENTIAL/RESTRICTED classification) unless
  *       explicitly bound: real values are copied into {@code data/real.json}.</li>
@@ -53,6 +55,16 @@ public final class RealDataBinder {
     }
 
     /**
+     * Column facts (length, uniqueness) of a field of its resource's table.
+     *
+     * @param f field
+     * @return facts, if the field maps to a column
+     */
+    public Optional<TableIndex.ColumnFacts> facts(FieldContext f) {
+        return index.resolve(f.resourceHint()).flatMap(t -> index.facts(t, f.name()));
+    }
+
+    /**
      * Binds a field.
      *
      * @param f field
@@ -69,15 +81,23 @@ public final class RealDataBinder {
             return Optional.empty();
         }
         if (f.kind().identifier() || f.kind() == FieldKind.CODE && f.location() == ParamLocation.PATH) {
-            return identifier(f);
+            Optional<PoolRef> id = identifier(f);
+            if (id.isPresent() || f.location() != ParamLocation.PATH) {
+                return id;
+            }
         }
         Optional<PoolRef> naturalKey = naturalKeyReference(f.name());
         if (naturalKey.isPresent()) {
             return naturalKey;
         }
-        if (f.location() == ParamLocation.QUERY && filterable(f.kind())) {
-            return index.resolve(f.resourceHint()).flatMap(t -> index.sensitive(t, f.name()) ? Optional.empty()
-                    : index.column(t, f.name()).map(c -> new PoolRef(t.schema(), t.table(), c)));
+        if (f.location() == ParamLocation.PATH || f.location() == ParamLocation.QUERY && filterable(f.kind())) {
+            Optional<PoolRef> own = index.resolve(f.resourceHint()).flatMap(t -> index.sensitive(t, f.name())
+                    ? Optional.empty() : index.column(t, f.name()).map(c -> new PoolRef(t.schema(), t.table(), c)));
+            if (own.isPresent() || f.location() == ParamLocation.QUERY) {
+                return own;
+            }
+            // a path parameter always addresses a row: {username} → the table where username is unique
+            return index.uniqueOwner(f.name());
         }
         return Optional.empty();
     }
@@ -90,6 +110,14 @@ public final class RealDataBinder {
                 String col = f.kind() == FieldKind.CODE ? index.column(t, n).orElse(null) : t.idColumn();
                 return col == null ? Optional.empty() : Optional.of(new PoolRef(t.schema(), t.table(), col));
             });
+        }
+        // ownerId on Deal → the relationship Deal.owner (JPA) or the owner_user_id foreign key (database)
+        Optional<TableIndex.TableRef> own = index.resolve(f.resourceHint());
+        if (own.isPresent()) {
+            Optional<PoolRef> related = index.reference(own.get(), n);
+            if (related.isPresent()) {
+                return related;
+            }
         }
         // customerId, customer_id, customerUuid → table customer(s), its primary key
         String prefix = n.replaceAll("(?i)[_-]?(id|uuid|guid)$", "");

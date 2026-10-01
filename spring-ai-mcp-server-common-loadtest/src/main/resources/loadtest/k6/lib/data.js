@@ -34,9 +34,9 @@ export function dataMode() {
   return STATE.mode;
 }
 
-/** A fresh per-request context. */
-export function context(apiId) {
-  return { api: apiId, mode: STATE.mode, depth: 0, sources: {} };
+/** A fresh per-request context. `complete`: send every optional field too (seeding creates whole rows). */
+export function context(apiId, seeded, complete) {
+  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, seeded: seeded || {}, complete: complete === true };
 }
 
 function cfg() {
@@ -52,10 +52,31 @@ function userValues(spec) {
   return null;
 }
 
-function realValues(spec) {
+/**
+ * Real values for a field: rows created by this run first (seeded in setup or created by earlier requests of
+ * this VU — they certainly exist), then values sampled from the database or harvested from the API.
+ */
+function realValues(spec, ctx) {
   if (!spec.real) return null;
+  const seeded = ctx && ctx.seeded && ctx.seeded[spec.real];
+  const created = CREATED[spec.real];
+  if ((seeded && seeded.length) || (created && created.length)) {
+    return (seeded || []).concat(created || []);
+  }
   const v = STATE.real[spec.real];
   return v && v.length ? v : null;
+}
+
+/** Ids created by this VU's own create requests during the run (bounded), by pool key. */
+const CREATED = {};
+const MAX_CREATED = 500;
+
+/** Remembers an id the server returned for a created row, so later requests of this VU can use it. */
+export function remember(pool, id) {
+  if (!pool || id === undefined || id === null || typeof id === 'object') return;
+  const list = CREATED[pool] || (CREATED[pool] = []);
+  if (list.length >= MAX_CREATED) list.shift();
+  list.push(id);
 }
 
 function choose(ctx, spec, user, real) {
@@ -102,27 +123,44 @@ function weighted(options) {
  */
 export function field(ctx, spec) {
   const user = userValues(Object.assign({ api: ctx.api }, spec));
-  const real = realValues(spec);
+  const real = realValues(spec, ctx);
   const source = choose(ctx, spec, user, real);
   ctx.sources[spec.key] = source;
+  let value;
   switch (source) {
     case 'user':
-      return R.pick(user);
+      value = R.pick(user);
+      break;
     case 'real':
-      return R.pick(real);
+      value = R.pick(real);
+      break;
     case 'random':
-      return R.scalar(spec.schema);
+      value = R.scalar(spec.schema);
+      break;
     default:
-      return D.generate(spec.kind, spec.schema, ctx, spec);
+      value = D.generate(spec.kind, spec.schema, ctx, spec);
   }
+  if (spec.schema.format === 'data-rest-link') {
+    // Spring Data REST association: the URI of the target resource (collection prefix + id)
+    const id = source === 'real' || source === 'user' ? value : R.int(1, 1000);
+    return `${baseUrl()}${spec.schema.example}${id}`;
+  }
+  return value;
 }
 
-/** An object from [name, required, thunk] entries; optional entries are included at config.data.optionalFieldRate. */
+function baseUrl() {
+  return (__ENV.BASE_URL || STATE.config.baseUrl || '').replace(/\/+$/, '');
+}
+
+/**
+ * An object from [name, required, thunk] entries; optional entries are included at config.data.optionalFieldRate,
+ * or always while seeding (ctx.complete), so seeded rows carry every column later requests may look them up by.
+ */
 export function obj(ctx, entries) {
   const rate = cfg().optionalFieldRate !== undefined ? cfg().optionalFieldRate : 0.7;
   const out = {};
   for (const [name, required, thunk] of entries) {
-    if (required || Math.random() < rate) {
+    if (required || (ctx && ctx.complete) || Math.random() < rate) {
       const v = thunk();
       if (v !== undefined) out[name] = v;
     }

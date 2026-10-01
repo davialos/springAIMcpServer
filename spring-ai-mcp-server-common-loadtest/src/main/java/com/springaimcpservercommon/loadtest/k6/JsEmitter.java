@@ -214,7 +214,15 @@ final class JsEmitter {
         spec.put("name", name);
         spec.put("owner", f != null ? f.owner() : key.substring(0, key.indexOf('.') < 0 ? key.length() : key.indexOf('.')));
         spec.put("kind", (f != null ? f.kind() : FieldKindClassifier.classify(name, s)).generator());
-        spec.set("schema", schemaNode(s));
+        ObjectNode schema = schemaNode(s);
+        if (f != null && f.maxLength() != null && s.type() == com.springaimcpservercommon.loadtest.model.ScalarType.STRING
+                && (!schema.has("maxLength") || schema.path("maxLength").asLong() > f.maxLength())) {
+            schema.put("maxLength", f.maxLength()); // the column's length: longer values would fail on insert
+        }
+        if (f != null && f.unique()) {
+            schema.put("unique", true);
+        }
+        spec.set("schema", schema);
         if (f != null && f.pool() != null) {
             spec.put("real", f.pool().key());
         }
@@ -275,7 +283,7 @@ final class JsEmitter {
                 import { SharedArray } from 'k6/data';
                 import * as data from './lib/data.js';
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
-                import { prepare, call, replay, setupAuth, preview as previewRequests, previewJourney as printJourney } from './lib/http.js';
+                import { prepare, call, replay, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney } from './lib/http.js';
                 import { summary } from './lib/report.js';
                 import * as hooks from './hooks.js';
                 %s
@@ -302,13 +310,24 @@ final class JsEmitter {
                 // Recorded browser flow (generate --har): replayed by MODE=journey-<profile>.
                 const JOURNEY = new SharedArray('journey', () => JSON.parse(open('./data/journey.json')));
 
+                // Test data created in setup through the application's create endpoints, parents before children
+                // (entity relationships); see README "Seeding".
+                const SEED = JSON.parse(open('./data/seed.json'));
+
                 const MODULES = [
                 %s];
-                const RUNTIME = prepare(CONFIG, MODULES);
+                const RUNTIME = prepare(CONFIG, MODULES, SEED);
                 export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length);
 
                 export function setup() {
-                  return parseMode(__ENV.MODE).mode === 'preview' ? { headers: {} } : setupAuth(CONFIG);
+                  if (parseMode(__ENV.MODE).profile === 'preview') return { headers: {}, seeded: {} };
+                  const auth = setupAuth(CONFIG);
+                  auth.seeded = seed(RUNTIME, SEED, auth, hooks);
+                  return auth;
+                }
+
+                export function teardown(data) {
+                  cleanup(RUNTIME, SEED, data, hooks);
                 }
 
                 %sexport function mixed(auth) {

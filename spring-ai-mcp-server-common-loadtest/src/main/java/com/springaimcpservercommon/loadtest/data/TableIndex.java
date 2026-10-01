@@ -31,16 +31,31 @@ public final class TableIndex {
 
     private final List<EntityTable> entities;
     private final List<DbTable> dbTables;
+    private final boolean authoritative;
 
     /**
-     * Creates an index.
+     * Creates an index over a live database's metadata, which decides which tables and columns exist.
      *
      * @param entities JPA entities from the source scan
      * @param dbTables tables from JDBC metadata (empty when no database is configured)
      */
     public TableIndex(List<EntityTable> entities, List<DbTable> dbTables) {
+        this(entities, dbTables, true);
+    }
+
+    /**
+     * Creates an index.
+     *
+     * @param entities      JPA entities from the source scan
+     * @param dbTables      tables from JDBC metadata or from the project's DDL scripts
+     * @param authoritative {@code true} when {@code dbTables} come from the live database: an entity or column
+     *                      it lacks does not exist; {@code false} for tables read from DDL scripts, which may be
+     *                      incomplete (Hibernate {@code ddl-auto}, statements the reader skips) and only add facts
+     */
+    public TableIndex(List<EntityTable> entities, List<DbTable> dbTables, boolean authoritative) {
         this.entities = List.copyOf(entities);
         this.dbTables = List.copyOf(dbTables);
+        this.authoritative = authoritative;
     }
 
     /**
@@ -69,7 +84,7 @@ public final class TableIndex {
             String tn = Names.normalize(e.table());
             if (forms.contains(en) || forms.contains(tn) || forms.contains(Names.singular(tn))) {
                 DbTable db = dbTable(e.schema(), e.table());
-                if (!dbTables.isEmpty() && db == null) {
+                if (authoritative && !dbTables.isEmpty() && db == null) {
                     continue; // entity maps to a table this database does not have
                 }
                 String id = e.idColumn() != null ? e.idColumn() : db != null ? singlePk(db) : null;
@@ -118,9 +133,137 @@ public final class TableIndex {
                     return Optional.of(c);
                 }
             }
-            return Optional.empty();
+            return authoritative ? Optional.empty() : Optional.ofNullable(candidate);
         }
         return Optional.ofNullable(candidate);
+    }
+
+    /**
+     * The table a reference field of a resource points to, following the entity relationship graph:
+     * {@code ownerId} on {@code Deal} → {@code Deal.owner} is a {@code @ManyToOne AppUser} → {@code users.id}; or,
+     * without JPA, the database foreign key of the matching column ({@code author_id → users.id}).
+     *
+     * @param t     the resource's table
+     * @param field request field name ({@code ownerId}, {@code owner_id}, {@code owner})
+     * @return the referenced primary key, if the relationship is known
+     */
+    public Optional<PoolRef> reference(TableRef t, String field) {
+        String prefix = field.replaceAll("(?i)[_-]?(id|uuid|guid|key)$", "");
+        if (t.entity() != null) {
+            for (var e : t.entity().fieldReferences().entrySet()) {
+                if (Names.normalize(e.getKey()).equals(Names.normalize(prefix))
+                        || Names.normalize(e.getKey()).equals(Names.normalize(field))) {
+                    Optional<TableRef> target = resolve(e.getValue());
+                    if (target.isPresent() && target.get().idColumn() != null) {
+                        return Optional.of(new PoolRef(target.get().schema(), target.get().table(),
+                                target.get().idColumn()));
+                    }
+                    String join = t.entity().joinColumns().get(e.getKey());
+                    if (join != null && t.db() != null) {
+                        Optional<PoolRef> fk = foreignKey(t.db(), join);
+                        if (fk.isPresent()) {
+                            return fk;
+                        }
+                    }
+                }
+            }
+        }
+        if (t.db() != null) {
+            for (String candidate : List.of(field, Names.snakeCase(field), Names.snakeCase(prefix) + "_id")) {
+                Optional<PoolRef> fk = foreignKey(t.db(), candidate);
+                if (fk.isPresent()) {
+                    return fk;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The one table holding a unique column with this name: {@code {username}} in {@code /profiles/{username}}
+     * addresses {@code users.username}, although no table is called {@code profiles}. Ambiguous names (unique in
+     * several tables) and primary keys named {@code id} resolve to nothing.
+     *
+     * @param field path parameter or field name
+     * @return the column, if exactly one table has it as a unique key
+     */
+    public Optional<PoolRef> uniqueOwner(String field) {
+        String wanted = Names.normalize(field);
+        if (wanted.equals("id")) {
+            return Optional.empty();
+        }
+        java.util.Map<String, PoolRef> found = new java.util.LinkedHashMap<>();
+        for (EntityTable e : entities) {
+            for (String f : e.uniqueFields()) {
+                if (Names.normalize(f).equals(wanted)) {
+                    resolve(e.entityName()).flatMap(t -> column(t, f).map(c -> new PoolRef(t.schema(), t.table(), c)))
+                            .ifPresent(p -> found.put(p.table().toLowerCase(java.util.Locale.ROOT), p));
+                }
+            }
+        }
+        for (DbTable t : dbTables) {
+            for (String c : t.uniqueColumns()) {
+                if (Names.normalize(c).equals(wanted)) {
+                    found.putIfAbsent(t.name().toLowerCase(java.util.Locale.ROOT),
+                            new PoolRef(t.schema(), t.name(), c));
+                }
+            }
+        }
+        return found.size() == 1 ? Optional.of(found.values().iterator().next()) : Optional.empty();
+    }
+
+    private static Optional<PoolRef> foreignKey(DbTable db, String column) {
+        for (var e : db.foreignKeys().entrySet()) {
+            if (Names.normalize(e.getKey()).equals(Names.normalize(column))) {
+                return Optional.of(e.getValue());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * What the table says about a request field's values: the column's maximum length and whether it is unique.
+     *
+     * @param maxLength declared length of a text column, or {@code null}
+     * @param unique    the column has a unique constraint (generated values must not repeat)
+     */
+    public record ColumnFacts(@Nullable Integer maxLength, boolean unique) {
+    }
+
+    /**
+     * Column facts for a field of a resource, from JPA ({@code @Column(length, unique)}) and/or database
+     * metadata (size, unique index); the stricter length wins.
+     *
+     * @param t     table
+     * @param field field name
+     * @return facts, if the field maps to a column
+     */
+    public Optional<ColumnFacts> facts(TableRef t, String field) {
+        Integer length = null;
+        boolean unique = false;
+        boolean found = false;
+        if (t.entity() != null) {
+            for (String f : t.entity().fieldColumns().keySet()) {
+                if (Names.normalize(f).equals(Names.normalize(field))) {
+                    length = t.entity().columnLengths().get(f);
+                    unique = t.entity().uniqueFields().contains(f);
+                    found = true;
+                }
+            }
+        }
+        if (t.db() != null) {
+            Optional<String> column = column(t, field);
+            if (column.isPresent()) {
+                Integer size = t.db().columnSizes().get(column.get());
+                if (size != null) {
+                    length = length == null ? size : Math.min(length, size);
+                }
+                unique = unique || t.db().uniqueColumns().contains(column.get())
+                        && !t.db().primaryKey().contains(column.get());
+                found = true;
+            }
+        }
+        return found ? Optional.of(new ColumnFacts(length, unique)) : Optional.empty();
     }
 
     /**

@@ -2,6 +2,7 @@ package com.springaimcpservercommon.loadtest.k6;
 
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
+import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
@@ -34,6 +35,7 @@ import java.util.stream.Stream;
  * data/real.json         real-data pools (database / API harvest)
  * data/user.json         user-supplied values, payloads and bindings
  * data/plan.json         every field: kind and real-data binding
+ * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * hooks.js               user hooks (created once, never overwritten)
  * README.md              how to run; API and field tables
@@ -97,6 +99,23 @@ public final class K6SuiteGenerator {
      */
     public Result generate(ApiCatalog catalog, DataPlan plan, Map<String, List<Object>> pools, UserData user,
                            @Nullable ArrayNode journey, Options o) {
+        return generate(catalog, plan, pools, user, journey, null, o);
+    }
+
+    /**
+     * Generates (or regenerates) a suite, with a recorded journey and a seeding plan.
+     *
+     * @param catalog discovered APIs
+     * @param plan    data plan
+     * @param pools   real-data pools collected now (merged over the ones on disk)
+     * @param user    the complete user data for {@code data/user.json}
+     * @param journey recorded steps for {@code data/journey.json}, or {@code null} to keep the file on disk
+     * @param seed    relationship-ordered seeding for {@code data/seed.json}, or {@code null} for none
+     * @param o       options
+     * @return summary
+     */
+    public Result generate(ApiCatalog catalog, DataPlan plan, Map<String, List<Object>> pools, UserData user,
+                           @Nullable ArrayNode journey, @Nullable SeedPlan seed, Options o) {
         Path out = o.outDir();
         try {
             for (String dir : List.of("lib", "apis", "providers", "data", "reports")) {
@@ -128,6 +147,8 @@ public final class K6SuiteGenerator {
 
             writeJson(out.resolve("data/user.json"), user.toJson());
             writeJson(out.resolve("data/plan.json"), planJson(plan, realPools));
+            writeJson(out.resolve("data/seed.json"), seed == null ? Documents.json().createArrayNode()
+                    : seed.toJson());
             Path journeyFile = out.resolve("data/journey.json");
             if (journey != null) {
                 writeJson(journeyFile, journey);
@@ -136,7 +157,7 @@ public final class K6SuiteGenerator {
             }
 
             Files.writeString(out.resolve("README.md"),
-                    SuiteReadme.render(catalog, plan, realPools, user, config));
+                    SuiteReadme.render(catalog, plan, realPools, user, config, seed));
             Files.writeString(out.resolve("run.sh"), runScript());
             out.resolve("run.sh").toFile().setExecutable(true);
             return new Result(out, catalog.endpoints().size(), plan.fields().size(), realPools.size());

@@ -3,11 +3,13 @@ package com.springaimcpservercommon.loadtest.cli;
 import com.springaimcpservercommon.loadtest.data.ApiHarvester;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.DatabaseSampler;
+import com.springaimcpservercommon.loadtest.data.DbTable;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
 import com.springaimcpservercommon.loadtest.data.PoolRef;
 import com.springaimcpservercommon.loadtest.data.RealDataBinder;
 import com.springaimcpservercommon.loadtest.data.RealDataCollector;
 import com.springaimcpservercommon.loadtest.data.RecordedTraffic;
+import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.TableIndex;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.ActuatorMappingsReader;
@@ -18,6 +20,7 @@ import com.springaimcpservercommon.loadtest.discovery.HarReader;
 import com.springaimcpservercommon.loadtest.discovery.OpenApiReader;
 import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
 import com.springaimcpservercommon.loadtest.discovery.SpringSourceScanner;
+import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
 import com.springaimcpservercommon.loadtest.k6.K6Runner;
 import com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator;
 import com.springaimcpservercommon.loadtest.k6.LoadMode;
@@ -229,8 +232,9 @@ public final class LoadTestCli {
 
     private int discover(CliArgs a) {
         Discovery d = discoverCatalog(a);
-        TableIndex index = new TableIndex(d.catalog().entities(), List.of());
+        TableIndex index = scriptIndex(d);
         DataPlan plan = DataPlan.build(d.catalog(), new RealDataBinder(index, Map.of()));
+        SeedPlan seed = SeedPlan.build(d.catalog(), plan, index, this::log);
         out.println("Project: " + d.catalog().project() + (d.catalog().basePath() != null
                 ? " (base path " + d.catalog().basePath() + ")" : ""));
         out.println();
@@ -242,6 +246,15 @@ public final class LoadTestCli {
         out.println(d.catalog().schemas().size() + " request schemas, " + d.catalog().entities().size()
                 + " JPA entities, " + plan.fields().size() + " fields, " + plan.pools().size()
                 + " real-data bindings");
+        if (!seed.steps().isEmpty()) {
+            out.println();
+            out.println("Seeding order (entity relationships, parents first):");
+            int i = 1;
+            for (SeedPlan.Step st : seed.steps()) {
+                out.printf("  %d. %-20s via %-24s%s%n", i++, st.table(), st.api(),
+                        st.dependsOn().isEmpty() ? "" : " needs " + String.join(", ", st.dependsOn()));
+            }
+        }
         if (!d.recordings().isEmpty()) {
             RecordedTraffic recorded = new RecordedTraffic(d.recordings(), d.catalog(), plan);
             out.println(recorded.journey().size() + " recorded calls replayable as a journey, "
@@ -304,8 +317,13 @@ public final class LoadTestCli {
 
         DatabaseSampler db = openDatabase(a, d.settings());
         try {
-            TableIndex index = new TableIndex(catalog.entities(), db == null ? List.of() : db.tables());
+            TableIndex index = db != null ? new TableIndex(catalog.entities(), db.tables()) : scriptIndex(d);
             DataPlan plan = DataPlan.build(catalog, new RealDataBinder(index, bindings));
+            SeedPlan seed = SeedPlan.build(catalog, plan, index, this::log);
+            if (!seed.steps().isEmpty()) {
+                log("seed: " + seed.steps().size() + " tables created through their APIs before the load, in order "
+                        + seed.steps().stream().map(SeedPlan.Step::table).toList());
+            }
             tools.jackson.databind.node.ArrayNode journey = null;
             if (!d.recordings().isEmpty()) {
                 RecordedTraffic recorded = new RecordedTraffic(d.recordings(), catalog, plan);
@@ -322,10 +340,10 @@ public final class LoadTestCli {
                 user = interactive(catalog, plan, user);
             }
             ApiHarvester harvester = a.flag("harvest") ? new ApiHarvester(baseUrl, headers(a), this::log) : null;
-            RealDataCollector.Result real = new RealDataCollector(this::log).collect(catalog, plan, index, db,
-                    harvester, user, a.integer("sample-size", 200), a.flag("drop-unverified"));
+            RealDataCollector.Result real = new RealDataCollector(this::log, seed.pools()).collect(catalog, plan,
+                    index, db, harvester, user, a.integer("sample-size", 200), a.flag("drop-unverified"));
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
-                    journey, new K6SuiteGenerator.Options(outDir, baseUrl, a.get("data-mode", "auto"),
+                    journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, a.get("data-mode", "auto"),
                             a.get("auth", "none"), a.get("login-path")));
             out.println("Generated k6 suite in " + r.outDir().toAbsolutePath().normalize());
             out.println("  " + r.apis() + " APIs, " + r.fields() + " fields, " + r.pools() + " real-data pools");
@@ -341,6 +359,12 @@ public final class LoadTestCli {
                 }
             }
         }
+    }
+
+    /** Without a database: the JPA entities plus the tables the project's DDL scripts declare. */
+    private TableIndex scriptIndex(Discovery d) {
+        List<DbTable> tables = d.project() == null ? List.of() : new SqlSchemaReader(this::log).read(d.project());
+        return new TableIndex(d.catalog().entities(), tables, false);
     }
 
     private @Nullable DatabaseSampler openDatabase(CliArgs a, ProjectSettings settings) {

@@ -49,7 +49,7 @@ class DatabaseSamplerIT {
             st.execute("DROP SCHEMA IF EXISTS " + SCHEMA + " CASCADE");
             st.execute("CREATE SCHEMA " + SCHEMA);
             st.execute("CREATE TABLE " + SCHEMA + ".customers (id bigserial PRIMARY KEY, email text UNIQUE, "
-                    + "password_hash text, external_ref uuid DEFAULT gen_random_uuid())");
+                    + "nickname varchar(30), password_hash text, external_ref uuid DEFAULT gen_random_uuid())");
             st.execute("CREATE TABLE " + SCHEMA + ".product (sku text PRIMARY KEY, price numeric(10,2))");
             st.execute("CREATE TABLE " + SCHEMA + ".orders (id bigserial PRIMARY KEY, "
                     + "customer_id bigint REFERENCES " + SCHEMA + ".customers(id))");
@@ -84,6 +84,27 @@ class DatabaseSamplerIT {
             assertThat(ids).hasSize(15).doesNotHaveDuplicates().allMatch(v -> v instanceof Long);
             assertThat(db.sample(new PoolRef(SCHEMA, "product", "sku"), 50)).hasSize(5);
             assertThat(db.sample(new PoolRef(SCHEMA, "customers", "external_ref"), 2)).allMatch(v -> v instanceof String);
+        }
+    }
+
+    @Test
+    void readsForeignKeysUniqueIndexesAndColumnSizes() throws SQLException {
+        try (DatabaseSampler db = sampler()) {
+            DbTable customers = db.tables().stream().filter(t -> t.name().equals("customers")).findFirst().orElseThrow();
+            DbTable orders = db.tables().stream().filter(t -> t.name().equals("orders")).findFirst().orElseThrow();
+            assertThat(customers.columnSizes()).containsEntry("nickname", 30).doesNotContainKey("email"); // text
+            assertThat(customers.uniqueColumns()).containsExactly("email"); // the primary key is not repeated
+            assertThat(orders.foreignKeys()).containsOnlyKeys("customer_id");
+            assertThat(orders.foreignKeys().get("customer_id").key()).isEqualTo("loadtest_it.customers.id");
+
+            // no JPA entities at all (JdbcTemplate / MyBatis projects): the foreign key alone binds the field
+            TableIndex index = new TableIndex(List.of(), db.tables());
+            TableIndex.TableRef ordersRef = index.resolve("orders").orElseThrow();
+            assertThat(index.reference(ordersRef, "customerId")).map(PoolRef::key)
+                    .contains("loadtest_it.customers.id");
+            TableIndex.TableRef customersRef = index.resolve("customers").orElseThrow();
+            assertThat(index.facts(customersRef, "nickname")).contains(new TableIndex.ColumnFacts(30, false));
+            assertThat(index.facts(customersRef, "email")).hasValueSatisfying(f -> assertThat(f.unique()).isTrue());
         }
     }
 

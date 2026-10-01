@@ -1,0 +1,159 @@
+// Load modes → k6 options. Profiles (executor, stages, VUs, thresholds) live in loadtest.config.json → modes;
+// this file only turns a profile into scenarios. MODE env selects one of:
+//   smoke | load | stress | spike | soak | breakpoint           each API on its own (sequential scenarios)
+//   mixed-smoke | mixed-load | mixed-stress | mixed-spike | …    all APIs together, weighted traffic mix
+//   preview                                                     build requests and print them, send nothing
+// Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), DURATION_SCALE (e.g. 0.1),
+// API=getUser,createOrder (restrict APIs), PER_API=parallel (per-API scenarios at once instead of in turn).
+
+export function parseMode(raw) {
+  const mode = (raw || 'smoke').toLowerCase();
+  if (mode === 'preview') return { mode, profile: 'preview', mixed: false };
+  const mixed = mode.startsWith('mixed-');
+  return { mode, profile: mixed ? mode.slice(6) : mode, mixed };
+}
+
+const UNITS = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 };
+
+export function seconds(duration) {
+  if (typeof duration === 'number') return duration;
+  let total = 0;
+  const re = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
+  let m;
+  while ((m = re.exec(String(duration))) !== null) total += parseFloat(m[1]) * UNITS[m[2]];
+  return total;
+}
+
+export function formatDuration(totalSeconds) {
+  const s = Math.max(1, Math.round(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return `${h ? h + 'h' : ''}${m ? m + 'm' : ''}${r || (!h && !m) ? r + 's' : ''}`;
+}
+
+function scaled(duration) {
+  const factor = __ENV.DURATION_SCALE ? parseFloat(__ENV.DURATION_SCALE) : 1;
+  return formatDuration(seconds(duration) * factor);
+}
+
+function envNumber(name, fallback) {
+  const v = __ENV[name];
+  return v !== undefined && v !== '' ? parseFloat(v) : fallback;
+}
+
+/** One scenario for a profile; `share` divides VUs/rate (parallel per-API runs), `multiplier` scales iterations. */
+function scenario(profile, exec, startTime, multiplier) {
+  const base = envNumber('VUS', profile.baseVus || profile.vus || 1);
+  const rate = envNumber('RATE', profile.baseRate || 10);
+  const s = { executor: profile.executor, exec };
+  if (startTime) s.startTime = startTime;
+  switch (profile.executor) {
+    case 'per-vu-iterations':
+      s.vus = Math.max(1, Math.round(base));
+      s.iterations = (profile.iterations || 1) * (multiplier || 1);
+      s.maxDuration = scaled(profile.maxDuration || '10m');
+      break;
+    case 'constant-vus':
+      s.vus = Math.max(1, Math.round(base));
+      s.duration = scaled(profile.duration || '1m');
+      break;
+    case 'ramping-vus':
+      s.startVUs = profile.startVUs || 0;
+      s.stages = profile.stages.map((st) => ({ duration: scaled(st.duration), target: Math.round(st.target * base) }));
+      s.gracefulRampDown = profile.gracefulRampDown || '10s';
+      break;
+    case 'constant-arrival-rate':
+      s.rate = Math.max(1, Math.round(rate));
+      s.timeUnit = profile.timeUnit || '1s';
+      s.duration = scaled(profile.duration || '1m');
+      s.preAllocatedVUs = profile.preAllocatedVUs || 10;
+      s.maxVUs = profile.maxVUs || 200;
+      break;
+    case 'ramping-arrival-rate':
+      s.startRate = profile.startRate || 1;
+      s.timeUnit = profile.timeUnit || '1s';
+      s.stages = profile.stages.map((st) => ({ duration: scaled(st.duration), target: Math.max(1, Math.round(st.target * rate)) }));
+      s.preAllocatedVUs = profile.preAllocatedVUs || 10;
+      s.maxVUs = profile.maxVUs || 500;
+      break;
+    default:
+      throw new Error(`unsupported executor ${profile.executor}`);
+  }
+  return s;
+}
+
+/** Wall-clock length of a scenario (for sequential per-API scheduling). */
+function scenarioSeconds(s) {
+  if (s.stages) return s.stages.reduce((t, st) => t + seconds(st.duration), 0) + seconds(s.gracefulRampDown || '0s');
+  if (s.duration) return seconds(s.duration);
+  return seconds(s.maxDuration || '1m');
+}
+
+function thresholds(config, profile, runtime, mixed) {
+  const t = {};
+  const base = Object.assign({}, config.thresholds || {}, profile.thresholds || {});
+  for (const [metric, rules] of Object.entries(base)) t[metric] = rules.slice();
+  const defaults = config.defaults || {};
+  for (const api of runtime.apis) {
+    const c = (config.apis || {})[api.id] || {};
+    const p95 = profile.thresholds && profile.thresholds.http_req_duration ? null : c.p95Ms || defaults.p95Ms;
+    t[`http_req_duration{api:${api.id}}`] = p95 ? [`p(95)<${p95}`] : ['max>=0'];
+    const errorRate = profile.maxErrorRate !== undefined ? profile.maxErrorRate : c.maxErrorRate !== undefined ? c.maxErrorRate : defaults.maxErrorRate;
+    t[`http_req_failed{api:${api.id}}`] = errorRate !== undefined ? [`rate<${errorRate}`] : ['rate>=0'];
+    t[`http_reqs{api:${api.id}}`] = ['count>=0']; // keeps a per-API request count in the summary
+  }
+  if (profile.abortOnFail) {
+    for (const metric of Object.keys(base)) {
+      t[metric] = t[metric].map((r) => ({ threshold: r, abortOnFail: true, delayAbortEval: profile.delayAbortEval || '30s' }));
+    }
+  }
+  return t;
+}
+
+/** k6 options for the selected mode. */
+export function buildOptions(config, runtime) {
+  const { mode, profile: profileName, mixed } = parseMode(__ENV.MODE);
+  const common = {
+    summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
+    insecureSkipTLSVerify: config.http && config.http.insecureSkipTLSVerify === true,
+    userAgent: `k6-loadtest/${config.project || 'suite'}`,
+  };
+  if (profileName === 'preview') {
+    return Object.assign(common, { scenarios: { preview: { executor: 'per-vu-iterations', vus: 1, iterations: 1, exec: 'preview' } } });
+  }
+  const profile = (config.modes || {})[profileName];
+  if (!profile) {
+    const known = Object.keys(config.modes || {});
+    throw new Error(`MODE=${mode}: unknown profile "${profileName}". Use one of ${known.join(', ')} (or mixed-<profile>, preview)`);
+  }
+  if (!runtime.apis.length) throw new Error('No API is enabled (check loadtest.config.json → apis, API and READ_ONLY)');
+  const scenarios = {};
+  if (mixed) {
+    scenarios[`mixed_${profileName}`] = scenario(profile, 'mixed', null, runtime.apis.length);
+  } else if (profile.executor === 'per-vu-iterations') {
+    // Iteration-based profiles (smoke): each iteration calls every API once, in order.
+    scenarios[`${profileName}_all`] = scenario(profile, 'all', null, 1);
+  } else {
+    const parallel = (__ENV.PER_API || (config.perApi && config.perApi.schedule) || 'sequential') === 'parallel';
+    const gap = seconds((config.perApi && config.perApi.gap) || '5s');
+    let offset = 0;
+    for (const api of runtime.apis) {
+      const s = scenario(profile, `api_${api.id}`, parallel || offset === 0 ? null : formatDuration(offset), 1);
+      scenarios[`${profileName}_${api.id}`] = s;
+      offset += scenarioSeconds(s) + gap;
+    }
+  }
+  return Object.assign(common, { scenarios, thresholds: thresholds(config, profile, runtime, mixed) });
+}
+
+/** Weighted API choice for mixed traffic. */
+export function pickWeighted(apis) {
+  const total = apis.reduce((s, a) => s + a.weight, 0);
+  let r = Math.random() * total;
+  for (const a of apis) {
+    r -= a.weight;
+    if (r < 0) return a;
+  }
+  return apis[apis.length - 1];
+}

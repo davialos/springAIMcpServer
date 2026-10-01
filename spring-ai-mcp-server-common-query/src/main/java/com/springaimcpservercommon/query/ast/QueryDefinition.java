@@ -12,7 +12,7 @@ import java.util.UUID;
  * An immutable, published dynamic query definition (LLD-05 §2).
  *
  * <p>Query definitions are authored in the admin dashboard, validated at publish time against the
- * effective catalog (LLD-05 §3), stored as JSON in {@code dai_query_revision}, and compiled to
+ * effective catalog (LLD-05 §3), stored as JSON in {@code dai_resource_revision} (resources of kind {@code QUERY}), and compiled to
  * JPA Criteria queries at runtime by {@link com.springaimcpservercommon.query.criteria.CriteriaCompiler}.
  *
  * <p>The compiled plan is cached by {@code (id, revision, policyFingerprint)} — a new generation of

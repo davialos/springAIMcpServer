@@ -9,7 +9,7 @@ import java.util.UUID;
 /**
  * Port: looks up a published {@link AgentDefinition} by id for sub-agent tool delegation (LLD-07 §5.2).
  *
- * <p>Implemented by the persistence module ({@code dai_agent} table) and injected into
+ * <p>Implemented by the persistence module (agents are {@code dai_resource} rows of kind {@code AGENT}, served from the published snapshot) and injected into
  * {@link ToolBridge} via the {@code autoconfigure} module. When no implementation is registered
  * the {@link ToolSource.AgentSource} case in {@link ToolBridge} is skipped gracefully.
  *

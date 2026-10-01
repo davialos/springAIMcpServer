@@ -27,8 +27,10 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 14 | [security/02-threat-model.md](security/02-threat-model.md) | access-management-architect | Draft v1 |
 | 15 | [production-readiness.md](production-readiness.md) — go-live gates | production-readiness-reviewer | Draft v1 |
 | 16 | [lld/15-database-schema.md](lld/15-database-schema.md) — PostgreSQL schema: tables, keys, indexes, partitions, retention | lld-chief-architect | Draft v1 |
+| 16b | [data/schema-usecase-map.md](data/schema-usecase-map.md) — what each table is for: writers/readers, business flows, CRUD matrix, feature/requirement traceability, findings | schema-usecase-mapper | v1 (evidence 2026-10-01) |
 | 17 | [integration/host-integration-guide.md](integration/host-integration-guide.md) — how a host app adopts the starter | control-plane-designer | Draft v1 |
 | — | [../scripts/db/postgresql/](../scripts/db/postgresql/) — DBA scripts: roles, database, schema, grants, verification | — | v1 |
+| — | [../scripts/schema-usecase-map/](../scripts/schema-usecase-map/) — evidence script behind the schema use-case map (works on any project) | — | v1 |
 | — | [adr/](adr/) — architecture decisions | lld-chief-architect | — |
 | — | [open-questions.md](open-questions.md) | all | Living |
 | — | [research/design-note-07-starter-hygiene-evaluation.md](research/design-note-07-starter-hygiene-evaluation.md) — verdicts on the starter-hygiene note | lld-chief-architect | Record |

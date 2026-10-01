@@ -50,6 +50,7 @@ class GuardedTurnTest {
     private final List<ConversationRecorder.Exchange> exchanges = new CopyOnWriteArrayList<>();
     private final List<String> promptsSeenByModel = new CopyOnWriteArrayList<>();
     private final AtomicInteger modelCalls = new AtomicInteger();
+    private final AtomicInteger turns = new AtomicInteger();
 
     private final DaiPrincipal principal = new DaiPrincipal(UUID.randomUUID(), SubjectType.USER, "local", "alice",
             "Alice", Set.of(), Set.of(), Map.of(), Map.of(), Classification.INTERNAL, null, Set.of());
@@ -101,7 +102,7 @@ class GuardedTurnTest {
         TurnSafety safety = new TurnSafety(CompositePromptValidator.defaults(), PiiRedactor.defaults(), () -> CATALOG,
                 settings);
         return new DefaultAgentInvoker((selection, p) -> model, null, () -> CATALOG, id -> true, (a, p) -> true,
-                (a, p, in, out) -> { }, t -> { }, exchanges::add, ObservationRegistry.NOOP,
+                (a, p, in, out) -> { }, t -> turns.incrementAndGet(), exchanges::add, ObservationRegistry.NOOP,
                 MessageWindowChatMemory.builder().chatMemoryRepository(new InMemoryChatMemoryRepository()).build(),
                 (schema, json) -> List.of(), safety);
     }
@@ -111,8 +112,10 @@ class GuardedTurnTest {
     }
 
     private List<StreamEvent> stream(DefaultAgentInvoker invoker, AgentDefinition agent, String message) {
-        return invoker.stream(agent, new AgentChatRequest(null, message, "r", UUID.randomUUID()), principal, null)
-                .collectList().block();
+        List<StreamEvent> events = invoker.stream(agent, new AgentChatRequest(null, message, "r", UUID.randomUUID()),
+                principal, null).collectList().block();
+        Awaits.until(() -> turns.get() > 0);
+        return events;
     }
 
     private static String text(List<StreamEvent> events) {
@@ -194,6 +197,7 @@ class GuardedTurnTest {
             assertThat(ui.payload()).contains("[redacted email]").doesNotContain("jane");
         }));
         assertThat(events.getLast()).isInstanceOf(StreamEvent.TurnEnd.class);
+        Awaits.until(() -> !exchanges.isEmpty());
         assertThat(exchanges).singleElement()
                 .satisfies(e -> assertThat(e.assistantAnswer()).doesNotContain("jane.doe@example.com"));
     }

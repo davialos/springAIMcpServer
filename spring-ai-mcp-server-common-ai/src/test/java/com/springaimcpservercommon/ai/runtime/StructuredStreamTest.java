@@ -76,8 +76,10 @@ class StructuredStreamTest {
                 ObservationRegistry.NOOP,
                 MessageWindowChatMemory.builder().chatMemoryRepository(new InMemoryChatMemoryRepository()).build(),
                 (schema, json) -> json.contains("\"name\"") ? List.of() : List.of("$.name is required"));
-        return invoker.stream(agent, new AgentChatRequest(null, "extract", "r", UUID.randomUUID()), principal, null)
-                .collectList().block();
+        List<StreamEvent> events = invoker.stream(agent, new AgentChatRequest(null, "extract", "r", UUID.randomUUID()),
+                principal, null).collectList().block();
+        Awaits.until(() -> !turns.isEmpty());
+        return events;
     }
 
     private static String text(List<StreamEvent> events) {

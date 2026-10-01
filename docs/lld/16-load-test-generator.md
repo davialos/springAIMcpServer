@@ -12,6 +12,15 @@
 Point it at a Spring Boot project; it produces a runnable Grafana k6 suite for that project's REST APIs:
 - **discovers** the operations (Java sources, OpenAPI 3, `/actuator/mappings`, browser recordings in HAR
   format), their parameters and request bodies with validation constraints, and the project's JPA entities;
+  for Java/Spring projects every endpoint style: annotated controllers (incl. composed stereotypes and generic
+  base controllers), `@HttpExchange` interfaces a controller implements, WebMvc.fn `RouterFunction` routes,
+  Spring Data REST repositories, and API-first projects (bundled OpenAPI + generated interfaces);
+- **builds the table relationship graph** from JPA mappings, the database's foreign keys, or — with neither —
+  the project's own DDL scripts (Flyway, Liquibase SQL, `schema.sql`), and derives payloads from it: entity
+  bodies without server-managed fields, related entities sent as references, column lengths and unique columns
+  respected;
+- **seeds test data through the application's create endpoints**, parents before children, and feeds the
+  created ids and natural keys into the load (§5 *Seeding*);
 - **learns from a browser recording** (Chrome/Edge DevTools ▸ Network ▸ Export HAR): the API calls a person
   actually made, the values they sent, and the order — replayable as a correlated journey;
 - **plans the data** of every request field: semantic kind (email, firstName, price, id …), constraints, the
@@ -27,9 +36,11 @@ at runtime (the module is never on a host's classpath).
 
 ## 2. Context
 ```
-  project dir ──► SpringSourceScanner ─┐          ┌──► DataPlan (FieldPlan per field: kind, pool)
-  OpenAPI doc ──► OpenApiReader ───────┼► Catalog ┤
-  HAR file    ──► HarReader ───────────┤  Merger  │
+  project dir ──► SpringSourceScanner ─┐          ┌──► DataPlan (FieldPlan per field: kind, pool, facts)
+   (controllers, FunctionalRouteScanner,         │          │        ▲ TableIndex (JPA entities + tables)
+    DataRestScanner, bundled OpenAPI) │          │        │   tables: DatabaseSampler metadata (live DB)
+  OpenAPI doc ──► OpenApiReader ───────┼► Catalog ┤        │        or SqlSchemaReader (DDL scripts)
+  HAR file    ──► HarReader ───────────┤  Merger  ├──► SeedPlan (create endpoints in relationship order)
   /actuator   ──► ActuatorMappings ────┘          └──► RealDataCollector ◄── DatabaseSampler (JDBC, read-only)
                                                           │               ◄── ApiHarvester (GET collections)
   user values (json/csv/--value/--interactive) ──────────┤
@@ -53,6 +64,7 @@ at runtime (the module is never on a host's classpath).
 | `data/real.json` | generator | pools re-sampled; pools not re-sampled this time are kept |
 | `data/plan.json`, `README.md`, `run.sh` | generator | yes |
 | `data/journey.json` | generator | replaced when generated with `--har`, otherwise kept |
+| `data/seed.json` | generator | yes — seeding steps (`SeedPlan.toJson()`) |
 | `hooks.js` | team | never (created once) |
 
 - Field keys (one scheme for plan, JS and user data; `data.FieldKeys`): `<apiId>.path|query|header.<name>`,
@@ -63,9 +75,12 @@ at runtime (the module is never on a host's classpath).
   summary, tags, params, body, resource, sources)`, sealed `Schema` = `ScalarSchema | ArraySchema |
   ObjectSchema | RefSchema`, `Constraints(minLength, maxLength, minimum, maximum, pattern, temporal)`,
   `EntityTable(entity, schema, table, idField, idColumn, fieldColumns, fieldReferences, joinColumns,
-  sensitiveFields)`.
-- `data`: `FieldKind` (55 kinds), `FieldPlan(key, name, owner, kind, pool, sensitive)`, `PoolRef(schema, table,
-  column)` (key `[schema.]table.column`), `UserData(fields, payloads, bindings)`.
+  sensitiveFields, columnLengths, uniqueFields, idGenerated)`.
+- `data`: `FieldKind` (55 kinds), `FieldPlan(key, name, owner, kind, pool, sensitive, maxLength, unique)`,
+  `PoolRef(schema, table, column)` (key `[schema.]table.column`), `UserData(fields, payloads, bindings)`,
+  `DbTable(schema, name, columns, primaryKey, foreignKeys, columnSizes, uniqueColumns)` (from JDBC metadata or
+  DDL), `SeedPlan(steps)` with `Step(api, table, pool, idField, idFromRequest, dependsOn, deleteApi, captures,
+  deletePool)`.
 - `data/user.json`: `{"fields": {key: [values]}, "payloads": {apiId: [bodies]}, "bindings": {key: "table.column"}}`;
   a field key may be the full key, `<apiId|Schema>.<field>` or the bare field name. CSV: header = keys.
 
@@ -84,6 +99,42 @@ Jackson (`@JsonProperty`, `@JsonIgnore`, READ_ONLY, `@JsonNaming`, global SNAKE_
 (example, allowableValues, required). (5) Merge by `METHOD + path with anonymised variables`; filters
 (Ant patterns, `METHOD pattern`, or an id) and default excludes.
 
+**Spring endpoint styles.** Controllers are recognised through composed stereotypes (an annotation meta-annotated
+with `@RestController`/`@Controller`, whose own `@RequestMapping` contributes a base path; a class's direct
+mapping wins). Handler methods are collected through `extends`/`implements` with type-variable binding, so
+`class CompanyController extends AbstractCrudController<Company, Long>` yields `POST /companies` with a
+`Company` body and a `Long` id; abstract bases are not endpoints themselves. `@HttpExchange`/`@GetExchange…`
+interfaces count only when a controller implements them (alone they are HTTP clients). `FunctionalRouteScanner`
+reads methods returning `RouterFunction` (`route().GET(…)`, `.path(prefix, b -> …)`, `nest(path(…), …)`) —
+handlers are opaque, so write bodies are free-form. `DataRestScanner` (only when the build declares Spring Data
+REST) turns every exported repository into list/create/get/put/patch/delete under
+`spring.data.rest.base-path` with the default (uncapitalised plural) or `@RepositoryRestResource(path)` path;
+bodies are `<Entity>Resource` schemas where associations are URI links. `${placeholder:default}` in mappings
+resolve against the project's configuration. `server.servlet.context-path` becomes the base path (a bundled
+OpenAPI server URL is rebased onto it). With `spring.jackson.deserialization.unwrap-root-value`, bodies are
+wrapped as `{"<@JsonRootName or class>": …}`. API-first projects: OpenAPI documents bundled under
+`src/main/resources` or a top-level `api/`/`openapi/`/`spec/`/`contracts/` directory are read automatically
+(`--no-bundled-openapi` to skip), and interfaces generated into `target/generated-sources`/`build/generated`
+are scanned.
+
+**Relationships and payloads.** A JPA entity used as a request body becomes a schema without the server-managed
+fields (`@GeneratedValue` id, `@Version`, `@CreatedDate`/`@LastModifiedDate`/`@CreationTimestamp`…,
+`@OneToMany`/`@ManyToMany` collections, `@JsonBackReference`); a `@ManyToOne`/`@OneToOne` field becomes a
+`<Target>Ref {id}` reference; `@Column(nullable = false)`/`optional = false` make a property required;
+`@Column(length)` (default 255 for strings; none for `@Lob`/`columnDefinition`) becomes `maxLength`,
+`precision`/`scale` a maximum. `TableIndex.reference` follows the graph: `ownerId` in `CreateDealRequest` →
+`Deal.owner` is a `@ManyToOne AppUser` → `users.id`, even though no table is called `owner`; without JPA the
+foreign key of the matching column decides (`author_id → users.id`). `TableIndex.facts` carries column length
+(stricter of JPA and database) and uniqueness into each `FieldPlan`; the runtime truncates to `maxLength` and
+suffixes unique values per VU iteration. Tables come from the live database's metadata (authoritative: an
+entity it lacks is ignored) or, without a reachable database, from `SqlSchemaReader`: the project's Flyway
+migrations (version order; undo scripts skipped), Liquibase formatted-SQL changelogs and `schema*.sql` are
+replayed — `CREATE TABLE` (inline/table-level PK, `REFERENCES`/`FOREIGN KEY`, `UNIQUE`, `varchar(n)`),
+`ALTER TABLE ADD/DROP/RENAME/ALTER … TYPE/MODIFY/CHANGE`, `CREATE UNIQUE INDEX`, `DROP TABLE`, across
+PostgreSQL/MySQL/SQL Server/H2 syntax; where the DDL declares no constraint, `x_id` is inferred to reference
+the single-column PK of table `x`/`xs`. DDL tables only add facts (non-authoritative index): an entity missing
+from them is still used.
+
 **Browser recordings (HAR).** `HarReader` keeps API calls only (`_resourceType` fetch/xhr, or JSON
 request/response for exporters without types), drops documents/scripts/styles/images/fonts, CORS preflights,
 non-HTTP schemes and non-JSON bodies, and keeps the most-called host (`--har-host` to choose). URLs become
@@ -100,8 +151,10 @@ a step that an earlier response returned becomes `{"$from": step, "at": "content
 "recorded": v}` — the latest response first, up to three earlier ones as fallbacks, the recorded value last.
 
 **Data plan.** Kind = format → enum → name heuristics → type. Real-data binding (`RealDataBinder`), cautious:
-explicit bindings first; then identifiers (`{id}` → PK of the collection before it, `customerId` → PK of
-`customer(s)`), natural keys (`productSku` → `product.sku` when `sku` is Product's `@Id`), query filters of
+explicit bindings first; then identifiers (`{id}` → PK of the collection before it, a reference field → the
+relationship it maps (above), `customerId` → PK of `customer(s)`), natural keys (`productSku` → `product.sku`
+when `sku` is Product's `@Id`), other path parameters (`/articles/{slug}` → `articles.slug`; with no such
+table, the one table where the column is unique: `/profiles/{username}` → `users.username`), query filters of
 the resource (`GET /customers?email=` → `customers.email`); never a sensitive field; other body fields stay
 generated (no unique-constraint collisions on creates). Tables resolve through JPA entities and/or JDBC
 metadata (`TableIndex`; when the database is known, it decides what exists).
@@ -111,6 +164,23 @@ metadata (`TableIndex`; when the database is known, it decides what exists).
 endpoints of the same table (array, page wrappers `content/items/data/results/…`, HAL `_embedded`) and those
 values are checked in the database when one is configured; user values of bound fields are checked
 (`WHERE col IN (…)`, chunks of 500, values typed by column type) and, with `--drop-unverified`, filtered.
+
+**Seeding.** `SeedPlan` maps every `POST` with a body to the table it creates rows in (its resource entity, the
+collection segment, or the body DTO's entity; the plainest endpoint per table wins: fewest path parameters,
+not Data REST) and orders the tables parents first (Kahn; a cycle is broken with a log line). A table depends
+on the tables its request fields reference *and* on its own relationships (JPA references, foreign keys):
+the author of an article usually comes from the logged-in user, not the payload, yet must exist first. Each
+step records where the new row's id comes from (the response body — searched in wrappers such as
+`{"data": {"id"}}` —, the `Location` header, or the request for client-assigned keys), the other columns
+requests address rows by (`captures`: `articles.slug ← slug`, read from the response, else the request), and a
+single-parameter `DELETE` addressing the row by id or a captured key. In k6 `setup()`, `seed()` creates
+`seed.perTable` rows per table (`SEED_PER_TABLE`), sending every optional field so the rows are complete, with
+each child's references drawn from the parents just created; the result (pool → values) is handed to every VU,
+whose real-data fields prefer it over sampled values, followed by ids that the VU's own creates returned. With
+`seed.cleanup`/`SEED_CLEANUP=true`, `teardown()` deletes seeded rows children first (404 counts as gone); when a
+table's rows cannot all be deleted, its parents are kept (they are still referenced). Seeding is on by default,
+off with `SEED=false`, `READ_ONLY=true` or `safety.readOnly`; requests are tagged `seed_<api>`/`cleanup_<api>`.
+Writes go through the application (validation, events, auditing apply), never straight into the database.
 
 **Run time (k6).** `field(ctx, spec)` chooses the source by `DATA_MODE`: `auto` user > real > dummy;
 `dummy`; `random` (constraint-driven, regex-generated strings; 4xx counted as expected); `real` real > user >
@@ -140,6 +210,9 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 | Unparseable source file | javac still yields a tree | best effort; missing types become free-form | add OpenAPI |
 | Unknown `MODE`/`API` | suite init | k6 exits non-zero with the list of valid values | — |
 | Production-looking target | `safety.blockedHostPattern` | suite refuses to start | `ALLOW_PROD=true` if intended |
+| Seed create refused | status not 2xx | `seed: <table> n/N (k failed)`; that table has fewer/no seeded rows, fields fall back to sampled/dummy data | fix the payload in `hooks.js`/`user.json`, or `apis.<id>.enabled=false` |
+| Relationship cycle | Kahn finds no ready table | logged; the cycle is seeded with whatever parent ids exist | `--bind`, or seed one side via `user.json` |
+| DDL statement not understood | regex miss | skipped silently (tolerant reader) | give `--db-url` for real metadata |
 
 ## 7. Security
 - Never runs inside a host; read-only JDBC connection; identifiers from configuration are matched against JDBC
@@ -163,11 +236,14 @@ CLI (generation): `--project`, `--openapi`, `--actuator`, `--include`/`--exclude
 `--header`, `--out`, `--base-url`, `--data-mode`, `--db-url`/`--db-user`/`--db-password`/`--db-schema`/`--no-db`
 (defaults: the project's `spring.datasource.*`), `--sample-size` (200), `--harvest`, `--user-data`, `--value`,
 `--bind`, `--interactive`, `--drop-unverified`, `--auth`/`--login-path`, `--har` (repeatable), `--har-host`,
-`--har-no-values` (with a HAR and no `--base-url`, the target defaults to the recorded origin + context path). Suite: `loadtest.config.json`
-(`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `thresholds`, `defaults.p95Ms`,
+`--har-no-values` (with a HAR and no `--base-url`, the target defaults to the recorded origin + context path),
+`--no-bundled-openapi`. Launcher: `LOADTEST_CLASSPATH` (extra jars), JDBC drivers for MySQL, MariaDB, SQL Server,
+Oracle, H2, SQLite and DB2 found in `~/.m2` (`MAVEN_REPO_LOCAL`) or the Gradle cache (`GRADLE_USER_HOME`)
+— `LOADTEST_DRIVER_SEARCH=0` turns that off. Suite: `loadtest.config.json`
+(`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `seed.{enabled, perTable, cleanup}`, `thresholds`, `defaults.p95Ms`,
 `defaults.maxErrorRate`, `perApi`, `journey.{pauseScale, maxPauseMs}`, `modes`, `apis.<id>.{enabled, weight, expectedStatuses, p95Ms, maxErrorRate}`)
 and env (`MODE`, `DATA_MODE`, `BASE_URL`, `API`, `VUS`, `RATE`, `DURATION_SCALE`, `PER_API`, `READ_ONLY`,
-`ALLOW_PROD`, `PREVIEW_COUNT`).
+`ALLOW_PROD`, `PREVIEW_COUNT`, `SEED`, `SEED_PER_TABLE`, `SEED_CLEANUP`).
 
 ## 9. Observability
 Every request is tagged `api=<id>` and `name=<METHOD template>` (no high-cardinality URLs). Per-API thresholds
@@ -184,6 +260,9 @@ to exhaust); regex patterns are parsed once per VU and cached.
 Multipart and form bodies are skipped (also in recordings); recorded GraphQL calls become a single
 `POST /graphql` operation (no per-query split); correlation does not cover values returned in response
 headers (e.g. `Location`) or tokens reused in `Authorization` (configure `auth.type=login` instead); Kotlin sources are not scanned (use `--openapi`/`--actuator`);
-polymorphic DTOs (interfaces/abstract classes) become free-form objects; request chaining (create → read the
-created id) is a `hooks.js` recipe rather than generated; MySQL/SQL Server/Oracle sampling needs the driver on
-`LOADTEST_CLASSPATH` (only PostgreSQL is tested).
+polymorphic DTOs (interfaces/abstract classes) become free-form objects; create → use chaining is generated
+for seeding and for each VU's own creates, but a multi-step business flow (cart → checkout) is the HAR journey
+or a `hooks.js` recipe; non-PostgreSQL sampling relies on the driver found in the local Maven/Gradle cache or on
+`LOADTEST_CLASSPATH` (only PostgreSQL is tested); Liquibase XML/YAML/JSON changelogs are not read (SQL
+changelogs are) — give `--db-url` or JPA entities; functional-route handlers and Data REST bodies cannot be
+typed beyond the entity; composite foreign keys are not followed.

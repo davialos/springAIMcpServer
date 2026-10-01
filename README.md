@@ -39,10 +39,12 @@ See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency
 
 ## Load testing any Spring Boot project (k6)
 
-`spring-ai-mcp-server-common-loadtest` discovers a project's REST APIs (Java sources, OpenAPI, actuator
-mappings), generates a k6 suite with a data provider per API and per request DTO — dummy, random, real
-(sampled from and checked against the project's database, or harvested from the running API) and
-user-supplied values — and runs it in smoke, load, stress, spike, soak or breakpoint mode, per API or as a
+`spring-ai-mcp-server-common-loadtest` discovers a Spring project's REST APIs (every controller style,
+functional routes, Spring Data REST, OpenAPI, actuator mappings), builds payloads from the entity/table
+relationships (JPA, database foreign keys, or Flyway/`schema.sql` DDL), seeds test data through the
+application's own create endpoints parents-first, generates a k6 suite with a data provider per API and per
+request DTO — dummy, random, real (sampled from and checked against the project's database, created by
+seeding, or harvested from the running API) and user-supplied values — and runs it in smoke, load, stress, spike, soak or breakpoint mode, per API or as a
 weighted mix of all APIs (`mixed-spike`, `mixed-stress`, …), or as replays of a browser recording exported
 from DevTools' Network tab (`journey-spike`, …), with ids correlated from call to call.
 

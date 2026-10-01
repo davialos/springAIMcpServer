@@ -18,7 +18,7 @@ function pad(s, n) {
 }
 
 export function summary(data, runtime, mode) {
-  if (mode === 'preview') return { stdout: '' };
+  if (mode.endsWith('preview')) return { stdout: '' };
   const rows = [];
   for (const api of runtime.apis) {
     const d = metric(data, `http_req_duration{api:${api.id}}`) || {};

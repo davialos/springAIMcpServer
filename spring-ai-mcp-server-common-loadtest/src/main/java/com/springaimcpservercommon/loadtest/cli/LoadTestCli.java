@@ -7,11 +7,14 @@ import com.springaimcpservercommon.loadtest.data.FieldPlan;
 import com.springaimcpservercommon.loadtest.data.PoolRef;
 import com.springaimcpservercommon.loadtest.data.RealDataBinder;
 import com.springaimcpservercommon.loadtest.data.RealDataCollector;
+import com.springaimcpservercommon.loadtest.data.RecordedTraffic;
 import com.springaimcpservercommon.loadtest.data.TableIndex;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.ActuatorMappingsReader;
 import com.springaimcpservercommon.loadtest.discovery.CatalogMerger;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.HarCapture;
+import com.springaimcpservercommon.loadtest.discovery.HarReader;
 import com.springaimcpservercommon.loadtest.discovery.OpenApiReader;
 import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
 import com.springaimcpservercommon.loadtest.discovery.SpringSourceScanner;
@@ -57,7 +60,7 @@ import java.util.Set;
 public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
-            "no-default-excludes", "json", "help", "verbose", "read-only");
+            "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -134,7 +137,8 @@ public final class LoadTestCli {
 
     // ── discover ───────────────────────────────────────────────────────────────────────────────────────
 
-    private record Discovery(ApiCatalog catalog, ProjectSettings settings, @Nullable Path project) {
+    private record Discovery(ApiCatalog catalog, ProjectSettings settings, @Nullable Path project,
+                             List<HarCapture> recordings, @Nullable String basePath) {
     }
 
     private Discovery discoverCatalog(CliArgs a) {
@@ -142,7 +146,8 @@ public final class LoadTestCli {
         Path projectDir = project == null ? null : Path.of(project);
         Map<String, String> headers = headers(a);
         List<ApiCatalog> catalogs = new ArrayList<>();
-        // Precedence: OpenAPI (authoritative contract) > sources (constraints, entities) > actuator (live routes)
+        // Precedence: OpenAPI (authoritative contract) > sources (constraints, entities) > browser recordings
+        // (observed shapes and values) > actuator (live routes)
         if (a.get("openapi") != null) {
             catalogs.add(new OpenApiReader(this::log).read(Documents.text(a.get("openapi"), headers)));
         }
@@ -154,11 +159,23 @@ public final class LoadTestCli {
             settings = ProjectSettings.read(projectDir);
             catalogs.add(new SpringSourceScanner(this::log).scan(projectDir));
         }
+        String basePath = basePath(a, settings, catalogs);
+        List<HarCapture> recordings = new ArrayList<>();
+        if (!a.all("har").isEmpty()) {
+            List<String> known = new ArrayList<>();
+            catalogs.forEach(c -> c.endpoints().forEach(e -> known.add(e.path())));
+            for (String har : a.all("har")) {
+                HarCapture capture = new HarReader(this::log).read(Documents.text(har, Map.of()),
+                        new HarReader.Options(a.all("har-host"), basePath, known));
+                recordings.add(capture);
+                catalogs.add(capture.catalog());
+            }
+        }
         if (a.get("actuator") != null) {
             catalogs.add(new ActuatorMappingsReader(this::log).read(Documents.text(a.get("actuator"), headers)));
         }
         if (catalogs.isEmpty()) {
-            throw new IllegalArgumentException("give at least one of --project, --openapi, --actuator");
+            throw new IllegalArgumentException("give at least one of --project, --openapi, --har, --actuator");
         }
         ApiCatalog merged = CatalogMerger.merge(catalogs);
         List<String> excludes = new ArrayList<>(a.all("exclude"));
@@ -167,7 +184,20 @@ public final class LoadTestCli {
         }
         ApiCatalog filtered = CatalogMerger.filter(merged, a.all("include"), excludes);
         log(filtered.endpoints().size() + " APIs selected (" + merged.endpoints().size() + " discovered)");
-        return new Discovery(filtered, settings, projectDir);
+        return new Discovery(filtered, settings, projectDir, recordings, basePath);
+    }
+
+    /** The servlet context path: from --base-url, the project's settings, or the OpenAPI server URL. */
+    private static @Nullable String basePath(CliArgs a, ProjectSettings settings, List<ApiCatalog> catalogs) {
+        String baseUrl = a.get("base-url");
+        if (baseUrl != null) {
+            String p = java.net.URI.create(baseUrl).getPath();
+            return p == null || p.isBlank() || p.equals("/") ? null : p.replaceAll("/+$", "");
+        }
+        if (settings.contextPath() != null) {
+            return settings.contextPath();
+        }
+        return catalogs.stream().map(ApiCatalog::basePath).filter(java.util.Objects::nonNull).findFirst().orElse(null);
     }
 
     private int discover(CliArgs a) {
@@ -185,6 +215,11 @@ public final class LoadTestCli {
         out.println(d.catalog().schemas().size() + " request schemas, " + d.catalog().entities().size()
                 + " JPA entities, " + plan.fields().size() + " fields, " + plan.pools().size()
                 + " real-data bindings");
+        if (!d.recordings().isEmpty()) {
+            RecordedTraffic recorded = new RecordedTraffic(d.recordings(), d.catalog(), plan);
+            out.println(recorded.journey().size() + " recorded calls replayable as a journey, "
+                    + recorded.userData().fields().size() + " fields with recorded values");
+        }
         if (a.flag("json")) {
             out.println();
             for (FieldPlan f : plan.fields().values()) {
@@ -200,11 +235,19 @@ public final class LoadTestCli {
     private int generate(CliArgs a) {
         Discovery d = discoverCatalog(a);
         ApiCatalog catalog = d.catalog();
-        String baseUrl = a.get("base-url", d.settings().contextPath() == null && catalog.basePath() != null
+        String recordedOrigin = d.recordings().stream().map(HarCapture::origin).filter(java.util.Objects::nonNull)
+                .findFirst().orElse(null);
+        String baseUrl = a.get("base-url", recordedOrigin != null
+                // the environment the flows were recorded against
+                ? recordedOrigin + (d.basePath() == null ? "" : d.basePath())
+                : d.settings().contextPath() == null && catalog.basePath() != null
                 ? "http://localhost:" + d.settings().serverPort() + catalog.basePath()
                 : d.settings().localBaseUrl());
         Path outDir = Path.of(a.get("out", d.project() != null ? d.project().resolve("load-tests").toString()
                 : "load-tests"));
+        if (!d.recordings().isEmpty() && d.recordings().stream().allMatch(c -> c.observations().isEmpty())) {
+            log("har: no successful API call in the recording (journey will be empty)");
+        }
 
         // Existing suite data first: new input is added to it, then everything is verified together.
         Path existingUser = outDir.resolve("data/user.json");
@@ -236,6 +279,18 @@ public final class LoadTestCli {
         try {
             TableIndex index = new TableIndex(catalog.entities(), db == null ? List.of() : db.tables());
             DataPlan plan = DataPlan.build(catalog, new RealDataBinder(index, bindings));
+            tools.jackson.databind.node.ArrayNode journey = null;
+            if (!d.recordings().isEmpty()) {
+                RecordedTraffic recorded = new RecordedTraffic(d.recordings(), catalog, plan);
+                journey = recorded.journey();
+                if (!a.flag("har-no-values")) {
+                    UserData values = recorded.userData();
+                    user = user.merge(values);
+                    log("har: recorded values for " + values.fields().size() + " fields and "
+                            + values.payloads().size() + " APIs' bodies (sensitive fields never kept)");
+                }
+                log("har: journey of " + journey.size() + " steps (MODE=journey-<profile>)");
+            }
             if (a.flag("interactive")) {
                 user = interactive(catalog, plan, user);
             }
@@ -243,7 +298,7 @@ public final class LoadTestCli {
             RealDataCollector.Result real = new RealDataCollector(this::log).collect(catalog, plan, index, db,
                     harvester, user, a.integer("sample-size", 200), a.flag("drop-unverified"));
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
-                    new K6SuiteGenerator.Options(outDir, baseUrl, a.get("data-mode", "auto"),
+                    journey, new K6SuiteGenerator.Options(outDir, baseUrl, a.get("data-mode", "auto"),
                             a.get("auth", "none"), a.get("login-path")));
             out.println("Generated k6 suite in " + r.outDir().toAbsolutePath().normalize());
             out.println("  " + r.apis() + " APIs, " + r.fields() + " fields, " + r.pools() + " real-data pools");
@@ -384,11 +439,11 @@ public final class LoadTestCli {
     }
 
     private int modes() {
-        out.println("Load modes (MODE):");
+        out.println("Load modes (MODE): <profile> per API, mixed-<profile> weighted mix, journey-<profile> recorded flow");
         for (LoadMode m : LoadMode.values()) {
-            out.printf("  %-12s mixed-%-12s %s%n", m.id(), m.id(), m.description());
+            out.printf("  %-12s mixed-%-12s journey-%-12s %s%n", m.id(), m.id(), m.id(), m.description());
         }
-        out.println("  preview      build requests and print them, send nothing");
+        out.println("  preview      journey-preview      build requests and print them, send nothing");
         out.println();
         out.println("Data modes (DATA_MODE): auto | dummy | random | real | user | mixed");
         return 0;
@@ -424,6 +479,10 @@ public final class LoadTestCli {
                   --project <dir>           Spring Boot project: sources, application.yml, JPA entities
                   --openapi <url|file>      OpenAPI 3 document, e.g. http://localhost:8080/v3/api-docs
                   --actuator <url|file>     /actuator/mappings of the running app (also sees dynamic routes)
+                  --har <file>              browser recording: DevTools ▸ Network ▸ Export HAR (repeatable). Adds
+                                            the API calls seen, their recorded values, and a replayable journey
+                  --har-host <host>         keep calls to this host (default: the most-called host; repeatable)
+                  --har-no-values           use the recording's APIs and journey order, not its values
                   --include <pattern>       keep only matching APIs: '/api/**', 'GET /orders/*', or an API id
                   --exclude <pattern>       drop matching APIs (defaults also drop /error, /actuator/**, docs and
                                             /dynamic-ai/admin/**; --no-default-excludes keeps them)

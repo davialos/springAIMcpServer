@@ -85,6 +85,27 @@ class LoadTestCliTest {
     }
 
     @Test
+    void generatesFromABrowserRecordingAlone(@TempDir Path dir) throws IOException {
+        Path har = dir.resolve("shop.har");
+        Files.writeString(har, Fixtures.sampleShopHar());
+        Path suite = dir.resolve("suite");
+        int code = run("", "generate", "--har", har.toString(), "--out", suite.toString(), "--no-db");
+        assertThat(code).as(err()).isZero();
+        assertThat(err()).contains("journey of 10 steps").contains("sensitive fields never kept");
+        JsonNode config = Documents.parse(Files.readString(suite.resolve("loadtest.config.json")));
+        assertThat(config.path("baseUrl").asString()).isEqualTo("https://shop.local:8443");
+        assertThat(config.path("apis").has("getCustomersById")).isTrue();
+        assertThat(config.path("apis").has("getShopCustomersById")).isFalse();
+        assertThat(Documents.parse(Files.readString(suite.resolve("data/journey.json"))).size()).isEqualTo(10);
+        assertThat(Files.readString(suite.resolve("README.md"))).contains("journey-spike");
+        assertThat(Files.readString(suite.resolve("data/user.json"))).doesNotContain("S3cret!pw");
+
+        out.reset();
+        assertThat(run("", "discover", "--har", har.toString())).isZero();
+        assertThat(out()).contains("10 recorded calls replayable as a journey");
+    }
+
+    @Test
     void usageErrorsExitWithTwo() {
         assertThat(run("", "generate")).isEqualTo(2);
         assertThat(err()).contains("--project");
@@ -96,6 +117,7 @@ class LoadTestCliTest {
     @Test
     void modesListsEveryLoadAndDataMode() {
         assertThat(run("", "modes")).isZero();
-        assertThat(out()).contains("spike").contains("mixed-stress").contains("preview").contains("DATA_MODE");
+        assertThat(out()).contains("spike").contains("mixed-stress").contains("journey-spike").contains("preview")
+                .contains("DATA_MODE");
     }
 }

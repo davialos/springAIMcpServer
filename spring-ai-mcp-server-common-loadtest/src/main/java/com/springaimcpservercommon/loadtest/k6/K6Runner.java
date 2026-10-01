@@ -45,7 +45,7 @@ public final class K6Runner {
             cmd.add("-e");
             cmd.add(k + "=" + v);
         });
-        if (run.mode().equals("preview")) {
+        if (run.mode().endsWith("preview")) {
             cmd.add("--log-format=raw"); // one JSON request per line
             cmd.add("--quiet");
         }

@@ -34,6 +34,7 @@ import java.util.stream.Stream;
  * data/real.json         real-data pools (database / API harvest)
  * data/user.json         user-supplied values, payloads and bindings
  * data/plan.json         every field: kind and real-data binding
+ * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * hooks.js               user hooks (created once, never overwritten)
  * README.md              how to run; API and field tables
  * </pre>
@@ -80,6 +81,22 @@ public final class K6SuiteGenerator {
      */
     public Result generate(ApiCatalog catalog, DataPlan plan, Map<String, List<Object>> pools, UserData user,
                            Options o) {
+        return generate(catalog, plan, pools, user, null, o);
+    }
+
+    /**
+     * Generates (or regenerates) a suite, with a recorded journey.
+     *
+     * @param catalog discovered APIs
+     * @param plan    data plan
+     * @param pools   real-data pools collected now (merged over the ones on disk)
+     * @param user    the complete user data for {@code data/user.json}
+     * @param journey recorded steps for {@code data/journey.json}, or {@code null} to keep the file on disk
+     * @param o       options
+     * @return summary
+     */
+    public Result generate(ApiCatalog catalog, DataPlan plan, Map<String, List<Object>> pools, UserData user,
+                           @Nullable ArrayNode journey, Options o) {
         Path out = o.outDir();
         try {
             for (String dir : List.of("lib", "apis", "providers", "data", "reports")) {
@@ -111,6 +128,12 @@ public final class K6SuiteGenerator {
 
             writeJson(out.resolve("data/user.json"), user.toJson());
             writeJson(out.resolve("data/plan.json"), planJson(plan, realPools));
+            Path journeyFile = out.resolve("data/journey.json");
+            if (journey != null) {
+                writeJson(journeyFile, journey);
+            } else if (!Files.exists(journeyFile)) {
+                writeJson(journeyFile, Documents.json().createArrayNode());
+            }
 
             Files.writeString(out.resolve("README.md"),
                     SuiteReadme.render(catalog, plan, realPools, user, config));
@@ -211,6 +234,7 @@ public final class K6SuiteGenerator {
                 #   ./run.sh mixed-spike mixed         weighted mix of all APIs, spike profile, mixed data sources
                 #   API=getUser ./run.sh stress dummy  one API, stress profile, dummy data
                 #   ./run.sh preview random            print generated requests, send nothing
+                #   ./run.sh journey-load              replay the recorded browser flow (generate --har) under load
                 # Env (k6 reads it directly): BASE_URL, VUS, RATE, DURATION_SCALE, API, PER_API, READ_ONLY,
                 #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT
                 set -euo pipefail
@@ -221,7 +245,7 @@ public final class K6SuiteGenerator {
                 [ $# -gt 0 ] && shift
                 args=(run -e "MODE=$mode")
                 if [ -n "$data" ]; then args+=(-e "DATA_MODE=$data"); fi
-                if [ "$mode" = preview ]; then args+=(--log-format=raw --quiet); fi
+                case "$mode" in *preview) args+=(--log-format=raw --quiet) ;; esac
                 exec "${K6:-k6}" "${args[@]}" "$@" main.js
                 """;
     }

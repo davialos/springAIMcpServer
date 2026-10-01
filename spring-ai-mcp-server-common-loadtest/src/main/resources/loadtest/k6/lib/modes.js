@@ -2,15 +2,18 @@
 // this file only turns a profile into scenarios. MODE env selects one of:
 //   smoke | load | stress | spike | soak | breakpoint           each API on its own (sequential scenarios)
 //   mixed-smoke | mixed-load | mixed-stress | mixed-spike | …    all APIs together, weighted traffic mix
-//   preview                                                     build requests and print them, send nothing
+//   journey-smoke | journey-load | journey-spike | …            replay the recorded browser flow (data/journey.json)
+//   preview | journey-preview                                   build requests and print them, send nothing
 // Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), DURATION_SCALE (e.g. 0.1),
 // API=getUser,createOrder (restrict APIs), PER_API=parallel (per-API scenarios at once instead of in turn).
 
 export function parseMode(raw) {
   const mode = (raw || 'smoke').toLowerCase();
-  if (mode === 'preview') return { mode, profile: 'preview', mixed: false };
+  if (mode === 'preview') return { mode, profile: 'preview', mixed: false, journey: false };
+  if (mode === 'journey-preview') return { mode, profile: 'preview', mixed: false, journey: true };
   const mixed = mode.startsWith('mixed-');
-  return { mode, profile: mixed ? mode.slice(6) : mode, mixed };
+  const journey = mode.startsWith('journey-');
+  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : mode, mixed, journey };
 }
 
 const UNITS = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 };
@@ -112,15 +115,16 @@ function thresholds(config, profile, runtime, mixed) {
 }
 
 /** k6 options for the selected mode. */
-export function buildOptions(config, runtime) {
-  const { mode, profile: profileName, mixed } = parseMode(__ENV.MODE);
+export function buildOptions(config, runtime, journeySteps) {
+  const { mode, profile: profileName, mixed, journey } = parseMode(__ENV.MODE);
   const common = {
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
     insecureSkipTLSVerify: config.http && config.http.insecureSkipTLSVerify === true,
     userAgent: `k6-loadtest/${config.project || 'suite'}`,
   };
   if (profileName === 'preview') {
-    return Object.assign(common, { scenarios: { preview: { executor: 'per-vu-iterations', vus: 1, iterations: 1, exec: 'preview' } } });
+    const exec = journey ? 'previewJourney' : 'preview';
+    return Object.assign(common, { scenarios: { preview: { executor: 'per-vu-iterations', vus: 1, iterations: 1, exec } } });
   }
   const profile = (config.modes || {})[profileName];
   if (!profile) {
@@ -129,7 +133,10 @@ export function buildOptions(config, runtime) {
   }
   if (!runtime.apis.length) throw new Error('No API is enabled (check loadtest.config.json → apis, API and READ_ONLY)');
   const scenarios = {};
-  if (mixed) {
+  if (journey) {
+    if (!journeySteps) throw new Error(`MODE=${mode}: data/journey.json is empty — generate with --har <recording.har>`);
+    scenarios[`journey_${profileName}`] = scenario(profile, 'journey', null, 1);
+  } else if (mixed) {
     scenarios[`mixed_${profileName}`] = scenario(profile, 'mixed', null, runtime.apis.length);
   } else if (profile.executor === 'per-vu-iterations') {
     // Iteration-based profiles (smoke): each iteration calls every API once, in order.

@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.ai.runtime;
 
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
+import com.springaimcpservercommon.core.display.StructuredResponse;
 import com.springaimcpservercommon.core.invocation.Channel;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import org.jspecify.annotations.NullMarked;
@@ -99,16 +100,34 @@ public interface AgentInvoker {
      *
      * @param conversationId conversation id (newly created or existing)
      * @param turnId         unique turn id
-     * @param message        assistant's final text response
+     * @param message        assistant's final text response (personal data redacted when output redaction is on)
      * @param toolCalls      tool calls made during the turn
      * @param usage          token usage
+     * @param display        structured, backend-controlled display of the answer (LLD-06 §8.3); {@code null} when
+     *                       the structured display is off
      */
     record SyncChatResult(
             UUID conversationId,
             UUID turnId,
             String message,
             List<ToolCallRecord> toolCalls,
-            UsageRecord usage) {}
+            UsageRecord usage,
+            @Nullable StructuredResponse display) {
+
+        /**
+         * Result without a structured display.
+         *
+         * @param conversationId conversation id
+         * @param turnId         turn id
+         * @param message        assistant's final text response
+         * @param toolCalls      tool calls made during the turn
+         * @param usage          token usage
+         */
+        public SyncChatResult(UUID conversationId, UUID turnId, String message, List<ToolCallRecord> toolCalls,
+                              UsageRecord usage) {
+            this(conversationId, turnId, message, toolCalls, usage, null);
+        }
+    }
 
     // ─── Methods ─────────────────────────────────────────────────────────────
 

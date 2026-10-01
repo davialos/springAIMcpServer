@@ -41,6 +41,7 @@ Every event has an SSE `id: <turnId>:<seq>` (monotonic) and a JSON `data` object
 | `tool.call` | `callId, tool, argsPreview` (redacted) | Model requested a tool |
 | `tool.result` | `callId, status` (`ok\|empty\|truncated\|error\|not_permitted\|unavailable`), `summary` | Tool finished (payload itself is not streamed) |
 | `ui.component` | full component payload (LLD-11 §7) | Display data — always a complete JSON object, never split |
+| `ui.component` (`componentType: "structured-response"`) | `payload` = the answer's display tree (LLD-06 §8.3) | Sent once, after the last `text.delta` and before `usage`/`turn.end`, when the structured display is on; PII already removed |
 | `proposal.created` / `proposal.updated` / `proposal.applied` | proposal review payload / state (LLD-11) | Write flow |
 | `usage` | `inputTokens, outputTokens, costMicros, model` | Before `turn.end` |
 | `turn.end` | `finishReason` (`stop\|length\|tool_limit\|budget\|cancelled`), `messageId` | Last event of a successful turn |
@@ -85,6 +86,12 @@ patterns that span chunk boundaries:
 - blocked-term policy.
 Text is released once it can no longer be part of a match. At stream end the window is flushed through
 the same filters. Latency cost ≈ one small chunk; configurable per agent (`guardrails.stream-window`).
+
+**Implemented (F-76):** `StreamingPiiRedactor` keeps **128** characters back (longer than any built-in value
+format), releases text only up to a whitespace boundary that is not inside a detected value, and releases a single
+unbroken run longer than 8,192 characters at the window limit to bound memory. Not configurable per agent yet;
+exfiltration and blocked-term filtering of the output are not implemented (OQ-55). `JSON_SCHEMA` answers are
+held back whole (OQ-51) and redacted inside the document.
 
 ## 6. Client rendering responsibilities (JS client & Web Components)
 - Incremental Markdown rendering with a **streaming-tolerant parser** (re-parses the accumulated text on each

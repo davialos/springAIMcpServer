@@ -57,8 +57,10 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
    `tools/list_changed`, resources/prompts, `insufficient_scope` step-up, per-client rate limits, SDK transport.
 3. **Break-glass production override is not configurable (OQ-53).** Bind `environment.production-override.*`.
 4. **Per-kind spec validation at authoring time (OQ-41)** and **budget reservation (OQ-40).**
-5. **PII redaction of transcripts (OQ-44)** — only credentials are redacted today; matters more now that transcripts
-   are retained for audit.
+5. **Guardrails follow-ups (OQ-44, OQ-55)** — prompt validation (malicious content, business scope against the
+   catalog), PII redaction of prompts/answers/transcripts and the backend-controlled structured display are in
+   (`core.guard`, `core.display`, `ai.safety.TurnSafety`, LLD-06 §8); remaining: sync rejections as problem
+   responses, output exfiltration filtering, per-workspace redaction policy, authoring-time template validation.
 
 **Smaller / known limits**
 - Load-test generator (LLD-16 §11): multipart bodies skipped, Kotlin sources not scanned, request chaining is a

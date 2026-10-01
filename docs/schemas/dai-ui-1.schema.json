@@ -1,0 +1,2836 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dynamic-ai/schemas/dai-ui-1.schema.json",
+  "title": "dai-ui/1: surface, node catalog and action declarations (LLD-17)",
+  "description": "Normative draft. A surface is a tree of catalog nodes plus a data model and server-declared actions. x-class: model_safe nodes may be authored by a model, server_only nodes only by trusted server code. x-container: the node may have children. x-server-only-props: props a model-authored tree must not carry.",
+  "$ref": "#/$defs/surface",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "description": "Local identifier, unique within one surface (node ids and action ids)."
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUID in canonical lowercase form (persisted ids are UUIDv7)."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "pointer": {
+      "type": "string",
+      "pattern": "^(/([^/~]|~[01])*)+$",
+      "maxLength": 200,
+      "description": "RFC 6901 JSON Pointer into the surface data model."
+    },
+    "dataRef": {
+      "type": "object",
+      "required": [
+        "$data"
+      ],
+      "properties": {
+        "$data": {
+          "$ref": "#/$defs/pointer"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Read binding: replaced by the value found at the pointer when rendering."
+    },
+    "tone": {
+      "enum": [
+        "neutral",
+        "info",
+        "success",
+        "warning",
+        "danger"
+      ]
+    },
+    "valueFormat": {
+      "enum": [
+        "text",
+        "number",
+        "currency",
+        "date",
+        "datetime",
+        "percent",
+        "bool"
+      ]
+    },
+    "proposalState": {
+      "enum": [
+        "PROPOSED",
+        "EDITED",
+        "AWAITING_APPROVAL",
+        "CONFIRMED",
+        "APPLYING",
+        "APPLIED",
+        "REJECTED",
+        "EXPIRED",
+        "CONFLICT",
+        "FAILED"
+      ],
+      "description": "Mirrors persistence ProposalState (LLD-11 §3)."
+    },
+    "predLeaf": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "eq"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/pointer"
+            },
+            "eq": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ],
+              "maxLength": 2000
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "ne"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/pointer"
+            },
+            "ne": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ],
+              "maxLength": 2000
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "in"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/pointer"
+            },
+            "in": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ],
+                "maxLength": 2000
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "truthy"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/pointer"
+            },
+            "truthy": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "predicate2": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/predLeaf"
+        },
+        {
+          "type": "object",
+          "required": [
+            "allOf"
+          ],
+          "properties": {
+            "allOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/predLeaf"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "anyOf"
+          ],
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/predLeaf"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/predLeaf"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "predicate1": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/predLeaf"
+        },
+        {
+          "type": "object",
+          "required": [
+            "allOf"
+          ],
+          "properties": {
+            "allOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/predicate2"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "anyOf"
+          ],
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/predicate2"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/predicate2"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "predicate": {
+      "description": "Closed, side-effect-free visibility predicate over the surface data model; combinators nest at most three levels (unrolled, so validation stays linear).",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/predLeaf"
+        },
+        {
+          "type": "object",
+          "required": [
+            "allOf"
+          ],
+          "properties": {
+            "allOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/predicate1"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "anyOf"
+          ],
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/predicate1"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/predicate1"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "friction": {
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "confirmLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "typed": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "additionalProperties": false
+    },
+    "actionDecl": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "respond",
+            "event",
+            "message"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "style": {
+          "enum": [
+            "primary",
+            "secondary",
+            "danger",
+            "link"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "accept",
+            "decline",
+            "cancel"
+          ],
+          "description": "respond only: which outcome this action resolves the interrupt with."
+        },
+        "submit": {
+          "$ref": "#/$defs/pointer",
+          "description": "Pointer of the data-model object the client sends as values."
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256",
+          "description": "Opaque; the client echoes it in expect.digest."
+        },
+        "confirm": {
+          "$ref": "#/$defs/friction"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "respond"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": true
+            }
+          }
+        }
+      ],
+      "additionalProperties": false,
+      "description": "Client-visible action declaration. The handler, arguments and authority live only on the server."
+    },
+    "children": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "fallback": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "surface": {
+      "type": "object",
+      "required": [
+        "surfaceId",
+        "revision",
+        "kind",
+        "origin",
+        "status",
+        "catalog",
+        "tree",
+        "actions"
+      ],
+      "properties": {
+        "surfaceId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "conversationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "turnId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "interruptId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "enum": [
+            "display",
+            "question",
+            "confirmation",
+            "proposal_review",
+            "status"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "server",
+            "model",
+            "host"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "completed",
+            "superseded",
+            "expired",
+            "closed"
+          ]
+        },
+        "catalog": {
+          "const": "dai-ui/1"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "anchor": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTF-16 code-unit offset into the assistant message text where the surface belongs; absent = after the text."
+        },
+        "tree": {
+          "$ref": "#/$defs/node"
+        },
+        "data": {
+          "type": "object"
+        },
+        "actions": {
+          "type": "object",
+          "maxProperties": 40,
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/actionDecl"
+          }
+        },
+        "poll": {
+          "type": "object",
+          "required": [
+            "after"
+          ],
+          "properties": {
+            "after": {
+              "type": "string",
+              "pattern": "^PT[1-9][0-9]{0,2}S$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "props_stack": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "enum": [
+            "vertical",
+            "horizontal"
+          ]
+        },
+        "gap": {
+          "enum": [
+            "none",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "align": {
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ]
+        },
+        "wrap": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_stack": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "stack"
+        },
+        "props": {
+          "$ref": "#/$defs/props_stack"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe",
+      "x-container": true
+    },
+    "props_card": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "subtitle": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 300
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_card": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "card"
+        },
+        "props": {
+          "$ref": "#/$defs/props_card"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe",
+      "x-container": true
+    },
+    "props_section": {
+      "type": "object",
+      "required": [
+        "heading"
+      ],
+      "properties": {
+        "heading": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "collapsible": {
+          "type": "boolean"
+        },
+        "collapsed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_section": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "section"
+        },
+        "props": {
+          "$ref": "#/$defs/props_section"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe",
+      "x-container": true
+    },
+    "props_divider": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "node_divider": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "divider"
+        },
+        "props": {
+          "$ref": "#/$defs/props_divider"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_text": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "variant": {
+          "enum": [
+            "body",
+            "caption",
+            "title",
+            "heading",
+            "mono"
+          ]
+        },
+        "format": {
+          "enum": [
+            "plain",
+            "markdown"
+          ]
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_text": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "text"
+        },
+        "props": {
+          "$ref": "#/$defs/props_text"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_badge": {
+      "type": "object",
+      "required": [
+        "label"
+      ],
+      "properties": {
+        "label": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_badge": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "badge"
+        },
+        "props": {
+          "$ref": "#/$defs/props_badge"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_callout": {
+      "type": "object",
+      "required": [
+        "tone"
+      ],
+      "properties": {
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_callout": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "callout"
+        },
+        "props": {
+          "$ref": "#/$defs/props_callout"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe",
+      "x-container": true
+    },
+    "props_code": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "language": {
+          "type": "string",
+          "pattern": "^[a-z0-9+#-]{1,20}$"
+        },
+        "wrap": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_code": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "code"
+        },
+        "props": {
+          "$ref": "#/$defs/props_code"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_link": {
+      "type": "object",
+      "required": [
+        "label",
+        "href"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "href": {
+          "type": "string",
+          "pattern": "^(https://|mailto:)[^\\s]{1,1990}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_link": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "link"
+        },
+        "props": {
+          "$ref": "#/$defs/props_link"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_image": {
+      "type": "object",
+      "required": [
+        "src",
+        "alt"
+      ],
+      "properties": {
+        "src": {
+          "type": "string",
+          "pattern": "^(https://|attachment:)[^\\s]{1,1990}$"
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4000
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4000
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_image": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "image"
+        },
+        "props": {
+          "$ref": "#/$defs/props_image"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_kv": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": [
+              "label",
+              "value"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "value": {
+                "oneOf": [
+                  {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ],
+                    "maxLength": 2000
+                  },
+                  {
+                    "$ref": "#/$defs/dataRef"
+                  }
+                ]
+              },
+              "format": {
+                "$ref": "#/$defs/valueFormat"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "layout": {
+          "enum": [
+            "inline",
+            "stacked"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_kv": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "kv"
+        },
+        "props": {
+          "$ref": "#/$defs/props_kv"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_table": {
+      "type": "object",
+      "required": [
+        "caption",
+        "columns",
+        "rows"
+      ],
+      "properties": {
+        "caption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "required": [
+              "key",
+              "label"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "format": {
+                "$ref": "#/$defs/valueFormat"
+              },
+              "align": {
+                "enum": [
+                  "start",
+                  "center",
+                  "end"
+                ]
+              },
+              "sortable": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "rows": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/dataRef"
+            },
+            {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "rowKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+        },
+        "emptyText": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "hasMore": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "onSort": {
+          "$ref": "#/$defs/id"
+        },
+        "onPage": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_table": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "table"
+        },
+        "props": {
+          "$ref": "#/$defs/props_table"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe",
+      "x-server-only-props": [
+        "onSort",
+        "onPage"
+      ]
+    },
+    "props_list": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/dataRef"
+            },
+            {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "title"
+                    ],
+                    "properties": {
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "description": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "ordered": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_list": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "list"
+        },
+        "props": {
+          "$ref": "#/$defs/props_list"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_timeline": {
+      "type": "object",
+      "required": [
+        "events"
+      ],
+      "properties": {
+        "events": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/dataRef"
+            },
+            {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": [
+                  "at",
+                  "title"
+                ],
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "tone": {
+                    "$ref": "#/$defs/tone"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_timeline": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "timeline"
+        },
+        "props": {
+          "$ref": "#/$defs/props_timeline"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_entity_link": {
+      "type": "object",
+      "required": [
+        "entity",
+        "id",
+        "label"
+      ],
+      "properties": {
+        "entity": {
+          "type": "string",
+          "pattern": "^entity:[A-Za-z0-9_.$]{1,200}$"
+        },
+        "id": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "maxLength": 100
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_entity_link": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "entity_link"
+        },
+        "props": {
+          "$ref": "#/$defs/props_entity_link"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_progress": {
+      "type": "object",
+      "required": [
+        "label"
+      ],
+      "properties": {
+        "value": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        },
+        "indeterminate": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_progress": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "progress"
+        },
+        "props": {
+          "$ref": "#/$defs/props_progress"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "model_safe"
+    },
+    "props_form": {
+      "type": "object",
+      "required": [
+        "submit"
+      ],
+      "properties": {
+        "submit": {
+          "$ref": "#/$defs/id"
+        },
+        "cancel": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_form": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "form"
+        },
+        "props": {
+          "$ref": "#/$defs/props_form"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only",
+      "x-container": true
+    },
+    "props_text_input": {
+      "type": "object",
+      "required": [
+        "name",
+        "label",
+        "bind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "bind": {
+          "$ref": "#/$defs/pointer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "placeholder": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "multiline": {
+          "type": "boolean"
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        },
+        "pattern": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "format": {
+          "enum": [
+            "email",
+            "uri"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_text_input": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "text_input"
+        },
+        "props": {
+          "$ref": "#/$defs/props_text_input"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_number_input": {
+      "type": "object",
+      "required": [
+        "name",
+        "label",
+        "bind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "bind": {
+          "$ref": "#/$defs/pointer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "integer": {
+          "type": "boolean"
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_number_input": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "number_input"
+        },
+        "props": {
+          "$ref": "#/$defs/props_number_input"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_select": {
+      "type": "object",
+      "required": [
+        "name",
+        "label",
+        "bind",
+        "options"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "bind": {
+          "$ref": "#/$defs/pointer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "presentation": {
+          "enum": [
+            "dropdown",
+            "radio"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_select": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "select"
+        },
+        "props": {
+          "$ref": "#/$defs/props_select"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_multi_select": {
+      "type": "object",
+      "required": [
+        "name",
+        "label",
+        "bind",
+        "options"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "bind": {
+          "$ref": "#/$defs/pointer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_multi_select": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "multi_select"
+        },
+        "props": {
+          "$ref": "#/$defs/props_multi_select"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_checkbox": {
+      "type": "object",
+      "required": [
+        "name",
+        "label",
+        "bind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "bind": {
+          "$ref": "#/$defs/pointer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "presentation": {
+          "enum": [
+            "checkbox",
+            "switch"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_checkbox": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "checkbox"
+        },
+        "props": {
+          "$ref": "#/$defs/props_checkbox"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_date_input": {
+      "type": "object",
+      "required": [
+        "name",
+        "label",
+        "bind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "bind": {
+          "$ref": "#/$defs/pointer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "help": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "kind": {
+          "enum": [
+            "date",
+            "date-time"
+          ]
+        },
+        "minimum": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "maximum": {
+          "type": "string",
+          "maxLength": 40
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_date_input": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "date_input"
+        },
+        "props": {
+          "$ref": "#/$defs/props_date_input"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_button": {
+      "type": "object",
+      "required": [
+        "label",
+        "action"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "action": {
+          "$ref": "#/$defs/id"
+        },
+        "variant": {
+          "enum": [
+            "primary",
+            "secondary",
+            "danger",
+            "link"
+          ]
+        },
+        "disabled": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/dataRef"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_button": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "button"
+        },
+        "props": {
+          "$ref": "#/$defs/props_button"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_suggestion_chips": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "required": [
+              "label",
+              "action"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "action": {
+                "$ref": "#/$defs/id"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_suggestion_chips": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "suggestion_chips"
+        },
+        "props": {
+          "$ref": "#/$defs/props_suggestion_chips"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "props_change_review": {
+      "type": "object",
+      "required": [
+        "proposalId",
+        "presentation",
+        "changeKind",
+        "summary",
+        "state",
+        "records",
+        "approval",
+        "contentHash"
+      ],
+      "properties": {
+        "proposalId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "presentation": {
+          "enum": [
+            "diff",
+            "form",
+            "delete",
+            "bulk"
+          ]
+        },
+        "changeKind": {
+          "enum": [
+            "CREATE",
+            "UPDATE",
+            "DELETE",
+            "BULK"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "state": {
+          "$ref": "#/$defs/proposalState"
+        },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": [
+              "entity",
+              "entityId",
+              "fields"
+            ],
+            "properties": {
+              "entity": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "entityId": {
+                "type": [
+                  "string",
+                  "integer",
+                  "null"
+                ],
+                "maxLength": 100
+              },
+              "fields": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "attr",
+                    "label",
+                    "before",
+                    "after",
+                    "changed"
+                  ],
+                  "properties": {
+                    "attr": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "before": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ],
+                      "maxLength": 2000
+                    },
+                    "after": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ],
+                      "maxLength": 2000
+                    },
+                    "changed": {
+                      "type": "boolean"
+                    },
+                    "editable": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "validation": {
+          "type": "object",
+          "required": [
+            "errors",
+            "warnings"
+          ],
+          "properties": {
+            "errors": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 300
+              }
+            },
+            "warnings": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "maxLength": 300
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "approval": {
+          "type": "object",
+          "required": [
+            "kind",
+            "required",
+            "received"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "SELF_CONFIRM",
+                "SELF_CONFIRM_PLUS_APPROVER"
+              ]
+            },
+            "required": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "received": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            }
+          },
+          "additionalProperties": false
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contentHash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "failure": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          "additionalProperties": false
+        },
+        "hostRevision": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_change_review": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "props"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "const": "change_review"
+        },
+        "props": {
+          "$ref": "#/$defs/props_change_review"
+        },
+        "visibleWhen": {
+          "$ref": "#/$defs/predicate"
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "additionalProperties": false,
+      "x-class": "server_only"
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "enum": [
+            "stack",
+            "card",
+            "section",
+            "divider",
+            "text",
+            "badge",
+            "callout",
+            "code",
+            "link",
+            "image",
+            "kv",
+            "table",
+            "list",
+            "timeline",
+            "entity_link",
+            "progress",
+            "form",
+            "text_input",
+            "number_input",
+            "select",
+            "multi_select",
+            "checkbox",
+            "date_input",
+            "button",
+            "suggestion_chips",
+            "change_review"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "stack"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_stack"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "card"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_card"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "section"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_section"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "divider"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_divider"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "text"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_text"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "badge"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_badge"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "callout"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_callout"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "code"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_code"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "link"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_link"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "image"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_image"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "kv"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_kv"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "table"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_table"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "list"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_list"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "timeline"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_timeline"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "entity_link"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_entity_link"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "progress"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_progress"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "form"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_form"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "text_input"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_text_input"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number_input"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_number_input"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "select"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_select"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "multi_select"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_multi_select"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "checkbox"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_checkbox"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "date_input"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_date_input"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "button"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_button"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "suggestion_chips"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_suggestion_chips"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "change_review"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/node_change_review"
+          }
+        }
+      ],
+      "description": "Dispatch on type with if/then so each node is validated exactly once. Do not turn this into oneOf over the node_* definitions: with recursive children that costs exponential time in the depth of the tree."
+    }
+  }
+}

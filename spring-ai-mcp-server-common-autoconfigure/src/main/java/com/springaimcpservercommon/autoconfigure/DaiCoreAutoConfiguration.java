@@ -117,7 +117,7 @@ public class DaiCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(com.springaimcpservercommon.core.lint.PiiDetector.class)
-    public com.springaimcpservercommon.core.lint.PiiDetector piiDetector(DaiPiiProperties props) {
+    public com.springaimcpservercommon.core.lint.PiiDetector daiConversationPiiDetector(DaiPiiProperties props) {
         java.util.Map<String, java.util.regex.Pattern> custom = new java.util.LinkedHashMap<>();
         props.customPatterns().forEach((label, regex) -> {
             try {

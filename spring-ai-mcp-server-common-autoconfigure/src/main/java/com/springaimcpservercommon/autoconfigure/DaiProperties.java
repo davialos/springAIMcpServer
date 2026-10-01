@@ -31,6 +31,7 @@ import java.util.UUID;
  * @param store           background maintenance of the {@code dynamic_ai} store (LLD-15 §10, LLD-09 §4)
  * @param memory          the model's chat memory (OQ-45)
  * @param model           model provider resilience (OQ-47)
+ * @param guardrails      prompt validation, PII redaction and structured display on every agent turn (F-76)
  */
 @NullMarked
 @ConfigurationProperties(prefix = "dynamic.ai.agent")
@@ -47,7 +48,45 @@ public record DaiProperties(
         @DefaultValue Conversations conversations,
         @DefaultValue Store store,
         @DefaultValue Memory memory,
-        @DefaultValue Model model) {
+        @DefaultValue Model model,
+        @DefaultValue Guardrails guardrails) {
+
+    /**
+     * Guardrails applied to every agent turn (LLD-06 §8, F-76). Each setting is a floor: an agent's own guardrails
+     * can switch more on (and raise the relevance threshold), never less.
+     *
+     * @param threatDetection   reject prompts that try to manipulate the assistant or attack the system (prompt
+     *                          injection, jailbreaks, SQL/script/command injection, exfiltration, hidden payloads)
+     * @param businessScope     reject prompts unrelated to the business domain described by the effective catalog
+     *                          ({@code @AiContext} descriptions/keywords, attribute meanings, operation intents)
+     * @param minRelevance      share of a prompt's content words that must relate to the domain, 0–1
+     * @param minTermsToJudge   prompts with fewer content words (greetings, short follow-ups) are not judged for scope
+     * @param scopeKeywords     extra in-scope terms for every agent
+     * @param redactInputPii    redact personal data from prompts before the model provider sees them
+     * @param redactOutputPii   redact personal data from answers before users see them
+     * @param structuredDisplay add the structured, backend-controlled display tree to every answer
+     */
+    public record Guardrails(
+            @DefaultValue("true") boolean threatDetection,
+            @DefaultValue("false") boolean businessScope,
+            @DefaultValue("0.25") double minRelevance,
+            @DefaultValue("2") int minTermsToJudge,
+            @DefaultValue List<String> scopeKeywords,
+            @DefaultValue("false") boolean redactInputPii,
+            @DefaultValue("true") boolean redactOutputPii,
+            @DefaultValue("true") boolean structuredDisplay) {
+
+        /** Validates the thresholds. */
+        public Guardrails {
+            if (Double.isNaN(minRelevance) || minRelevance < 0 || minRelevance > 1) {
+                throw new IllegalArgumentException("dynamic.ai.agent.guardrails.min-relevance must be between 0 and 1");
+            }
+            if (minTermsToJudge < 1) {
+                throw new IllegalArgumentException("dynamic.ai.agent.guardrails.min-terms-to-judge must be >= 1");
+            }
+            scopeKeywords = List.copyOf(scopeKeywords);
+        }
+    }
 
     /**
      * Model provider resilience (OQ-47). A provider that fails {@code failureThreshold} calls in a row is skipped for

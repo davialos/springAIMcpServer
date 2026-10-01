@@ -1,0 +1,1453 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dynamic-ai/schemas/dai-stream-2.schema.json",
+  "title": "dai-stream/2: interaction requests, stream events, batch responses, problems (LLD-17)",
+  "description": "Normative draft. Validate a request against #/$defs/interaction, one event against #/$defs/event, a JSON batch against #/$defs/batchResponse.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/interaction"
+    },
+    {
+      "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/batchResponse"
+    }
+  ],
+  "$defs": {
+    "protocol": {
+      "const": "dai-stream/2"
+    },
+    "interactionId": {
+      "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid",
+      "description": "Client-generated UUIDv7; the idempotency key of one interaction."
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+      "maxLength": 35
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "locale": {
+          "$ref": "#/$defs/locale"
+        },
+        "timeZone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "client": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "catalog": {
+              "const": "dai-ui/1"
+            },
+            "features": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "enum": [
+                  "patch",
+                  "commands",
+                  "markdown",
+                  "images"
+                ]
+              }
+            },
+            "commands": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,63}$"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "page": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "title": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "additionalProperties": false
+        },
+        "selection": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": [
+              "entity",
+              "id"
+            ],
+            "properties": {
+              "entity": {
+                "type": "string",
+                "pattern": "^entity:[A-Za-z0-9_.$]{1,200}$"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "integer"
+                ],
+                "maxLength": 100
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "expect": {
+      "type": "object",
+      "required": [
+        "digest"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "interactionMessage": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "interactionId",
+        "type",
+        "text"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "type": {
+          "const": "message"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32000
+        },
+        "replyTo": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid",
+          "description": "Interrupt this free-text message answers (single-text questions only)."
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        }
+      },
+      "additionalProperties": false
+    },
+    "interactionAction": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "interactionId",
+        "conversationId",
+        "type",
+        "surface",
+        "actionId"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "type": {
+          "const": "action"
+        },
+        "surface": {
+          "type": "object",
+          "required": [
+            "id",
+            "revision"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "actionId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+        },
+        "values": {
+          "type": "object"
+        },
+        "expect": {
+          "$ref": "#/$defs/expect"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        }
+      },
+      "additionalProperties": false
+    },
+    "interactionRespond": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "interactionId",
+        "conversationId",
+        "type",
+        "interruptId",
+        "outcome"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "type": {
+          "const": "respond"
+        },
+        "interruptId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "outcome": {
+          "enum": [
+            "accept",
+            "decline",
+            "cancel"
+          ]
+        },
+        "values": {
+          "type": "object"
+        },
+        "expect": {
+          "$ref": "#/$defs/expect"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        }
+      },
+      "additionalProperties": false
+    },
+    "interactionCancel": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "interactionId",
+        "conversationId",
+        "type",
+        "turnId"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "type": {
+          "const": "cancel"
+        },
+        "turnId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "interaction": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/interactionMessage"
+        },
+        {
+          "$ref": "#/$defs/interactionAction"
+        },
+        {
+          "$ref": "#/$defs/interactionRespond"
+        },
+        {
+          "$ref": "#/$defs/interactionCancel"
+        }
+      ]
+    },
+    "treeOp": {
+      "description": "Id-addressed tree operation (LLD-17 §5.6).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "id",
+            "node"
+          ],
+          "properties": {
+            "op": {
+              "const": "replace"
+            },
+            "id": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+            },
+            "node": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/node"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "id",
+            "props"
+          ],
+          "properties": {
+            "op": {
+              "const": "update"
+            },
+            "id": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+            },
+            "props": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "parentId",
+            "node"
+          ],
+          "properties": {
+            "op": {
+              "const": "insert"
+            },
+            "parentId": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "node": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/node"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "id"
+          ],
+          "properties": {
+            "op": {
+              "const": "remove"
+            },
+            "id": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "id",
+            "parentId"
+          ],
+          "properties": {
+            "op": {
+              "const": "move"
+            },
+            "id": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+            },
+            "parentId": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "dataOp": {
+      "description": "RFC 6902 JSON Patch operation over the surface data model.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "path",
+            "value"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "add",
+                "replace",
+                "test"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^(/([^/~]|~[01])*)*$"
+            },
+            "value": {}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "path"
+          ],
+          "properties": {
+            "op": {
+              "const": "remove"
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^(/([^/~]|~[01])*)+$"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "from",
+            "path"
+          ],
+          "properties": {
+            "op": {
+              "enum": [
+                "move",
+                "copy"
+              ]
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^(/([^/~]|~[01])*)+$"
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^(/([^/~]|~[01])*)+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "surfaceRef": {
+      "type": "object",
+      "required": [
+        "surfaceId"
+      ],
+      "properties": {
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "anchor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "interruptView": {
+      "type": "object",
+      "required": [
+        "interruptId",
+        "kind",
+        "status",
+        "blocking",
+        "expiresAt"
+      ],
+      "properties": {
+        "interruptId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "kind": {
+          "enum": [
+            "question",
+            "confirmation",
+            "proposal_review",
+            "client_command"
+          ]
+        },
+        "status": {
+          "enum": [
+            "open",
+            "answered",
+            "declined",
+            "cancelled",
+            "expired",
+            "superseded"
+          ]
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "digest": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/sha256"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eTurnStart": {
+      "type": "object",
+      "required": [
+        "type",
+        "turnId",
+        "conversationId",
+        "agent",
+        "revision",
+        "protocol"
+      ],
+      "properties": {
+        "type": {
+          "const": "turn.start"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "turnId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        },
+        "resumes": {
+          "type": "object",
+          "required": [
+            "interruptId"
+          ],
+          "properties": {
+            "interruptId": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "eTextDelta": {
+      "type": "object",
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text.delta"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "eTextSnapshot": {
+      "type": "object",
+      "required": [
+        "type",
+        "text",
+        "upToSeq"
+      ],
+      "properties": {
+        "type": {
+          "const": "text.snapshot"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "text": {
+          "type": "string"
+        },
+        "upToSeq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "eToolCall": {
+      "type": "object",
+      "required": [
+        "type",
+        "callId",
+        "tool",
+        "argsPreview"
+      ],
+      "properties": {
+        "type": {
+          "const": "tool.call"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tool": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "argsPreview": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "additionalProperties": false
+    },
+    "eToolResult": {
+      "type": "object",
+      "required": [
+        "type",
+        "callId",
+        "status",
+        "summary"
+      ],
+      "properties": {
+        "type": {
+          "const": "tool.result"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "empty",
+            "truncated",
+            "error",
+            "not_permitted",
+            "unavailable",
+            "proposed"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "handle": {
+          "type": "string",
+          "pattern": "^r[0-9]{1,3}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eUiSurface": {
+      "type": "object",
+      "required": [
+        "type",
+        "surface"
+      ],
+      "properties": {
+        "type": {
+          "const": "ui.surface"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "surface": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/surface"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eUiPatch": {
+      "type": "object",
+      "required": [
+        "type",
+        "surfaceId",
+        "baseRevision",
+        "revision"
+      ],
+      "properties": {
+        "type": {
+          "const": "ui.patch"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "baseRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "tree": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/treeOp"
+          }
+        },
+        "data": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/dataOp"
+          }
+        },
+        "actions": {
+          "type": "object",
+          "maxProperties": 40,
+          "propertyNames": {
+            "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/id"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/actionDecl"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "eUiStatus": {
+      "type": "object",
+      "required": [
+        "type",
+        "surfaceId",
+        "revision",
+        "status"
+      ],
+      "properties": {
+        "type": {
+          "const": "ui.status"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "completed",
+            "superseded",
+            "expired",
+            "closed"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "eUiCommand": {
+      "type": "object",
+      "required": [
+        "type",
+        "commandId",
+        "name",
+        "requiresGesture"
+      ],
+      "properties": {
+        "type": {
+          "const": "ui.command"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "commandId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.]{1,63}$"
+        },
+        "args": {
+          "type": "object"
+        },
+        "requiresGesture": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eInterruptRaised": {
+      "type": "object",
+      "required": [
+        "type",
+        "interruptId",
+        "kind",
+        "blocking",
+        "expiresAt"
+      ],
+      "properties": {
+        "type": {
+          "const": "interrupt.raised"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "interruptId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "kind": {
+          "enum": [
+            "question",
+            "confirmation",
+            "proposal_review",
+            "client_command"
+          ]
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "digest": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/sha256"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eInterruptResolved": {
+      "type": "object",
+      "required": [
+        "type",
+        "interruptId",
+        "status",
+        "by"
+      ],
+      "properties": {
+        "type": {
+          "const": "interrupt.resolved"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "interruptId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "status": {
+          "enum": [
+            "answered",
+            "declined",
+            "cancelled",
+            "expired",
+            "superseded"
+          ]
+        },
+        "by": {
+          "enum": [
+            "user",
+            "system"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "eProposalCreated": {
+      "type": "object",
+      "required": [
+        "type",
+        "proposalId",
+        "summary",
+        "reviewUrl"
+      ],
+      "properties": {
+        "type": {
+          "const": "proposal.created"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "proposalId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "reviewUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "interruptId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eProposalUpdated": {
+      "type": "object",
+      "required": [
+        "type",
+        "proposalId",
+        "state"
+      ],
+      "properties": {
+        "type": {
+          "const": "proposal.updated"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "proposalId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "state": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/proposalState"
+        },
+        "surfaceId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eProposalApplied": {
+      "type": "object",
+      "required": [
+        "type",
+        "proposalId"
+      ],
+      "properties": {
+        "type": {
+          "const": "proposal.applied"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "proposalId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eUsage": {
+      "type": "object",
+      "required": [
+        "type",
+        "inputTokens",
+        "outputTokens",
+        "costMicros",
+        "model"
+      ],
+      "properties": {
+        "type": {
+          "const": "usage"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costMicros": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "eTurnEnd": {
+      "type": "object",
+      "required": [
+        "type",
+        "finishReason"
+      ],
+      "properties": {
+        "type": {
+          "const": "turn.end"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "finishReason": {
+          "enum": [
+            "stop",
+            "length",
+            "tool_limit",
+            "budget",
+            "cancelled",
+            "interrupt"
+          ]
+        },
+        "messageId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "interrupts": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "eInteractionEnd": {
+      "type": "object",
+      "required": [
+        "type",
+        "interactionId",
+        "outcome"
+      ],
+      "properties": {
+        "type": {
+          "const": "interaction.end"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        },
+        "outcome": {
+          "enum": [
+            "ok",
+            "rejected",
+            "noop"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "eError": {
+      "type": "object",
+      "required": [
+        "type",
+        "errorType",
+        "title",
+        "code",
+        "retryable"
+      ],
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "errorType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,63}$"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "turnId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "interactionId": {
+          "$ref": "#/$defs/interactionId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eStateSnapshot": {
+      "type": "object",
+      "required": [
+        "type",
+        "conversationId",
+        "cursor",
+        "messages",
+        "surfaces",
+        "interrupts"
+      ],
+      "properties": {
+        "type": {
+          "const": "state.snapshot"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stream position; carried by the SSE id in SSE mode and inline in JSON batch mode."
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "seq",
+              "role",
+              "text"
+            ],
+            "properties": {
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "role": {
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              },
+              "turnId": {
+                "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+              },
+              "text": {
+                "type": "string"
+              },
+              "surfaces": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/surfaceRef"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/surface"
+          }
+        },
+        "interrupts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/interruptView"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/eTurnStart"
+        },
+        {
+          "$ref": "#/$defs/eTextDelta"
+        },
+        {
+          "$ref": "#/$defs/eTextSnapshot"
+        },
+        {
+          "$ref": "#/$defs/eToolCall"
+        },
+        {
+          "$ref": "#/$defs/eToolResult"
+        },
+        {
+          "$ref": "#/$defs/eUiSurface"
+        },
+        {
+          "$ref": "#/$defs/eUiPatch"
+        },
+        {
+          "$ref": "#/$defs/eUiStatus"
+        },
+        {
+          "$ref": "#/$defs/eUiCommand"
+        },
+        {
+          "$ref": "#/$defs/eInterruptRaised"
+        },
+        {
+          "$ref": "#/$defs/eInterruptResolved"
+        },
+        {
+          "$ref": "#/$defs/eProposalCreated"
+        },
+        {
+          "$ref": "#/$defs/eProposalUpdated"
+        },
+        {
+          "$ref": "#/$defs/eProposalApplied"
+        },
+        {
+          "$ref": "#/$defs/eUsage"
+        },
+        {
+          "$ref": "#/$defs/eTurnEnd"
+        },
+        {
+          "$ref": "#/$defs/eInteractionEnd"
+        },
+        {
+          "$ref": "#/$defs/eError"
+        },
+        {
+          "$ref": "#/$defs/eStateSnapshot"
+        }
+      ]
+    },
+    "batchResponse": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "events"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "conversationId": {
+          "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "problem": {
+      "type": "object",
+      "required": [
+        "type",
+        "title",
+        "status",
+        "instance"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^https://dynamic-ai/problems/[a-z][a-z0-9-]{1,63}$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 400,
+          "maximum": 599
+        },
+        "detail": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,63}$",
+          "description": "New optional member: the last segment of type, for clients that do not parse URIs."
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "retryAfter": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "field",
+              "message"
+            ],
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "current": {
+          "type": "object",
+          "required": [
+            "surfaceId",
+            "revision"
+          ],
+          "properties": {
+            "surfaceId": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/uuid"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "digest": {
+              "$ref": "https://dynamic-ai/schemas/dai-ui-1.schema.json#/$defs/sha256"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "description": "RFC 9457 problem. Existing members plus code/retryable/current (LLD-17 §10)."
+    }
+  }
+}

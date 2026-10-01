@@ -1,4 +1,4 @@
-# ADR-0022: Server-driven UI tree with one interaction envelope and suspend-to-ask interrupts
+# ADR-0023: Server-driven UI tree with one interaction envelope and suspend-to-ask interrupts
 - Status: Proposed · Date: 2026-10-01
 - Deciders: product owner request (2026-09-30), lld-chief-architect
 
@@ -13,7 +13,7 @@ Chat needs the AI to show structured results, ask the user questions, and receiv
 5. **Own protocol: closed-catalog nested JSON tree, server-held actions, one interaction envelope, interrupts that end the run, validated JSON Schemas; adapters to AG-UI and MCP later.**
 
 ## Decision
-Option 5 (LLD-16). Key choices:
+Option 5 (LLD-17). Key choices:
 - one `POST …/interactions` with four types (`message`, `action`, `respond`, `cancel`) and one event stream (`dai-stream/2`, SSE or JSON batch);
 - UI is declarative data (`dai-ui/1`): `model_safe` nodes may be model-authored, interactive nodes are `server_only`; actions are opaque ids resolved from a server-held record;
 - the AI asks through `ask_user`; an interrupt ends the turn and the answer resumes it on any node; only a server-built proposal review can authorize a write;
@@ -24,4 +24,4 @@ Option 5 (LLD-16). Key choices:
 + one client reducer for live, replay and reload; no sticky sessions; forged actions and stale confirmations are refused by construction; MCP and AG-UI mappings are mechanical.
 + every example is machine-validated (`docs/schemas/validate.mjs`).
 − new persistence (V11) and a renderer to build; `dai-stream/1` events change (no client exists yet); `ask_user` needs the advisor re-registration spike (S-1); a model-raised confirmation costs the user an extra click before the authoritative proposal review.
-− A2UI and AG-UI wire formats are not used directly; adapters are future work (OQ-60).
+− A2UI and AG-UI wire formats are not used directly; adapters are future work (OQ-62).

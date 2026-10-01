@@ -1185,7 +1185,23 @@ public class DaiPersistenceAutoConfiguration {
                 g.piiRedactionInput,
                 g.piiRedactionOutput,
                 g.topicAllowList != null ? g.topicAllowList : List.of(),
-                Math.max(0, g.maxOutputChars));
+                Math.max(0, g.maxOutputChars),
+                toInputValidation(g.inputValidation));
+    }
+
+    /** Agent-level prompt validation (F-76); omitted fields take the library defaults. */
+    private static com.springaimcpservercommon.core.guard.InputValidationPolicy toInputValidation(
+            @Nullable InputValidationJson v) {
+        if (v == null) {
+            return com.springaimcpservercommon.core.guard.InputValidationPolicy.OFF;
+        }
+        return new com.springaimcpservercommon.core.guard.InputValidationPolicy(
+                v.threatDetection, v.businessScope,
+                v.minRelevance != null ? v.minRelevance
+                        : com.springaimcpservercommon.core.guard.InputValidationPolicy.DEFAULT_MIN_RELEVANCE,
+                v.minTermsToJudge != null ? v.minTermsToJudge
+                        : com.springaimcpservercommon.core.guard.InputValidationPolicy.DEFAULT_MIN_TERMS,
+                v.scopeKeywords != null ? v.scopeKeywords : List.of());
     }
 
     private static LimitSpec toLimitSpec(@Nullable LimitSpecJson l) {
@@ -1207,7 +1223,10 @@ public class DaiPersistenceAutoConfiguration {
         } catch (IllegalArgumentException e) {
             mode = OutputSpec.Mode.TEXT;
         }
-        return new OutputSpec(mode, o.jsonSchema);
+        // an invalid display template fails the agent's load (DisplayTemplateException lists every problem)
+        var display = o.display != null && !o.display.isNull()
+                ? new com.springaimcpservercommon.core.display.DisplayTemplateParser().parse(o.display) : null;
+        return new OutputSpec(mode, o.jsonSchema, display);
     }
 
     private static Set<CatalogElementRef> toReferences(@Nullable List<RefJson> refs) {
@@ -1279,6 +1298,15 @@ public class DaiPersistenceAutoConfiguration {
         public boolean piiRedactionOutput;
         public @Nullable List<String> topicAllowList;
         public int maxOutputChars;
+        public @Nullable InputValidationJson inputValidation;
+    }
+
+    static final class InputValidationJson {
+        public boolean threatDetection;
+        public boolean businessScope;
+        public @Nullable Double minRelevance;
+        public @Nullable Integer minTermsToJudge;
+        public @Nullable List<String> scopeKeywords;
     }
 
     static final class LimitSpecJson {
@@ -1291,6 +1319,7 @@ public class DaiPersistenceAutoConfiguration {
     static final class OutputSpecJson {
         public @Nullable String mode;
         public @Nullable String jsonSchema;
+        public tools.jackson.databind.@Nullable JsonNode display;
     }
 
     static final class RefJson {

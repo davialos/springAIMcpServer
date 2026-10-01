@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dynamic-ai/schemas/dai-ui-1.schema.json",
-  "title": "dai-ui/1: surface, node catalog and action declarations (LLD-16)",
+  "title": "dai-ui/1: surface, node catalog and action declarations (LLD-17)",
   "description": "Normative draft. A surface is a tree of catalog nodes plus a data model and server-declared actions. x-class: model_safe nodes may be authored by a model, server_only nodes only by trusted server code. x-container: the node may have children. x-server-only-props: props a model-authored tree must not carry.",
   "$ref": "#/$defs/surface",
   "$defs": {

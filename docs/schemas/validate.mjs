@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Validates the normative JSON Schemas of LLD-16 and every example in the document against them.
+// Validates the normative JSON Schemas of LLD-17 and every example in the document against them.
 //
 //   npm i --no-save ajv@8 ajv-formats@3      (once, anywhere above this folder; nothing in the Maven build uses it)
 //   node docs/schemas/validate.mjs [file.md ...]
@@ -12,7 +12,7 @@
 //      and whose id: is <uuid>:<seq> with seq 0,1,2... "@name" as a whole data value stands for the named json block.
 //   4. Every ```http block (one message each) has its JSON body validated: POST .../interactions -> interaction,
 //      4xx/5xx -> problem, 200 with type state.snapshot -> event, 200 with events[] -> batch response.
-//   5. The reference semantic rules (the executable spec of the Java UiTreeValidator, LLD-16 §5.5) hold for every surface.
+//   5. The reference semantic rules (the executable spec of the Java UiTreeValidator, LLD-17 §5.5) hold for every surface.
 //   6. The node table in §5.4 lists exactly the node types of the schema with the same authoring class.
 //   7. negative-corpus.json: every entry must be REJECTED (by schema or by the semantic rules).
 import { readFileSync } from 'node:fs';
@@ -54,7 +54,7 @@ const fail = (where, msg) => problems.push(`${where}: ${msg}`);
 const brief = (errors) => [...new Set(errors.filter((e) => !['oneOf', 'if', 'then'].includes(e.keyword))
   .map((e) => `${e.instancePath || '/'} ${e.keyword} ${e.message}`))].slice(0, 4).join(' | ');
 
-// ---- reference semantic rules (LLD-16 §5.5) ----------------------------------------------------------------------
+// ---- reference semantic rules (LLD-17 §5.5) ----------------------------------------------------------------------
 const LIMITS = { maxNodes: 400, maxDepth: 10, maxBytes: 262144 };
 const BAD_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F‪-‮⁦-⁩]/;
 const walk = (n, f, depth = 1) => { f(n, depth); (n.children ?? []).forEach((c) => walk(c, f, depth + 1)); };
@@ -126,7 +126,7 @@ const rejected = (kind, obj) => {
 };
 
 // ---- markdown scan ------------------------------------------------------------------------------------------------
-const files = process.argv.slice(2).length ? process.argv.slice(2) : [resolve(here, '../lld/16-chat-ui-protocol.md')];
+const files = process.argv.slice(2).length ? process.argv.slice(2) : [resolve(here, '../lld/17-chat-ui-protocol.md')];
 let counts = { json: 0, sse: 0, http: 0, jsonc: 0, frames: 0 };
 for (const file of files) {
   const lines = readFileSync(file, 'utf8').split('\n');

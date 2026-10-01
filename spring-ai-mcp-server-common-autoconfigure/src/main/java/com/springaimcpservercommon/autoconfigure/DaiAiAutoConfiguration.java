@@ -8,6 +8,13 @@ import com.springaimcpservercommon.ai.runtime.AgentInvoker;
 import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
+import com.springaimcpservercommon.ai.safety.TurnSafety;
+import com.springaimcpservercommon.core.guard.CompositePromptValidator;
+import com.springaimcpservercommon.core.guard.InputValidationPolicy;
+import com.springaimcpservercommon.core.guard.PiiDetector;
+import com.springaimcpservercommon.core.guard.PiiRedactor;
+import com.springaimcpservercommon.core.guard.PromptValidator;
+import com.springaimcpservercommon.core.guard.RegexPiiDetector;
 import com.springaimcpservercommon.ai.tool.AgentCatalogPort;
 import com.springaimcpservercommon.ai.tool.ProposalService;
 import com.springaimcpservercommon.ai.tool.SecuredToolCallback;
@@ -349,6 +356,7 @@ public class DaiAiAutoConfiguration {
      * @param observationRegistry      Micrometer registry
      * @param chatMemory               conversation history store
      * @param schemaValidatorProvider  optional JSON Schema conformance validator
+     * @param turnSafety               prompt validation, PII redaction and structured display (F-76)
      * @return the invoker
      */
     @Bean
@@ -365,7 +373,8 @@ public class DaiAiAutoConfiguration {
             ConversationRecorder conversationRecorder,
             ObjectProvider<ObservationRegistry> observationRegistry,
             ChatMemory chatMemory,
-            ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider) {
+            ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider,
+            TurnSafety turnSafety) {
         return new DefaultAgentInvoker(
                 modelRouter,
                 toolBridgeProvider.getIfAvailable(),
@@ -377,6 +386,50 @@ public class DaiAiAutoConfiguration {
                 conversationRecorder,
                 observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP),
                 chatMemory,
-                schemaValidatorProvider.getIfAvailable());
+                schemaValidatorProvider.getIfAvailable(),
+                turnSafety);
+    }
+
+    /**
+     * PII redactor used on prompts, answers and the structured display (F-76): the built-in
+     * {@link RegexPiiDetector} plus every {@link PiiDetector} bean of the host, in {@code @Order} order.
+     *
+     * @param hostDetectors host-supplied detectors
+     * @return the redactor
+     */
+    @Bean
+    @ConditionalOnMissingBean(PiiRedactor.class)
+    public PiiRedactor daiPiiRedactor(ObjectProvider<PiiDetector> hostDetectors) {
+        List<PiiDetector> detectors = new java.util.ArrayList<>();
+        detectors.add(new RegexPiiDetector());
+        hostDetectors.orderedStream().forEach(detectors::add);
+        return new PiiRedactor(detectors);
+    }
+
+    /**
+     * Turn guardrails (LLD-06 §8, F-76): the built-in prompt validators (malicious content, business scope) followed
+     * by every {@link PromptValidator} bean of the host, the PII redactor and the host floor from
+     * {@code dynamic.ai.agent.guardrails.*}.
+     *
+     * @param props            framework properties
+     * @param redactor         PII redactor
+     * @param hostValidators   host-supplied prompt validators
+     * @param metadataRegistry effective catalog (business scope, sensitive keys); optional
+     * @return the guardrails
+     */
+    @Bean
+    @ConditionalOnMissingBean(TurnSafety.class)
+    public TurnSafety daiTurnSafety(DaiProperties props, PiiRedactor redactor,
+                                    ObjectProvider<PromptValidator> hostValidators,
+                                    ObjectProvider<MetadataRegistry> metadataRegistry) {
+        List<PromptValidator> validators = new java.util.ArrayList<>(CompositePromptValidator.defaults().validators());
+        hostValidators.orderedStream().forEach(validators::add);
+        DaiProperties.Guardrails g = props.guardrails();
+        TurnSafety.Settings settings = new TurnSafety.Settings(
+                new InputValidationPolicy(g.threatDetection(), g.businessScope(), g.minRelevance(),
+                        g.minTermsToJudge(), g.scopeKeywords()),
+                g.redactInputPii(), g.redactOutputPii(), g.structuredDisplay());
+        return new TurnSafety(new CompositePromptValidator(validators), redactor, metadataRegistry.getIfAvailable(),
+                settings);
     }
 }

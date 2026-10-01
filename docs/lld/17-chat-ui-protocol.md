@@ -1,4 +1,4 @@
-# LLD-16: Chat Interaction & UI Tree Protocol
+# LLD-17: Chat Interaction & UI Tree Protocol
 
 | Field | Value |
 |-------|-------|
@@ -6,7 +6,7 @@
 | Owner agent | agent-runtime-designer (with control-plane-designer for the client side) |
 | Module(s) | `core` (UI model, validator, ports), `persistence` (surfaces, interrupts, interactions), `ai` (interrupts, control tools), `webmvc` (endpoints), `autoconfigure` (wiring, properties), `review-ui` (renderer; module not created yet, OQ-08/OQ-15) |
 | Related features | F-43, F-45, F-51, F-52, F-53, F-57, F-58, F-59 |
-| Related ADRs | ADR-0008, ADR-0009, ADR-0015, ADR-0021, ADR-0022 |
+| Related ADRs | ADR-0008, ADR-0009, ADR-0015, ADR-0021, ADR-0023 |
 | Replaces in part | LLD-13 §3 (event table, `dai-stream/1`) and LLD-11 §7 (payload shapes) |
 | Machine-readable contract | [`docs/schemas/`](../schemas/): `dai-ui-1`, `dai-stream-2`, `dai-tools-1` (JSON Schema 2020-12), `negative-corpus.json`, `validate.mjs` |
 | Input | Product-owner request (2026-09-30): a best-practice API for chat interactions where the UI renders a JSON tree and sends user input back (confirmations and actions, input to an AI query, UI instructions) through one consistent API |
@@ -1062,7 +1062,7 @@ When a mutating tool in PROPOSE mode returns `status: proposed`, the server buil
 | `APPLIED` | result and host revision | none; surface `completed` |
 | `REJECTED`, `EXPIRED`, `FAILED`, `CONFLICT` | outcome and sanitized reason | none; surface `completed`; `CONFLICT` offers "ask the assistant to propose again" as a `message` action |
 
-The interrupt resolves (`answered`) when the owner decides; later approval and apply are proposal states shown by the surface. A decision does **not** start a model turn by default (cost, surprise). The outcome is recorded in memory as a server note (`SYSTEM`) so the next turn knows (`chat.interactions.proposal-decision-turn=false`, OQ-56).
+The interrupt resolves (`answered`) when the owner decides; later approval and apply are proposal states shown by the surface. A decision does **not** start a model turn by default (cost, surprise). The outcome is recorded in memory as a server note (`SYSTEM`) so the next turn knows (`chat.interactions.proposal-decision-turn=false`, OQ-58).
 
 ### 7.7 Client commands and step-up (reserved)
 
@@ -1579,7 +1579,7 @@ Controls are enforced on the server; the client is not trusted. New threat rows 
 | U11 | Algorithmic-complexity or size DoS (deep, wide, huge trees) | limits checked iteratively before schema validation; linear schema dispatch; caps on surfaces per turn, open interrupts, request size |
 | U12 | Untrusted `context` or `selection` steers data access | bounded, validated against the catalog, framed as user data; tools authorize as the caller |
 | U13 | Cross-user access to surfaces and interrupts | owner-scoped lookups; `404` not `403` (no existence oracle) |
-| U14 | CSRF on interactions with cookie sessions | the host's CSRF protection must cover `/dynamic-ai/api/**`; verify (gap analysis "to verify", OQ-59) |
+| U14 | CSRF on interactions with cookie sessions | the host's CSRF protection must cover `/dynamic-ai/api/**`; verify (gap analysis "to verify", OQ-61) |
 | U15 | Hidden fields smuggled in a request | strict parsing with duplicate-key detection; `additionalProperties: false`; `values` validated against the server-held schema |
 
 Other rules: no prompt content, answers, `values` or row data in logs; audit stores hashes and ids only (`CHAT_ACTION`, `CHAT_INTERRUPT_RAISED`, `CHAT_INTERRUPT_RESOLVED`, `UI_COMMAND_ISSUED`; proposal decisions keep their `DATA_WRITE` events); an interrupt row stores `answer_hash`, not the answer; surfaces may contain row data, so they follow the conversation's retention and erase mode (§12).
@@ -1700,7 +1700,7 @@ public final class Core {
     public interface UiTreeValidator {
         enum Authoring { MODEL, SERVER, HOST }
         record Violation(String pointer, String code, String message) {}
-        /** Limits first (iterative), then structure, then the S1..S9 rules of LLD-16 §5.5. */
+        /** Limits first (iterative), then structure, then the S1..S9 rules of LLD-17 §5.5. */
         List<Violation> validate(UiSurface surface, Authoring authoring);
     }
 
@@ -1897,7 +1897,7 @@ Three parts, deliberately small:
 The reducer ignores unknown events (tolerant reader), ignores surfaces with a lower or equal revision, refuses a patch whose base revision does not match (flagging the surface for re-fetch), and treats `state.snapshot` as authoritative. It is tested against every event example in this document.
 
 ```ts
-// Reference stream reducer for dai-stream/2 (LLD-16 §14). Pure function: (state, event) -> state.
+// Reference stream reducer for dai-stream/2 (LLD-17 §14). Pure function: (state, event) -> state.
 // The same reducer folds live SSE events, JSON batch responses and state.snapshot, so reload == live.
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -2708,7 +2708,7 @@ Content-Type: application/json
 |---|---|---|
 | **P1: interactions and interrupts** | V11 tables; `Interaction` parsing and gate; `/interactions` (SSE and JSON), `/state`, `/surfaces/{id}`; `ask_user` with `AskUserGate`; question and confirmation surfaces; proposal review surface, `proposal.*` events and `action`-based confirm through a shared `ProposalDecisionService`; emit `tool.*`; idempotency in PostgreSQL; new problem codes; node set of §5.4 except `chart`-class reserved types | T-1 to T-6, T-10 green; F-43, F-45, F-52 acceptance with the stream-linked review; the example flows 15.1 (text answer) and 15.2 run in `HostApplicationIT` |
 | **P2: richness and durability** | `render_ui` with result handles; presenters; patches and `event` actions (`tool.page`, sort, refresh, apply); `ui.command`; durable event log, run lease, cross-node resume (OQ-42); `poll` | T-7, T-8, T-11; resume works across two nodes |
-| **P3: extensions** | client commands and `step_up` interrupts; host node types and commands; AG-UI and MCP adapters if wanted (OQ-60) | per item |
+| **P3: extensions** | client commands and `step_up` interrupts; host node types and commands; AG-UI and MCP adapters if wanted (OQ-62) | per item |
 
 Work items P1 by module, in order: (1) `core.ui` records, validator, `FormTreeBuilder` and the shared fixtures; (2) V11, entities, stores; (3) `ai`: gate, interrupt conversion, `AnswerFramer`, `StreamEvent` additions, `TurnRecorder.Finish.INTERRUPT`; (4) `ProposalDecisionService` extraction and `ProposalSurfaceFactory`; (5) `webmvc` controllers and problem codes; (6) autoconfigure wiring and properties; (7) `HostApplicationIT` flows; (8) `review-ui` reducer and renderer (can start in parallel after (1)). Spike S-1 (T-2) comes first because it decides §7.4.
 
@@ -2729,13 +2729,13 @@ Recorded in `docs/open-questions.md`:
 
 | ID | Question | Proposal |
 |---|---|---|
-| OQ-54 | Answer framing as user text, or real tool-call pairing (needs tool messages in memory, OQ-45) | framing for v1; revisit with OQ-45 |
-| OQ-55 | Live tail across nodes for resumed streams: PostgreSQL polling or `LISTEN/NOTIFY` behind a `ChatEventBus` port | polling default |
-| OQ-56 | Should a proposal decision start a model turn | no; record a server note |
-| OQ-57 | Host-defined node types and commands: registry, signing, allow-list | P3 |
-| OQ-58 | Persist surfaces when transcripts are off | only operational ones (open interrupts, active reviews), short TTL |
-| OQ-59 | CSRF coverage of `/dynamic-ai/api/**` for cookie sessions | verify, then document |
-| OQ-60 | Are AG-UI or MCP Apps adapters a product requirement | ask the product owner |
+| OQ-56 | Answer framing as user text, or real tool-call pairing (needs tool messages in memory, OQ-45) | framing for v1; revisit with OQ-45 |
+| OQ-57 | Live tail across nodes for resumed streams: PostgreSQL polling or `LISTEN/NOTIFY` behind a `ChatEventBus` port | polling default |
+| OQ-58 | Should a proposal decision start a model turn | no; record a server note |
+| OQ-59 | Host-defined node types and commands: registry, signing, allow-list | P3 |
+| OQ-60 | Persist surfaces when transcripts are off | only operational ones (open interrupts, active reviews), short TTL |
+| OQ-61 | CSRF coverage of `/dynamic-ai/api/**` for cookie sessions | verify, then document |
+| OQ-62 | Are AG-UI or MCP Apps adapters a product requirement | ask the product owner |
 
 ## Appendix A: node prop reference
 

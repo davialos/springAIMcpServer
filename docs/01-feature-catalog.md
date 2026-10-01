@@ -84,9 +84,9 @@ Owner: control-plane-designer · Status: Draft v1
 | F-49 | **Model routing & fallback** (primary/secondary provider, per-agent) | v1.x | Failover on provider error/timeout |
 | F-54 | **Parallel read tool calls** within a turn (bounded) | MVP | 4 × 200 ms reads complete in ≈ 250 ms |
 | F-50 | **Multi-agent orchestration** (agent-as-tool) | v2 | Depth & budget bounded |
-| F-57 | **Interaction API** — one envelope (`message`, `action`, `respond`, `cancel`) for every user input to a chat, idempotent, with a JSON UI tree rendered from server-declared surfaces (LLD-16) | MVP | Forged or replayed actions refused; retry never executes twice; reload equals live; no HTML or script from any model |
-| F-58 | **Agent questions and confirmations** — `ask_user` raises an interrupt, the turn suspends statelessly, the answer resumes it on any node (LLD-16) | MVP | Answer handled by another replica; a model-raised confirmation authorizes nothing |
-| F-59 | **UI instructions** — deterministic UI events handled without the model, and host-registered UI commands the agent may request (LLD-16 §5.7, §5.8) | v1.x | Events re-enter the tool pipeline as the caller; commands default off |
+| F-57 | **Interaction API** — one envelope (`message`, `action`, `respond`, `cancel`) for every user input to a chat, idempotent, with a JSON UI tree rendered from server-declared surfaces (LLD-17) | MVP | Forged or replayed actions refused; retry never executes twice; reload equals live; no HTML or script from any model |
+| F-58 | **Agent questions and confirmations** — `ask_user` raises an interrupt, the turn suspends statelessly, the answer resumes it on any node (LLD-17) | MVP | Answer handled by another replica; a model-raised confirmation authorizes nothing |
+| F-59 | **UI instructions** — deterministic UI events handled without the model, and host-registered UI commands the agent may request (LLD-17 §5.7, §5.8) | v1.x | Events re-enter the tool pipeline as the caller; commands default off |
 
 ### F. MCP (P6)
 | ID | Feature | Tier | Acceptance criteria |
@@ -117,7 +117,7 @@ Owner: control-plane-designer · Status: Draft v1
 | F-73 | **Kill switch** per agent/endpoint/workspace/global | MVP | Takes effect cluster-wide ≤ 10 s |
 | F-74 | **Config export/import & GitOps mode** (YAML bundles, signed) | v1.x | Round-trip lossless |
 | F-75 | **Environment promotion** dev→staging→prod | v1.x | Bundle signature verified on import |
-| F-76 | **PII redaction** in prompts/logs/traces | MVP | Configurable detectors; tests with seeded PII |
+| F-76 | **PII redaction** in prompts/logs/traces, **prompt validation** (malicious content, business scope against the catalog) and a **backend-controlled structured display** of answers | MVP | Configurable detectors and validators (SPIs); tests with seeded PII and attack prompts (LLD-06 §8) |
 | F-78 | **Audit evidence mode** — opt-in, encrypted capture of prompts, outputs and returned rows for regulated workspaces | v1.x | Auditor-only access (audited); crypto-shredding per data subject; standard audit keeps only hashes |
 | F-77 | **Data residency / provider allow-list** per workspace | v1.x | Classification RESTRICTED ⇒ only on-prem/approved models |
 

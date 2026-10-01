@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class StreamSpanNestingTest {
 
     private final ObservationRegistry registry = ObservationRegistry.create();
-    private final List<String> stopped = new ArrayList<>();
+    private final List<String> stopped = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     StreamSpanNestingTest() {
         registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
@@ -59,7 +59,8 @@ class StreamSpanNestingTest {
     }
 
     @Test
-    void theModelsStreamSeesAnObservationWhoseAncestorIsTheTurnSpan() {
+    void theModelsStreamSeesAnObservationWhoseAncestorIsTheTurnSpan() throws InterruptedException {
+        java.util.concurrent.CountDownLatch recorded = new java.util.concurrent.CountDownLatch(1);
         AtomicReference<Observation> seenByModel = new AtomicReference<>();
         ChatModel model = new ChatModel() {
             @Override
@@ -89,12 +90,15 @@ class StreamSpanNestingTest {
                 () -> {
                     throw new AssertionError("no catalog needed");
                 },
-                id -> true, (a, p) -> true, (a, p, in, out) -> { }, t -> { }, e -> { }, registry,
+                id -> true, (a, p) -> true, (a, p, in, out) -> { }, t -> recorded.countDown(), e -> { }, registry,
                 MessageWindowChatMemory.builder().chatMemoryRepository(new InMemoryChatMemoryRepository()).build(),
                 null);
 
         invoker.stream(agent, new AgentChatRequest(null, "hi", "r", UUID.randomUUID()), principal, null)
                 .collectList().block();
+        // the turn span is stopped in the stream's doFinally, which may still be running on the emitting thread
+        // when block() returns; the turn is recorded right after the span stops
+        assertThat(recorded.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
 
         List<String> ancestry = new ArrayList<>();
         for (Observation o = seenByModel.get(); o != null; o = o.getContext().getParentObservation() instanceof

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dynamic-ai/schemas/dai-tools-1.schema.json",
-  "title": "dai-tools/1: ask_user and render_ui arguments, restricted response schema (LLD-16)",
+  "title": "dai-tools/1: ask_user and render_ui arguments, restricted response schema (LLD-17)",
   "description": "Normative draft. askUserInput and renderUiInput are the inputSchema of the two control tools; responseSchema is stored with a question interrupt.",
   "oneOf": [
     {

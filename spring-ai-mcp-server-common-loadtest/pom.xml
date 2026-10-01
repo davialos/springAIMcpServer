@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+      Developer tool, not part of the starter (ADR-0022): points at a Spring Boot project (source tree, OpenAPI
+      document, actuator mappings, database), discovers its REST APIs and generates a Grafana k6 load-test suite
+      with per-API data providers. No Spring dependency: it reads the host, it never runs inside it.
+      Every dependency below is already vendored in offline-repo/ (no refresh needed).
+    -->
+    <artifactId>spring-ai-mcp-server-common-loadtest</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: Load Test</name>
+    <description>Discovers a Spring Boot project's REST APIs and generates a k6 load-test suite with data providers.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.loadtest</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- OpenAPI documents and application.yml may be YAML -->
+        <dependency>
+            <groupId>tools.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
+        <!-- Real-data sampling; hosts on another database add their driver to LOADTEST_CLASSPATH -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

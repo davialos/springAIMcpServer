@@ -32,6 +32,7 @@ why, and what remains. Branch: `claude/task-6wrlcn`.
 | Library security filter chains are registered automatically, ordered after Boot's default chain; opt out with `security.filter-chains.enabled=false` | `DaiWebSecurityAutoConfiguration` |
 | Admin writes invalidate the local principal/grant caches and refresh local snapshots; other nodes converge by TTL/poll (ADR-0021) | commit 10714a5 |
 | Agent chat authorizes `agent:invoke` | commit 7a1c05a |
+| k6 load-test generator is a separate developer-tool module (`-loadtest`, `scripts/loadtest.sh`), never on a host's classpath; DELETE off, sensitive fields never sampled, prod-looking hosts refused by default | ADR-0022, LLD-16 |
 
 ## 3. Bugs found and fixed this session (regression tests exist for each)
 
@@ -60,6 +61,8 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
    are retained for audit.
 
 **Smaller / known limits**
+- Load-test generator (LLD-16 §11): multipart bodies skipped, Kotlin sources not scanned, request chaining is a
+  `hooks.js` recipe; its k6 end-to-end tests skip unless a `k6` binary is on `PATH`/`K6_BIN`.
 - Tool-call messages are not remembered across turns (OQ-45); breaker state has no admin metric beyond
   `GET /dynamic-ai/admin/api/v1/model-providers`; no same-provider retry with backoff (OQ-47).
 - Maintenance: audit/telemetry retention beyond partition drop, MCP idle-session sweep (moot until stateful MCP),

@@ -1,0 +1,10 @@
+# Fixture: a typical Spring Boot shop the load-test generator is pointed at.
+server:
+  port: 8081
+  servlet:
+    context-path: /shop
+spring:
+  datasource:
+    url: ${SHOP_DB_URL:jdbc:postgresql://localhost:5432/shop}
+    username: ${SHOP_DB_USER:shop}
+    password: ${SHOP_DB_PASSWORD:shop}

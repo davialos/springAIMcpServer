@@ -56,6 +56,9 @@ public final class SpringSourceScanner {
             "SseEmitter", "ResponseBodyEmitter", "StreamingResponseBody");
     private static final Set<String> CONTEXT_ANNOTATIONS = Set.of("AuthenticationPrincipal", "RequestAttribute",
             "SessionAttribute", "CookieValue", "CurrentSecurityContext", "MatrixVariable", "Value");
+    private static final Set<String> GENERIC_NAMES = Set.of("get", "list", "all", "create", "update", "delete",
+            "remove", "patch", "save", "search", "find", "findAll", "findOne", "findById", "getById", "getAll",
+            "index", "show", "add", "edit", "replace", "upsert", "query", "count", "handle");
     private static final Pattern PATH_VAR = Pattern.compile("\\{([^}:]+)(?::([^}]*))?}");
 
     private final Consumer<String> log;
@@ -146,7 +149,7 @@ public final class SpringSourceScanner {
             }
             String id = SourceTrees.annotation(m.getModifiers(), "Operation")
                     .flatMap(op -> trees.string(op, "operationId")).filter(s -> !s.isBlank())
-                    .orElse(m.getName().toString());
+                    .orElse(operationId(m.getName().toString(), controllerName));
             String summary = SourceTrees.annotation(m.getModifiers(), "Operation")
                     .flatMap(op -> trees.string(op, "summary")).orElse(null);
             for (String base : bases) {
@@ -162,6 +165,15 @@ public final class SpringSourceScanner {
             }
         }
         return out;
+    }
+
+    /** Generic handler names get the controller's subject: {@code get} in {@code CustomerController} → {@code getCustomer}. */
+    static String operationId(String method, String controller) {
+        if (!GENERIC_NAMES.contains(method)) {
+            return method;
+        }
+        String subject = controller.replaceAll("(Rest)?(Controller|Resource|Api|Endpoint)(Impl)?$", "");
+        return subject.isEmpty() ? method : method + subject;
     }
 
     private record Handler(List<ApiParam> params, @Nullable Schema body) {

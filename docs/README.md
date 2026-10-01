@@ -22,6 +22,7 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 11c | [lld/12-host-safety-and-environment-containment.md](lld/12-host-safety-and-environment-containment.md) — environment tiers, prod lock-down, fault isolation, availability probes | lld-chief-architect | Draft v1 |
 | 11d | [lld/13-streaming-response-protocol.md](lld/13-streaming-response-protocol.md) — SSE event contract, heartbeat, cancellation, client rendering | agent-runtime-designer | Draft v1 |
 | 11e | [lld/14-performance-and-throughput.md](lld/14-performance-and-throughput.md) — concurrency, provider rate governor, pagination, parallel tools, budgets | lld-chief-architect | Draft v1 |
+| 11f | [lld/17-chat-ui-protocol.md](lld/17-chat-ui-protocol.md) — chat interaction API, JSON UI tree, interrupts (questions, confirmations, UI instructions); schemas in [schemas/](schemas/) | agent-runtime-designer | Draft v1 |
 | 12 | [lld/10-observability-cost-quota.md](lld/10-observability-cost-quota.md) | production-readiness-reviewer | Draft v1 |
 | 13 | [security/01-access-management.md](security/01-access-management.md) | access-management-architect | Draft v1 |
 | 14 | [security/02-threat-model.md](security/02-threat-model.md) | access-management-architect | Draft v1 |

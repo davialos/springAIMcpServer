@@ -49,6 +49,8 @@
 > be verified), history for the review UI, edit (`PATCH`), `ENTITY_WRITE`, bulk, step-up authentication, and the
 > `ui.component` events.
 
+> **See [LLD-17](17-chat-ui-protocol.md):** the payload shapes of §7 become `dai-ui/1` surfaces (`change_review` replaces the four review components; display components map to `kv`, `table`, `timeline`, `entity_link`), the model-authored provenance check of §7.1 becomes result-handle binding, and confirm/decline are also available as `action` interactions that call the same decision service as §8.
+
 ## 1. Purpose & responsibilities
 Let agents (and write endpoints) **propose** changes to host data, render those proposals
 to the user through UI components for review/edit, and apply them **only after explicit

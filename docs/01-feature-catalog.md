@@ -84,6 +84,9 @@ Owner: control-plane-designer · Status: Draft v1
 | F-49 | **Model routing & fallback** (primary/secondary provider, per-agent) | v1.x | Failover on provider error/timeout |
 | F-54 | **Parallel read tool calls** within a turn (bounded) | MVP | 4 × 200 ms reads complete in ≈ 250 ms |
 | F-50 | **Multi-agent orchestration** (agent-as-tool) | v2 | Depth & budget bounded |
+| F-57 | **Interaction API** — one envelope (`message`, `action`, `respond`, `cancel`) for every user input to a chat, idempotent, with a JSON UI tree rendered from server-declared surfaces (LLD-17) | MVP | Forged or replayed actions refused; retry never executes twice; reload equals live; no HTML or script from any model |
+| F-58 | **Agent questions and confirmations** — `ask_user` raises an interrupt, the turn suspends statelessly, the answer resumes it on any node (LLD-17) | MVP | Answer handled by another replica; a model-raised confirmation authorizes nothing |
+| F-59 | **UI instructions** — deterministic UI events handled without the model, and host-registered UI commands the agent may request (LLD-17 §5.7, §5.8) | v1.x | Events re-enter the tool pipeline as the caller; commands default off |
 
 ### F. MCP (P6)
 | ID | Feature | Tier | Acceptance criteria |

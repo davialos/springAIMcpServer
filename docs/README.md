@@ -22,14 +22,19 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 11c | [lld/12-host-safety-and-environment-containment.md](lld/12-host-safety-and-environment-containment.md) — environment tiers, prod lock-down, fault isolation, availability probes | lld-chief-architect | Draft v1 |
 | 11d | [lld/13-streaming-response-protocol.md](lld/13-streaming-response-protocol.md) — SSE event contract, heartbeat, cancellation, client rendering | agent-runtime-designer | Draft v1 |
 | 11e | [lld/14-performance-and-throughput.md](lld/14-performance-and-throughput.md) — concurrency, provider rate governor, pagination, parallel tools, budgets | lld-chief-architect | Draft v1 |
+| 11f | [lld/17-chat-ui-protocol.md](lld/17-chat-ui-protocol.md) — chat interaction API, JSON UI tree, interrupts (questions, confirmations, UI instructions); schemas in [schemas/](schemas/) | agent-runtime-designer | Draft v1 |
 | 12 | [lld/10-observability-cost-quota.md](lld/10-observability-cost-quota.md) | production-readiness-reviewer | Draft v1 |
 | 13 | [security/01-access-management.md](security/01-access-management.md) | access-management-architect | Draft v1 |
 | 14 | [security/02-threat-model.md](security/02-threat-model.md) | access-management-architect | Draft v1 |
 | 15 | [production-readiness.md](production-readiness.md) — go-live gates | production-readiness-reviewer | Draft v1 |
 | 16 | [lld/15-database-schema.md](lld/15-database-schema.md) — PostgreSQL schema: tables, keys, indexes, partitions, retention | lld-chief-architect | Draft v1 |
-| 16b | [data/schema-usecase-map.md](data/schema-usecase-map.md) — what each table is for: writers/readers, business flows, CRUD matrix, feature/requirement traceability, findings | schema-usecase-mapper | v1 (evidence 2026-10-01) |
+| 16b | [lld/16-load-test-generator.md](lld/16-load-test-generator.md) — k6 load-test generator: API discovery, data providers, load modes (developer tool, ADR-0022) | lld-chief-architect | Implemented v1 |
+| 17b | [integration/load-testing-guide.md](integration/load-testing-guide.md) — how to generate and run k6 load tests for a project | lld-chief-architect | v1 |
+| 16c | [data/schema-usecase-map.md](data/schema-usecase-map.md) — what each table is for: writers/readers, business flows, CRUD matrix, feature/requirement traceability, findings | schema-usecase-mapper | v1 (evidence 2026-10-01) |
 | 17 | [integration/host-integration-guide.md](integration/host-integration-guide.md) — how a host app adopts the starter | control-plane-designer | Draft v1 |
+| 18 | [integration/annotation-best-practices.md](integration/annotation-best-practices.md) — `@Ai*` annotation best practices, centralized configuration, per-annotation scenarios | metadata-extraction-designer | Draft v1 |
 | — | [../scripts/db/postgresql/](../scripts/db/postgresql/) — DBA scripts: roles, database, schema, grants, verification | — | v1 |
+| — | [tools/jfr-analyzer.md](tools/jfr-analyzer.md) — JFR recording analyzer (developer tool) | — | v1 |
 | — | [../.claude/agents/](../.claude/agents/) — integration experts for host projects: `saimcp-integration-lead` (start here) routes to one expert per feature (catalog, tool execution, reviewed writes, queries, endpoints, agent runtime, MCP, security, persistence/ops), each from use case to Spring proxy/thread/transaction level | — | v1 |
 | — | [../scripts/schema-usecase-map/](../scripts/schema-usecase-map/) — evidence script behind the schema use-case map (works on any project) | — | v1 |
 | — | [adr/](adr/) — architecture decisions | lld-chief-architect | — |

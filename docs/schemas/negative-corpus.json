@@ -1,0 +1,4741 @@
+[
+  {
+    "kind": "ui",
+    "name": "unknown node type",
+    "reason": "the catalog is closed; iframe is not a node type",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "iframe",
+        "props": {}
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "children on a leaf node",
+    "reason": "only container nodes have children",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "text",
+        "props": {
+          "value": "a"
+        },
+        "children": []
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "table without caption",
+    "reason": "a table needs a caption (accessibility)",
+    "object": {
+      "surfaceId": "0198f1c1-2e40-7a15-9b26-3c4d5e6f7a81",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c1-0a01-7f33-9c44-7a8b9c0d1e2f",
+      "revision": 1,
+      "kind": "display",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Open orders for ACME GmbH",
+      "anchor": 64,
+      "tree": {
+        "id": "x",
+        "type": "table",
+        "props": {
+          "columns": [
+            {
+              "key": "a",
+              "label": "A"
+            }
+          ],
+          "rows": []
+        }
+      },
+      "data": {
+        "rows": [
+          {
+            "id": 101,
+            "status": "PAID",
+            "total": "120.50"
+          },
+          {
+            "id": 102,
+            "status": "OPEN",
+            "total": "80.00"
+          }
+        ],
+        "page": {
+          "hasMore": true
+        }
+      },
+      "actions": {
+        "a_more": {
+          "kind": "event",
+          "label": "Show more"
+        }
+      },
+      "expiresAt": "2026-10-01T22:00:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "javascript: link",
+    "reason": "links are https or mailto only",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "link",
+        "props": {
+          "label": "go",
+          "href": "javascript:alert(1)"
+        }
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "http image",
+    "reason": "images are https or attachment: only",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "image",
+        "props": {
+          "src": "http://evil.example/a.png",
+          "alt": "a"
+        }
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "image without alt",
+    "reason": "alt text is required",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "image",
+        "props": {
+          "src": "https://ok.example/a.png"
+        }
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "respond action without outcome",
+    "reason": "a respond action must say which outcome it resolves the interrupt with",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "q",
+            "type": "text",
+            "props": {
+              "value": "There are two customers called ACME. Which one do you mean?",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a": {
+          "kind": "respond"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "html in props (unknown prop)",
+    "reason": "props are closed; there is no way to pass HTML",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "text",
+        "props": {
+          "value": "a",
+          "html": "<b>x</b>"
+        }
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "bad pointer",
+    "reason": "pointers are RFC 6901 and start with /",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "select",
+        "props": {
+          "name": "a",
+          "label": "A",
+          "bind": "form/a",
+          "options": [
+            {
+              "value": "1",
+              "label": "One"
+            }
+          ]
+        }
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "bad visibleWhen",
+    "reason": "a predicate needs a comparison",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "x",
+        "type": "divider",
+        "visibleWhen": {
+          "path": "/a"
+        }
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "id with space",
+    "reason": "node ids match [A-Za-z0-9_-]{1,64}",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "a b",
+        "type": "divider"
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "revision 0",
+    "reason": "revisions start at 1",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 0,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "q",
+            "type": "text",
+            "props": {
+              "value": "There are two customers called ACME. Which one do you mean?",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "interaction",
+    "name": "action without revision",
+    "reason": "an action names the surface revision the user saw",
+    "object": {
+      "protocol": "dai-stream/2",
+      "interactionId": "0198f1c2-0001-7c00-8a00-000000000003",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "type": "action",
+      "surface": {
+        "id": "0198f1c1-2e40-7a15-9b26-3c4d5e6f7a81"
+      },
+      "actionId": "a_more"
+    }
+  },
+  {
+    "kind": "interaction",
+    "name": "message without text",
+    "reason": "a message needs text",
+    "object": {
+      "protocol": "dai-stream/2",
+      "interactionId": "0198f1c0-3a9d-7d02-a3b4-1e2f3a4b5c6d",
+      "type": "message"
+    }
+  },
+  {
+    "kind": "interaction",
+    "name": "respond with bad outcome",
+    "reason": "outcomes are accept, decline, cancel",
+    "object": {
+      "protocol": "dai-stream/2",
+      "interactionId": "0198f1c1-09f0-7b21-8d32-3e4f5a6b7c8d",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "type": "respond",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "outcome": "yes"
+    }
+  },
+  {
+    "kind": "interaction",
+    "name": "unknown interaction field",
+    "reason": "requests are closed: no smuggled members",
+    "object": {
+      "protocol": "dai-stream/2",
+      "interactionId": "0198f1c0-3a9d-7d02-a3b4-1e2f3a4b5c6d",
+      "type": "message",
+      "text": "hi",
+      "handler": "sql"
+    }
+  },
+  {
+    "kind": "event",
+    "name": "unknown event type",
+    "reason": "an event type outside the vocabulary",
+    "object": {
+      "type": "ui.iframe",
+      "src": "x"
+    }
+  },
+  {
+    "kind": "event",
+    "name": "turn.end with unknown reason",
+    "reason": "finishReason is an enum",
+    "object": {
+      "type": "turn.end",
+      "finishReason": "done"
+    }
+  },
+  {
+    "kind": "event",
+    "name": "interrupt.raised without expiry",
+    "reason": "every interrupt expires",
+    "object": {
+      "type": "interrupt.raised",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "kind": "question",
+      "blocking": true
+    }
+  },
+  {
+    "kind": "event",
+    "name": "patch op with unknown verb",
+    "reason": "tree ops are replace, update, insert, remove, move",
+    "object": {
+      "type": "ui.patch",
+      "surfaceId": "0198f1c1-2e40-7a15-9b26-3c4d5e6f7a81",
+      "baseRevision": 1,
+      "revision": 2,
+      "tree": [
+        {
+          "op": "eval",
+          "id": "a"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "askUser",
+    "name": "ask_user with fields and confirm",
+    "reason": "a question is either a form or a confirmation",
+    "object": {
+      "question": "q",
+      "fields": [
+        {
+          "name": "a",
+          "label": "A",
+          "type": "text"
+        }
+      ],
+      "confirm": {
+        "accept": "Y"
+      }
+    }
+  },
+  {
+    "kind": "askUser",
+    "name": "ask_user choice without options",
+    "reason": "choice fields need options",
+    "object": {
+      "question": "q",
+      "fields": [
+        {
+          "name": "a",
+          "label": "A",
+          "type": "choice"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "askUser",
+    "name": "ask_user field name with uppercase start",
+    "reason": "field names are [a-z][A-Za-z0-9_]{0,39}",
+    "object": {
+      "question": "q",
+      "fields": [
+        {
+          "name": "Customer",
+          "label": "A",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "askUser",
+    "name": "ask_user too many fields",
+    "reason": "at most 8 fields",
+    "object": {
+      "question": "q",
+      "fields": [
+        {
+          "name": "f0",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f1",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f2",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f3",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f4",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f5",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f6",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f7",
+          "label": "F",
+          "type": "text"
+        },
+        {
+          "name": "f8",
+          "label": "F",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "renderUi",
+    "name": "render_ui data ref malformed",
+    "reason": "result handles look like r1, r2 (not provider call ids)",
+    "object": {
+      "tree": {
+        "id": "r",
+        "type": "divider"
+      },
+      "data": {
+        "rows": {
+          "$result": "call_7",
+          "path": "/data"
+        }
+      }
+    }
+  },
+  {
+    "kind": "responseSchema",
+    "name": "nested object property",
+    "reason": "the response schema is flat (MCP elicitation subset)",
+    "object": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "kind": "responseSchema",
+    "name": "additionalProperties true",
+    "reason": "the response schema forbids extra properties",
+    "object": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "kind": "responseSchema",
+    "name": "array of objects",
+    "reason": "only arrays of enum values are allowed",
+    "object": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "kind": "renderUi",
+    "name": "render_ui with a button",
+    "reason": "a model may only author model_safe nodes and no action props",
+    "object": {
+      "tree": {
+        "id": "r",
+        "type": "card",
+        "children": [
+          {
+            "id": "b",
+            "type": "button",
+            "props": {
+              "label": "Go",
+              "action": "a1"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "renderUi",
+    "name": "render_ui with a form",
+    "reason": "a model may only author model_safe nodes and no action props",
+    "object": {
+      "tree": {
+        "id": "r",
+        "type": "form",
+        "props": {
+          "submit": "a1"
+        }
+      }
+    }
+  },
+  {
+    "kind": "renderUi",
+    "name": "render_ui table with onPage",
+    "reason": "a model may only author model_safe nodes and no action props",
+    "object": {
+      "tree": {
+        "id": "r",
+        "type": "table",
+        "props": {
+          "caption": "c",
+          "columns": [
+            {
+              "key": "a",
+              "label": "A"
+            }
+          ],
+          "rows": [],
+          "onPage": "a1"
+        }
+      }
+    }
+  },
+  {
+    "kind": "renderUi",
+    "name": "render_ui with a change_review",
+    "reason": "a model may only author model_safe nodes and no action props",
+    "object": {
+      "tree": {
+        "id": "r",
+        "type": "change_review",
+        "props": {
+          "proposalId": "0198f1c2-5d10-7a60-9b71-8c9d0e1f2a3b",
+          "presentation": "diff",
+          "changeKind": "UPDATE",
+          "summary": "Mark order 101 as shipped and record tracking number 1Z999",
+          "state": "PROPOSED",
+          "records": [
+            {
+              "entity": "Order",
+              "entityId": "101",
+              "fields": [
+                {
+                  "attr": "status",
+                  "label": "Status",
+                  "before": "PAID",
+                  "after": "SHIPPED",
+                  "changed": true
+                },
+                {
+                  "attr": "trackingNo",
+                  "label": "Tracking no.",
+                  "before": null,
+                  "after": "1Z999",
+                  "changed": true
+                },
+                {
+                  "attr": "total",
+                  "label": "Total",
+                  "before": "120.50",
+                  "after": "120.50",
+                  "changed": false
+                }
+              ]
+            }
+          ],
+          "validation": {
+            "errors": [],
+            "warnings": [
+              "Customer is on credit hold"
+            ]
+          },
+          "approval": {
+            "kind": "SELF_CONFIRM",
+            "required": 0,
+            "received": 0
+          },
+          "expiresAt": "2026-10-01T11:00:00Z",
+          "contentHash": "sha256:1370b55b38277acb9bfb8d757a41d1dd6b11025dc764020058366ea41ca1bd9c"
+        }
+      }
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "duplicate node ids",
+    "reason": "node ids are unique within a surface",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "f_customer",
+            "type": "text",
+            "props": {
+              "value": "There are two customers called ACME. Which one do you mean?",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "button references unknown action",
+    "reason": "every referenced action must be declared",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "q",
+            "type": "text",
+            "props": {
+              "value": "There are two customers called ACME. Which one do you mean?",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "$data points at missing data",
+    "reason": "reads must resolve in the data model",
+    "object": {
+      "surfaceId": "0198f1c1-2e40-7a15-9b26-3c4d5e6f7a81",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c1-0a01-7f33-9c44-7a8b9c0d1e2f",
+      "revision": 1,
+      "kind": "display",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Open orders for ACME GmbH",
+      "anchor": 64,
+      "tree": {
+        "id": "root",
+        "type": "card",
+        "props": {
+          "title": "Open orders for ACME GmbH"
+        },
+        "children": [
+          {
+            "id": "t1",
+            "type": "table",
+            "props": {
+              "caption": "Open orders for ACME GmbH",
+              "columns": [
+                {
+                  "key": "id",
+                  "label": "Order",
+                  "align": "end"
+                },
+                {
+                  "key": "status",
+                  "label": "Status"
+                },
+                {
+                  "key": "total",
+                  "label": "Total",
+                  "format": "currency",
+                  "align": "end"
+                }
+              ],
+              "rows": {
+                "$data": "/rows"
+              },
+              "rowKey": "id",
+              "hasMore": {
+                "$data": "/page/hasMore"
+              },
+              "onPage": "a_more",
+              "emptyText": "No open orders."
+            }
+          },
+          {
+            "id": "more",
+            "type": "button",
+            "visibleWhen": {
+              "path": "/page/hasMore",
+              "truthy": true
+            },
+            "props": {
+              "label": "Show more",
+              "action": "a_more",
+              "variant": "secondary"
+            }
+          }
+        ]
+      },
+      "data": {},
+      "actions": {
+        "a_more": {
+          "kind": "event",
+          "label": "Show more"
+        }
+      },
+      "expiresAt": "2026-10-01T22:00:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "bind under missing data",
+    "reason": "the parent object of a bound value must exist",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "q",
+            "type": "text",
+            "props": {
+              "value": "There are two customers called ACME. Which one do you mean?",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "change_review changed flag lies",
+    "reason": "changed must equal (before !== after)",
+    "object": {
+      "surfaceId": "0198f1c2-5d22-7c81-a192-b3c4d5e6f708",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c2-5a00-7e10-8f20-9a0b1c2d3e4f",
+      "interruptId": "0198f1c2-5d21-7d92-b2a3-c4d5e6f70819",
+      "revision": 1,
+      "kind": "proposal_review",
+      "origin": "server",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Proposed change: mark order 101 as shipped",
+      "poll": {
+        "after": "PT10S"
+      },
+      "tree": {
+        "id": "root",
+        "type": "card",
+        "props": {
+          "title": "Review before anything is written",
+          "tone": "warning"
+        },
+        "children": [
+          {
+            "id": "review",
+            "type": "change_review",
+            "props": {
+              "proposalId": "0198f1c2-5d10-7a60-9b71-8c9d0e1f2a3b",
+              "presentation": "diff",
+              "changeKind": "UPDATE",
+              "summary": "Mark order 101 as shipped and record tracking number 1Z999",
+              "state": "PROPOSED",
+              "records": [
+                {
+                  "entity": "Order",
+                  "entityId": "101",
+                  "fields": [
+                    {
+                      "attr": "status",
+                      "label": "Status",
+                      "before": "PAID",
+                      "after": "SHIPPED",
+                      "changed": true
+                    },
+                    {
+                      "attr": "trackingNo",
+                      "label": "Tracking no.",
+                      "before": null,
+                      "after": "1Z999",
+                      "changed": true
+                    },
+                    {
+                      "attr": "total",
+                      "label": "Total",
+                      "before": "120.50",
+                      "after": "120.50",
+                      "changed": true
+                    }
+                  ]
+                }
+              ],
+              "validation": {
+                "errors": [],
+                "warnings": [
+                  "Customer is on credit hold"
+                ]
+              },
+              "approval": {
+                "kind": "SELF_CONFIRM",
+                "required": 0,
+                "received": 0
+              },
+              "expiresAt": "2026-10-01T11:00:00Z",
+              "contentHash": "sha256:1370b55b38277acb9bfb8d757a41d1dd6b11025dc764020058366ea41ca1bd9c"
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_confirm",
+                "type": "button",
+                "props": {
+                  "label": "Apply change",
+                  "action": "a_confirm",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Decline",
+                  "action": "a_decline",
+                  "variant": "secondary"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "actions": {
+        "a_confirm": {
+          "kind": "respond",
+          "outcome": "accept",
+          "label": "Apply change",
+          "style": "primary",
+          "digest": "sha256:1370b55b38277acb9bfb8d757a41d1dd6b11025dc764020058366ea41ca1bd9c",
+          "confirm": {
+            "title": "Apply this change?",
+            "body": "It is written to order 101 as you, through the application.",
+            "confirmLabel": "Apply"
+          }
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Decline",
+          "style": "secondary"
+        }
+      },
+      "expiresAt": "2026-10-01T11:00:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "proposal accept action without digest",
+    "reason": "the confirm action carries the digest of what the user saw",
+    "object": {
+      "surfaceId": "0198f1c2-5d22-7c81-a192-b3c4d5e6f708",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c2-5a00-7e10-8f20-9a0b1c2d3e4f",
+      "interruptId": "0198f1c2-5d21-7d92-b2a3-c4d5e6f70819",
+      "revision": 1,
+      "kind": "proposal_review",
+      "origin": "server",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Proposed change: mark order 101 as shipped",
+      "poll": {
+        "after": "PT10S"
+      },
+      "tree": {
+        "id": "root",
+        "type": "card",
+        "props": {
+          "title": "Review before anything is written",
+          "tone": "warning"
+        },
+        "children": [
+          {
+            "id": "review",
+            "type": "change_review",
+            "props": {
+              "proposalId": "0198f1c2-5d10-7a60-9b71-8c9d0e1f2a3b",
+              "presentation": "diff",
+              "changeKind": "UPDATE",
+              "summary": "Mark order 101 as shipped and record tracking number 1Z999",
+              "state": "PROPOSED",
+              "records": [
+                {
+                  "entity": "Order",
+                  "entityId": "101",
+                  "fields": [
+                    {
+                      "attr": "status",
+                      "label": "Status",
+                      "before": "PAID",
+                      "after": "SHIPPED",
+                      "changed": true
+                    },
+                    {
+                      "attr": "trackingNo",
+                      "label": "Tracking no.",
+                      "before": null,
+                      "after": "1Z999",
+                      "changed": true
+                    },
+                    {
+                      "attr": "total",
+                      "label": "Total",
+                      "before": "120.50",
+                      "after": "120.50",
+                      "changed": false
+                    }
+                  ]
+                }
+              ],
+              "validation": {
+                "errors": [],
+                "warnings": [
+                  "Customer is on credit hold"
+                ]
+              },
+              "approval": {
+                "kind": "SELF_CONFIRM",
+                "required": 0,
+                "received": 0
+              },
+              "expiresAt": "2026-10-01T11:00:00Z",
+              "contentHash": "sha256:1370b55b38277acb9bfb8d757a41d1dd6b11025dc764020058366ea41ca1bd9c"
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_confirm",
+                "type": "button",
+                "props": {
+                  "label": "Apply change",
+                  "action": "a_confirm",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Decline",
+                  "action": "a_decline",
+                  "variant": "secondary"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "actions": {
+        "a_confirm": {
+          "kind": "respond",
+          "outcome": "accept",
+          "label": "Apply change",
+          "style": "primary",
+          "confirm": {
+            "title": "Apply this change?",
+            "body": "It is written to order 101 as you, through the application.",
+            "confirmLabel": "Apply"
+          }
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Decline",
+          "style": "secondary"
+        }
+      },
+      "expiresAt": "2026-10-01T11:00:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "proposal accept digest differs from contentHash",
+    "reason": "the digest is the proposal content hash",
+    "object": {
+      "surfaceId": "0198f1c2-5d22-7c81-a192-b3c4d5e6f708",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c2-5a00-7e10-8f20-9a0b1c2d3e4f",
+      "interruptId": "0198f1c2-5d21-7d92-b2a3-c4d5e6f70819",
+      "revision": 1,
+      "kind": "proposal_review",
+      "origin": "server",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Proposed change: mark order 101 as shipped",
+      "poll": {
+        "after": "PT10S"
+      },
+      "tree": {
+        "id": "root",
+        "type": "card",
+        "props": {
+          "title": "Review before anything is written",
+          "tone": "warning"
+        },
+        "children": [
+          {
+            "id": "review",
+            "type": "change_review",
+            "props": {
+              "proposalId": "0198f1c2-5d10-7a60-9b71-8c9d0e1f2a3b",
+              "presentation": "diff",
+              "changeKind": "UPDATE",
+              "summary": "Mark order 101 as shipped and record tracking number 1Z999",
+              "state": "PROPOSED",
+              "records": [
+                {
+                  "entity": "Order",
+                  "entityId": "101",
+                  "fields": [
+                    {
+                      "attr": "status",
+                      "label": "Status",
+                      "before": "PAID",
+                      "after": "SHIPPED",
+                      "changed": true
+                    },
+                    {
+                      "attr": "trackingNo",
+                      "label": "Tracking no.",
+                      "before": null,
+                      "after": "1Z999",
+                      "changed": true
+                    },
+                    {
+                      "attr": "total",
+                      "label": "Total",
+                      "before": "120.50",
+                      "after": "120.50",
+                      "changed": false
+                    }
+                  ]
+                }
+              ],
+              "validation": {
+                "errors": [],
+                "warnings": [
+                  "Customer is on credit hold"
+                ]
+              },
+              "approval": {
+                "kind": "SELF_CONFIRM",
+                "required": 0,
+                "received": 0
+              },
+              "expiresAt": "2026-10-01T11:00:00Z",
+              "contentHash": "sha256:1370b55b38277acb9bfb8d757a41d1dd6b11025dc764020058366ea41ca1bd9c"
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_confirm",
+                "type": "button",
+                "props": {
+                  "label": "Apply change",
+                  "action": "a_confirm",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Decline",
+                  "action": "a_decline",
+                  "variant": "secondary"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "actions": {
+        "a_confirm": {
+          "kind": "respond",
+          "outcome": "accept",
+          "label": "Apply change",
+          "style": "primary",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "confirm": {
+            "title": "Apply this change?",
+            "body": "It is written to order 101 as you, through the application.",
+            "confirmLabel": "Apply"
+          }
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Decline",
+          "style": "secondary"
+        }
+      },
+      "expiresAt": "2026-10-01T11:00:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "display surface with a respond action",
+    "reason": "only surfaces bound to an interrupt can respond",
+    "object": {
+      "surfaceId": "0198f1c1-2e40-7a15-9b26-3c4d5e6f7a81",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c1-0a01-7f33-9c44-7a8b9c0d1e2f",
+      "revision": 1,
+      "kind": "display",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Open orders for ACME GmbH",
+      "anchor": 64,
+      "tree": {
+        "id": "root",
+        "type": "card",
+        "props": {
+          "title": "Open orders for ACME GmbH"
+        },
+        "children": [
+          {
+            "id": "t1",
+            "type": "table",
+            "props": {
+              "caption": "Open orders for ACME GmbH",
+              "columns": [
+                {
+                  "key": "id",
+                  "label": "Order",
+                  "align": "end"
+                },
+                {
+                  "key": "status",
+                  "label": "Status"
+                },
+                {
+                  "key": "total",
+                  "label": "Total",
+                  "format": "currency",
+                  "align": "end"
+                }
+              ],
+              "rows": {
+                "$data": "/rows"
+              },
+              "rowKey": "id",
+              "hasMore": {
+                "$data": "/page/hasMore"
+              },
+              "onPage": "a_more",
+              "emptyText": "No open orders."
+            }
+          },
+          {
+            "id": "more",
+            "type": "button",
+            "visibleWhen": {
+              "path": "/page/hasMore",
+              "truthy": true
+            },
+            "props": {
+              "label": "Show more",
+              "action": "a_more",
+              "variant": "secondary"
+            }
+          }
+        ]
+      },
+      "data": {
+        "rows": [
+          {
+            "id": 101,
+            "status": "PAID",
+            "total": "120.50"
+          },
+          {
+            "id": 102,
+            "status": "OPEN",
+            "total": "80.00"
+          }
+        ],
+        "page": {
+          "hasMore": true
+        }
+      },
+      "actions": {
+        "a_more": {
+          "kind": "event",
+          "label": "Show more"
+        },
+        "a_bad": {
+          "kind": "respond",
+          "outcome": "accept"
+        }
+      },
+      "expiresAt": "2026-10-01T22:00:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "bidi override in text",
+    "reason": "bidirectional override characters spoof displayed values",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "q",
+            "type": "text",
+            "props": {
+              "value": "invoice \u202etxt.exe",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "control character in text",
+    "reason": "C0/C1 controls other than tab and newline are stripped or refused",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "interruptId": "0198f1c0-4c0f-7aa8-b7c9-6d5e4f3a2b10",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "form",
+        "props": {
+          "submit": "a_submit",
+          "cancel": "a_dismiss"
+        },
+        "children": [
+          {
+            "id": "q",
+            "type": "text",
+            "props": {
+              "value": "a\u0007b",
+              "variant": "title"
+            }
+          },
+          {
+            "id": "f_customer",
+            "type": "select",
+            "props": {
+              "name": "customer",
+              "label": "Customer",
+              "bind": "/form/customer",
+              "required": true,
+              "options": [
+                {
+                  "value": "4711",
+                  "label": "ACME GmbH (Berlin)"
+                },
+                {
+                  "value": "4712",
+                  "label": "ACME Ltd (Leeds)"
+                }
+              ]
+            }
+          },
+          {
+            "id": "buttons",
+            "type": "stack",
+            "props": {
+              "direction": "horizontal",
+              "gap": "sm"
+            },
+            "children": [
+              {
+                "id": "b_submit",
+                "type": "button",
+                "props": {
+                  "label": "Send",
+                  "action": "a_submit",
+                  "variant": "primary"
+                }
+              },
+              {
+                "id": "b_decline",
+                "type": "button",
+                "props": {
+                  "label": "Skip",
+                  "action": "a_decline",
+                  "variant": "link"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "form": {}
+      },
+      "actions": {
+        "a_submit": {
+          "kind": "respond",
+          "outcome": "accept",
+          "submit": "/form"
+        },
+        "a_decline": {
+          "kind": "respond",
+          "outcome": "decline",
+          "label": "Skip"
+        },
+        "a_dismiss": {
+          "kind": "respond",
+          "outcome": "cancel"
+        }
+      },
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "tree deeper than 10",
+    "reason": "max-depth",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "s10",
+        "type": "stack",
+        "children": [
+          {
+            "id": "s9",
+            "type": "stack",
+            "children": [
+              {
+                "id": "s8",
+                "type": "stack",
+                "children": [
+                  {
+                    "id": "s7",
+                    "type": "stack",
+                    "children": [
+                      {
+                        "id": "s6",
+                        "type": "stack",
+                        "children": [
+                          {
+                            "id": "s5",
+                            "type": "stack",
+                            "children": [
+                              {
+                                "id": "s4",
+                                "type": "stack",
+                                "children": [
+                                  {
+                                    "id": "s3",
+                                    "type": "stack",
+                                    "children": [
+                                      {
+                                        "id": "s2",
+                                        "type": "stack",
+                                        "children": [
+                                          {
+                                            "id": "s1",
+                                            "type": "stack",
+                                            "children": [
+                                              {
+                                                "id": "s0",
+                                                "type": "stack",
+                                                "children": [
+                                                  {
+                                                    "id": "leaf",
+                                                    "type": "divider"
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "actions": {},
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "more than 400 nodes",
+    "reason": "max-nodes",
+    "object": {
+      "surfaceId": "0198f1c0-4c11-7e55-8a66-0b1c2d3e4f50",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c0-3b20-7a44-9e11-2c3d4e5f6a70",
+      "revision": 1,
+      "kind": "question",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Which customer?",
+      "tree": {
+        "id": "root",
+        "type": "stack",
+        "children": [
+          {
+            "id": "a",
+            "type": "stack",
+            "children": [
+              {
+                "id": "a0",
+                "type": "divider"
+              },
+              {
+                "id": "a1",
+                "type": "divider"
+              },
+              {
+                "id": "a2",
+                "type": "divider"
+              },
+              {
+                "id": "a3",
+                "type": "divider"
+              },
+              {
+                "id": "a4",
+                "type": "divider"
+              },
+              {
+                "id": "a5",
+                "type": "divider"
+              },
+              {
+                "id": "a6",
+                "type": "divider"
+              },
+              {
+                "id": "a7",
+                "type": "divider"
+              },
+              {
+                "id": "a8",
+                "type": "divider"
+              },
+              {
+                "id": "a9",
+                "type": "divider"
+              },
+              {
+                "id": "a10",
+                "type": "divider"
+              },
+              {
+                "id": "a11",
+                "type": "divider"
+              },
+              {
+                "id": "a12",
+                "type": "divider"
+              },
+              {
+                "id": "a13",
+                "type": "divider"
+              },
+              {
+                "id": "a14",
+                "type": "divider"
+              },
+              {
+                "id": "a15",
+                "type": "divider"
+              },
+              {
+                "id": "a16",
+                "type": "divider"
+              },
+              {
+                "id": "a17",
+                "type": "divider"
+              },
+              {
+                "id": "a18",
+                "type": "divider"
+              },
+              {
+                "id": "a19",
+                "type": "divider"
+              },
+              {
+                "id": "a20",
+                "type": "divider"
+              },
+              {
+                "id": "a21",
+                "type": "divider"
+              },
+              {
+                "id": "a22",
+                "type": "divider"
+              },
+              {
+                "id": "a23",
+                "type": "divider"
+              },
+              {
+                "id": "a24",
+                "type": "divider"
+              },
+              {
+                "id": "a25",
+                "type": "divider"
+              },
+              {
+                "id": "a26",
+                "type": "divider"
+              },
+              {
+                "id": "a27",
+                "type": "divider"
+              },
+              {
+                "id": "a28",
+                "type": "divider"
+              },
+              {
+                "id": "a29",
+                "type": "divider"
+              },
+              {
+                "id": "a30",
+                "type": "divider"
+              },
+              {
+                "id": "a31",
+                "type": "divider"
+              },
+              {
+                "id": "a32",
+                "type": "divider"
+              },
+              {
+                "id": "a33",
+                "type": "divider"
+              },
+              {
+                "id": "a34",
+                "type": "divider"
+              },
+              {
+                "id": "a35",
+                "type": "divider"
+              },
+              {
+                "id": "a36",
+                "type": "divider"
+              },
+              {
+                "id": "a37",
+                "type": "divider"
+              },
+              {
+                "id": "a38",
+                "type": "divider"
+              },
+              {
+                "id": "a39",
+                "type": "divider"
+              },
+              {
+                "id": "a40",
+                "type": "divider"
+              },
+              {
+                "id": "a41",
+                "type": "divider"
+              },
+              {
+                "id": "a42",
+                "type": "divider"
+              },
+              {
+                "id": "a43",
+                "type": "divider"
+              },
+              {
+                "id": "a44",
+                "type": "divider"
+              },
+              {
+                "id": "a45",
+                "type": "divider"
+              },
+              {
+                "id": "a46",
+                "type": "divider"
+              },
+              {
+                "id": "a47",
+                "type": "divider"
+              },
+              {
+                "id": "a48",
+                "type": "divider"
+              },
+              {
+                "id": "a49",
+                "type": "divider"
+              },
+              {
+                "id": "a50",
+                "type": "divider"
+              },
+              {
+                "id": "a51",
+                "type": "divider"
+              },
+              {
+                "id": "a52",
+                "type": "divider"
+              },
+              {
+                "id": "a53",
+                "type": "divider"
+              },
+              {
+                "id": "a54",
+                "type": "divider"
+              },
+              {
+                "id": "a55",
+                "type": "divider"
+              },
+              {
+                "id": "a56",
+                "type": "divider"
+              },
+              {
+                "id": "a57",
+                "type": "divider"
+              },
+              {
+                "id": "a58",
+                "type": "divider"
+              },
+              {
+                "id": "a59",
+                "type": "divider"
+              },
+              {
+                "id": "a60",
+                "type": "divider"
+              },
+              {
+                "id": "a61",
+                "type": "divider"
+              },
+              {
+                "id": "a62",
+                "type": "divider"
+              },
+              {
+                "id": "a63",
+                "type": "divider"
+              },
+              {
+                "id": "a64",
+                "type": "divider"
+              },
+              {
+                "id": "a65",
+                "type": "divider"
+              },
+              {
+                "id": "a66",
+                "type": "divider"
+              },
+              {
+                "id": "a67",
+                "type": "divider"
+              },
+              {
+                "id": "a68",
+                "type": "divider"
+              },
+              {
+                "id": "a69",
+                "type": "divider"
+              },
+              {
+                "id": "a70",
+                "type": "divider"
+              },
+              {
+                "id": "a71",
+                "type": "divider"
+              },
+              {
+                "id": "a72",
+                "type": "divider"
+              },
+              {
+                "id": "a73",
+                "type": "divider"
+              },
+              {
+                "id": "a74",
+                "type": "divider"
+              },
+              {
+                "id": "a75",
+                "type": "divider"
+              },
+              {
+                "id": "a76",
+                "type": "divider"
+              },
+              {
+                "id": "a77",
+                "type": "divider"
+              },
+              {
+                "id": "a78",
+                "type": "divider"
+              },
+              {
+                "id": "a79",
+                "type": "divider"
+              },
+              {
+                "id": "a80",
+                "type": "divider"
+              },
+              {
+                "id": "a81",
+                "type": "divider"
+              },
+              {
+                "id": "a82",
+                "type": "divider"
+              },
+              {
+                "id": "a83",
+                "type": "divider"
+              },
+              {
+                "id": "a84",
+                "type": "divider"
+              },
+              {
+                "id": "a85",
+                "type": "divider"
+              },
+              {
+                "id": "a86",
+                "type": "divider"
+              },
+              {
+                "id": "a87",
+                "type": "divider"
+              },
+              {
+                "id": "a88",
+                "type": "divider"
+              },
+              {
+                "id": "a89",
+                "type": "divider"
+              },
+              {
+                "id": "a90",
+                "type": "divider"
+              },
+              {
+                "id": "a91",
+                "type": "divider"
+              },
+              {
+                "id": "a92",
+                "type": "divider"
+              },
+              {
+                "id": "a93",
+                "type": "divider"
+              },
+              {
+                "id": "a94",
+                "type": "divider"
+              },
+              {
+                "id": "a95",
+                "type": "divider"
+              },
+              {
+                "id": "a96",
+                "type": "divider"
+              },
+              {
+                "id": "a97",
+                "type": "divider"
+              },
+              {
+                "id": "a98",
+                "type": "divider"
+              },
+              {
+                "id": "a99",
+                "type": "divider"
+              },
+              {
+                "id": "a100",
+                "type": "divider"
+              },
+              {
+                "id": "a101",
+                "type": "divider"
+              },
+              {
+                "id": "a102",
+                "type": "divider"
+              },
+              {
+                "id": "a103",
+                "type": "divider"
+              },
+              {
+                "id": "a104",
+                "type": "divider"
+              },
+              {
+                "id": "a105",
+                "type": "divider"
+              },
+              {
+                "id": "a106",
+                "type": "divider"
+              },
+              {
+                "id": "a107",
+                "type": "divider"
+              },
+              {
+                "id": "a108",
+                "type": "divider"
+              },
+              {
+                "id": "a109",
+                "type": "divider"
+              },
+              {
+                "id": "a110",
+                "type": "divider"
+              },
+              {
+                "id": "a111",
+                "type": "divider"
+              },
+              {
+                "id": "a112",
+                "type": "divider"
+              },
+              {
+                "id": "a113",
+                "type": "divider"
+              },
+              {
+                "id": "a114",
+                "type": "divider"
+              },
+              {
+                "id": "a115",
+                "type": "divider"
+              },
+              {
+                "id": "a116",
+                "type": "divider"
+              },
+              {
+                "id": "a117",
+                "type": "divider"
+              },
+              {
+                "id": "a118",
+                "type": "divider"
+              },
+              {
+                "id": "a119",
+                "type": "divider"
+              },
+              {
+                "id": "a120",
+                "type": "divider"
+              },
+              {
+                "id": "a121",
+                "type": "divider"
+              },
+              {
+                "id": "a122",
+                "type": "divider"
+              },
+              {
+                "id": "a123",
+                "type": "divider"
+              },
+              {
+                "id": "a124",
+                "type": "divider"
+              },
+              {
+                "id": "a125",
+                "type": "divider"
+              },
+              {
+                "id": "a126",
+                "type": "divider"
+              },
+              {
+                "id": "a127",
+                "type": "divider"
+              },
+              {
+                "id": "a128",
+                "type": "divider"
+              },
+              {
+                "id": "a129",
+                "type": "divider"
+              },
+              {
+                "id": "a130",
+                "type": "divider"
+              },
+              {
+                "id": "a131",
+                "type": "divider"
+              },
+              {
+                "id": "a132",
+                "type": "divider"
+              },
+              {
+                "id": "a133",
+                "type": "divider"
+              },
+              {
+                "id": "a134",
+                "type": "divider"
+              },
+              {
+                "id": "a135",
+                "type": "divider"
+              },
+              {
+                "id": "a136",
+                "type": "divider"
+              },
+              {
+                "id": "a137",
+                "type": "divider"
+              },
+              {
+                "id": "a138",
+                "type": "divider"
+              },
+              {
+                "id": "a139",
+                "type": "divider"
+              },
+              {
+                "id": "a140",
+                "type": "divider"
+              },
+              {
+                "id": "a141",
+                "type": "divider"
+              },
+              {
+                "id": "a142",
+                "type": "divider"
+              },
+              {
+                "id": "a143",
+                "type": "divider"
+              },
+              {
+                "id": "a144",
+                "type": "divider"
+              },
+              {
+                "id": "a145",
+                "type": "divider"
+              },
+              {
+                "id": "a146",
+                "type": "divider"
+              },
+              {
+                "id": "a147",
+                "type": "divider"
+              },
+              {
+                "id": "a148",
+                "type": "divider"
+              },
+              {
+                "id": "a149",
+                "type": "divider"
+              },
+              {
+                "id": "a150",
+                "type": "divider"
+              },
+              {
+                "id": "a151",
+                "type": "divider"
+              },
+              {
+                "id": "a152",
+                "type": "divider"
+              },
+              {
+                "id": "a153",
+                "type": "divider"
+              },
+              {
+                "id": "a154",
+                "type": "divider"
+              },
+              {
+                "id": "a155",
+                "type": "divider"
+              },
+              {
+                "id": "a156",
+                "type": "divider"
+              },
+              {
+                "id": "a157",
+                "type": "divider"
+              },
+              {
+                "id": "a158",
+                "type": "divider"
+              },
+              {
+                "id": "a159",
+                "type": "divider"
+              },
+              {
+                "id": "a160",
+                "type": "divider"
+              },
+              {
+                "id": "a161",
+                "type": "divider"
+              },
+              {
+                "id": "a162",
+                "type": "divider"
+              },
+              {
+                "id": "a163",
+                "type": "divider"
+              },
+              {
+                "id": "a164",
+                "type": "divider"
+              },
+              {
+                "id": "a165",
+                "type": "divider"
+              },
+              {
+                "id": "a166",
+                "type": "divider"
+              },
+              {
+                "id": "a167",
+                "type": "divider"
+              },
+              {
+                "id": "a168",
+                "type": "divider"
+              },
+              {
+                "id": "a169",
+                "type": "divider"
+              },
+              {
+                "id": "a170",
+                "type": "divider"
+              },
+              {
+                "id": "a171",
+                "type": "divider"
+              },
+              {
+                "id": "a172",
+                "type": "divider"
+              },
+              {
+                "id": "a173",
+                "type": "divider"
+              },
+              {
+                "id": "a174",
+                "type": "divider"
+              },
+              {
+                "id": "a175",
+                "type": "divider"
+              },
+              {
+                "id": "a176",
+                "type": "divider"
+              },
+              {
+                "id": "a177",
+                "type": "divider"
+              },
+              {
+                "id": "a178",
+                "type": "divider"
+              },
+              {
+                "id": "a179",
+                "type": "divider"
+              },
+              {
+                "id": "a180",
+                "type": "divider"
+              },
+              {
+                "id": "a181",
+                "type": "divider"
+              },
+              {
+                "id": "a182",
+                "type": "divider"
+              },
+              {
+                "id": "a183",
+                "type": "divider"
+              },
+              {
+                "id": "a184",
+                "type": "divider"
+              },
+              {
+                "id": "a185",
+                "type": "divider"
+              },
+              {
+                "id": "a186",
+                "type": "divider"
+              },
+              {
+                "id": "a187",
+                "type": "divider"
+              },
+              {
+                "id": "a188",
+                "type": "divider"
+              },
+              {
+                "id": "a189",
+                "type": "divider"
+              },
+              {
+                "id": "a190",
+                "type": "divider"
+              },
+              {
+                "id": "a191",
+                "type": "divider"
+              },
+              {
+                "id": "a192",
+                "type": "divider"
+              },
+              {
+                "id": "a193",
+                "type": "divider"
+              },
+              {
+                "id": "a194",
+                "type": "divider"
+              },
+              {
+                "id": "a195",
+                "type": "divider"
+              },
+              {
+                "id": "a196",
+                "type": "divider"
+              },
+              {
+                "id": "a197",
+                "type": "divider"
+              },
+              {
+                "id": "a198",
+                "type": "divider"
+              },
+              {
+                "id": "a199",
+                "type": "divider"
+              }
+            ]
+          },
+          {
+            "id": "b",
+            "type": "stack",
+            "children": [
+              {
+                "id": "b0",
+                "type": "divider"
+              },
+              {
+                "id": "b1",
+                "type": "divider"
+              },
+              {
+                "id": "b2",
+                "type": "divider"
+              },
+              {
+                "id": "b3",
+                "type": "divider"
+              },
+              {
+                "id": "b4",
+                "type": "divider"
+              },
+              {
+                "id": "b5",
+                "type": "divider"
+              },
+              {
+                "id": "b6",
+                "type": "divider"
+              },
+              {
+                "id": "b7",
+                "type": "divider"
+              },
+              {
+                "id": "b8",
+                "type": "divider"
+              },
+              {
+                "id": "b9",
+                "type": "divider"
+              },
+              {
+                "id": "b10",
+                "type": "divider"
+              },
+              {
+                "id": "b11",
+                "type": "divider"
+              },
+              {
+                "id": "b12",
+                "type": "divider"
+              },
+              {
+                "id": "b13",
+                "type": "divider"
+              },
+              {
+                "id": "b14",
+                "type": "divider"
+              },
+              {
+                "id": "b15",
+                "type": "divider"
+              },
+              {
+                "id": "b16",
+                "type": "divider"
+              },
+              {
+                "id": "b17",
+                "type": "divider"
+              },
+              {
+                "id": "b18",
+                "type": "divider"
+              },
+              {
+                "id": "b19",
+                "type": "divider"
+              },
+              {
+                "id": "b20",
+                "type": "divider"
+              },
+              {
+                "id": "b21",
+                "type": "divider"
+              },
+              {
+                "id": "b22",
+                "type": "divider"
+              },
+              {
+                "id": "b23",
+                "type": "divider"
+              },
+              {
+                "id": "b24",
+                "type": "divider"
+              },
+              {
+                "id": "b25",
+                "type": "divider"
+              },
+              {
+                "id": "b26",
+                "type": "divider"
+              },
+              {
+                "id": "b27",
+                "type": "divider"
+              },
+              {
+                "id": "b28",
+                "type": "divider"
+              },
+              {
+                "id": "b29",
+                "type": "divider"
+              },
+              {
+                "id": "b30",
+                "type": "divider"
+              },
+              {
+                "id": "b31",
+                "type": "divider"
+              },
+              {
+                "id": "b32",
+                "type": "divider"
+              },
+              {
+                "id": "b33",
+                "type": "divider"
+              },
+              {
+                "id": "b34",
+                "type": "divider"
+              },
+              {
+                "id": "b35",
+                "type": "divider"
+              },
+              {
+                "id": "b36",
+                "type": "divider"
+              },
+              {
+                "id": "b37",
+                "type": "divider"
+              },
+              {
+                "id": "b38",
+                "type": "divider"
+              },
+              {
+                "id": "b39",
+                "type": "divider"
+              },
+              {
+                "id": "b40",
+                "type": "divider"
+              },
+              {
+                "id": "b41",
+                "type": "divider"
+              },
+              {
+                "id": "b42",
+                "type": "divider"
+              },
+              {
+                "id": "b43",
+                "type": "divider"
+              },
+              {
+                "id": "b44",
+                "type": "divider"
+              },
+              {
+                "id": "b45",
+                "type": "divider"
+              },
+              {
+                "id": "b46",
+                "type": "divider"
+              },
+              {
+                "id": "b47",
+                "type": "divider"
+              },
+              {
+                "id": "b48",
+                "type": "divider"
+              },
+              {
+                "id": "b49",
+                "type": "divider"
+              },
+              {
+                "id": "b50",
+                "type": "divider"
+              },
+              {
+                "id": "b51",
+                "type": "divider"
+              },
+              {
+                "id": "b52",
+                "type": "divider"
+              },
+              {
+                "id": "b53",
+                "type": "divider"
+              },
+              {
+                "id": "b54",
+                "type": "divider"
+              },
+              {
+                "id": "b55",
+                "type": "divider"
+              },
+              {
+                "id": "b56",
+                "type": "divider"
+              },
+              {
+                "id": "b57",
+                "type": "divider"
+              },
+              {
+                "id": "b58",
+                "type": "divider"
+              },
+              {
+                "id": "b59",
+                "type": "divider"
+              },
+              {
+                "id": "b60",
+                "type": "divider"
+              },
+              {
+                "id": "b61",
+                "type": "divider"
+              },
+              {
+                "id": "b62",
+                "type": "divider"
+              },
+              {
+                "id": "b63",
+                "type": "divider"
+              },
+              {
+                "id": "b64",
+                "type": "divider"
+              },
+              {
+                "id": "b65",
+                "type": "divider"
+              },
+              {
+                "id": "b66",
+                "type": "divider"
+              },
+              {
+                "id": "b67",
+                "type": "divider"
+              },
+              {
+                "id": "b68",
+                "type": "divider"
+              },
+              {
+                "id": "b69",
+                "type": "divider"
+              },
+              {
+                "id": "b70",
+                "type": "divider"
+              },
+              {
+                "id": "b71",
+                "type": "divider"
+              },
+              {
+                "id": "b72",
+                "type": "divider"
+              },
+              {
+                "id": "b73",
+                "type": "divider"
+              },
+              {
+                "id": "b74",
+                "type": "divider"
+              },
+              {
+                "id": "b75",
+                "type": "divider"
+              },
+              {
+                "id": "b76",
+                "type": "divider"
+              },
+              {
+                "id": "b77",
+                "type": "divider"
+              },
+              {
+                "id": "b78",
+                "type": "divider"
+              },
+              {
+                "id": "b79",
+                "type": "divider"
+              },
+              {
+                "id": "b80",
+                "type": "divider"
+              },
+              {
+                "id": "b81",
+                "type": "divider"
+              },
+              {
+                "id": "b82",
+                "type": "divider"
+              },
+              {
+                "id": "b83",
+                "type": "divider"
+              },
+              {
+                "id": "b84",
+                "type": "divider"
+              },
+              {
+                "id": "b85",
+                "type": "divider"
+              },
+              {
+                "id": "b86",
+                "type": "divider"
+              },
+              {
+                "id": "b87",
+                "type": "divider"
+              },
+              {
+                "id": "b88",
+                "type": "divider"
+              },
+              {
+                "id": "b89",
+                "type": "divider"
+              },
+              {
+                "id": "b90",
+                "type": "divider"
+              },
+              {
+                "id": "b91",
+                "type": "divider"
+              },
+              {
+                "id": "b92",
+                "type": "divider"
+              },
+              {
+                "id": "b93",
+                "type": "divider"
+              },
+              {
+                "id": "b94",
+                "type": "divider"
+              },
+              {
+                "id": "b95",
+                "type": "divider"
+              },
+              {
+                "id": "b96",
+                "type": "divider"
+              },
+              {
+                "id": "b97",
+                "type": "divider"
+              },
+              {
+                "id": "b98",
+                "type": "divider"
+              },
+              {
+                "id": "b99",
+                "type": "divider"
+              },
+              {
+                "id": "b100",
+                "type": "divider"
+              },
+              {
+                "id": "b101",
+                "type": "divider"
+              },
+              {
+                "id": "b102",
+                "type": "divider"
+              },
+              {
+                "id": "b103",
+                "type": "divider"
+              },
+              {
+                "id": "b104",
+                "type": "divider"
+              },
+              {
+                "id": "b105",
+                "type": "divider"
+              },
+              {
+                "id": "b106",
+                "type": "divider"
+              },
+              {
+                "id": "b107",
+                "type": "divider"
+              },
+              {
+                "id": "b108",
+                "type": "divider"
+              },
+              {
+                "id": "b109",
+                "type": "divider"
+              },
+              {
+                "id": "b110",
+                "type": "divider"
+              },
+              {
+                "id": "b111",
+                "type": "divider"
+              },
+              {
+                "id": "b112",
+                "type": "divider"
+              },
+              {
+                "id": "b113",
+                "type": "divider"
+              },
+              {
+                "id": "b114",
+                "type": "divider"
+              },
+              {
+                "id": "b115",
+                "type": "divider"
+              },
+              {
+                "id": "b116",
+                "type": "divider"
+              },
+              {
+                "id": "b117",
+                "type": "divider"
+              },
+              {
+                "id": "b118",
+                "type": "divider"
+              },
+              {
+                "id": "b119",
+                "type": "divider"
+              },
+              {
+                "id": "b120",
+                "type": "divider"
+              },
+              {
+                "id": "b121",
+                "type": "divider"
+              },
+              {
+                "id": "b122",
+                "type": "divider"
+              },
+              {
+                "id": "b123",
+                "type": "divider"
+              },
+              {
+                "id": "b124",
+                "type": "divider"
+              },
+              {
+                "id": "b125",
+                "type": "divider"
+              },
+              {
+                "id": "b126",
+                "type": "divider"
+              },
+              {
+                "id": "b127",
+                "type": "divider"
+              },
+              {
+                "id": "b128",
+                "type": "divider"
+              },
+              {
+                "id": "b129",
+                "type": "divider"
+              },
+              {
+                "id": "b130",
+                "type": "divider"
+              },
+              {
+                "id": "b131",
+                "type": "divider"
+              },
+              {
+                "id": "b132",
+                "type": "divider"
+              },
+              {
+                "id": "b133",
+                "type": "divider"
+              },
+              {
+                "id": "b134",
+                "type": "divider"
+              },
+              {
+                "id": "b135",
+                "type": "divider"
+              },
+              {
+                "id": "b136",
+                "type": "divider"
+              },
+              {
+                "id": "b137",
+                "type": "divider"
+              },
+              {
+                "id": "b138",
+                "type": "divider"
+              },
+              {
+                "id": "b139",
+                "type": "divider"
+              },
+              {
+                "id": "b140",
+                "type": "divider"
+              },
+              {
+                "id": "b141",
+                "type": "divider"
+              },
+              {
+                "id": "b142",
+                "type": "divider"
+              },
+              {
+                "id": "b143",
+                "type": "divider"
+              },
+              {
+                "id": "b144",
+                "type": "divider"
+              },
+              {
+                "id": "b145",
+                "type": "divider"
+              },
+              {
+                "id": "b146",
+                "type": "divider"
+              },
+              {
+                "id": "b147",
+                "type": "divider"
+              },
+              {
+                "id": "b148",
+                "type": "divider"
+              },
+              {
+                "id": "b149",
+                "type": "divider"
+              },
+              {
+                "id": "b150",
+                "type": "divider"
+              },
+              {
+                "id": "b151",
+                "type": "divider"
+              },
+              {
+                "id": "b152",
+                "type": "divider"
+              },
+              {
+                "id": "b153",
+                "type": "divider"
+              },
+              {
+                "id": "b154",
+                "type": "divider"
+              },
+              {
+                "id": "b155",
+                "type": "divider"
+              },
+              {
+                "id": "b156",
+                "type": "divider"
+              },
+              {
+                "id": "b157",
+                "type": "divider"
+              },
+              {
+                "id": "b158",
+                "type": "divider"
+              },
+              {
+                "id": "b159",
+                "type": "divider"
+              },
+              {
+                "id": "b160",
+                "type": "divider"
+              },
+              {
+                "id": "b161",
+                "type": "divider"
+              },
+              {
+                "id": "b162",
+                "type": "divider"
+              },
+              {
+                "id": "b163",
+                "type": "divider"
+              },
+              {
+                "id": "b164",
+                "type": "divider"
+              },
+              {
+                "id": "b165",
+                "type": "divider"
+              },
+              {
+                "id": "b166",
+                "type": "divider"
+              },
+              {
+                "id": "b167",
+                "type": "divider"
+              },
+              {
+                "id": "b168",
+                "type": "divider"
+              },
+              {
+                "id": "b169",
+                "type": "divider"
+              },
+              {
+                "id": "b170",
+                "type": "divider"
+              },
+              {
+                "id": "b171",
+                "type": "divider"
+              },
+              {
+                "id": "b172",
+                "type": "divider"
+              },
+              {
+                "id": "b173",
+                "type": "divider"
+              },
+              {
+                "id": "b174",
+                "type": "divider"
+              },
+              {
+                "id": "b175",
+                "type": "divider"
+              },
+              {
+                "id": "b176",
+                "type": "divider"
+              },
+              {
+                "id": "b177",
+                "type": "divider"
+              },
+              {
+                "id": "b178",
+                "type": "divider"
+              },
+              {
+                "id": "b179",
+                "type": "divider"
+              },
+              {
+                "id": "b180",
+                "type": "divider"
+              },
+              {
+                "id": "b181",
+                "type": "divider"
+              },
+              {
+                "id": "b182",
+                "type": "divider"
+              },
+              {
+                "id": "b183",
+                "type": "divider"
+              },
+              {
+                "id": "b184",
+                "type": "divider"
+              },
+              {
+                "id": "b185",
+                "type": "divider"
+              },
+              {
+                "id": "b186",
+                "type": "divider"
+              },
+              {
+                "id": "b187",
+                "type": "divider"
+              },
+              {
+                "id": "b188",
+                "type": "divider"
+              },
+              {
+                "id": "b189",
+                "type": "divider"
+              },
+              {
+                "id": "b190",
+                "type": "divider"
+              },
+              {
+                "id": "b191",
+                "type": "divider"
+              },
+              {
+                "id": "b192",
+                "type": "divider"
+              },
+              {
+                "id": "b193",
+                "type": "divider"
+              },
+              {
+                "id": "b194",
+                "type": "divider"
+              },
+              {
+                "id": "b195",
+                "type": "divider"
+              },
+              {
+                "id": "b196",
+                "type": "divider"
+              },
+              {
+                "id": "b197",
+                "type": "divider"
+              },
+              {
+                "id": "b198",
+                "type": "divider"
+              },
+              {
+                "id": "b199",
+                "type": "divider"
+              }
+            ]
+          },
+          {
+            "id": "c",
+            "type": "stack",
+            "children": [
+              {
+                "id": "c0",
+                "type": "divider"
+              },
+              {
+                "id": "c1",
+                "type": "divider"
+              },
+              {
+                "id": "c2",
+                "type": "divider"
+              },
+              {
+                "id": "c3",
+                "type": "divider"
+              },
+              {
+                "id": "c4",
+                "type": "divider"
+              },
+              {
+                "id": "c5",
+                "type": "divider"
+              },
+              {
+                "id": "c6",
+                "type": "divider"
+              },
+              {
+                "id": "c7",
+                "type": "divider"
+              },
+              {
+                "id": "c8",
+                "type": "divider"
+              },
+              {
+                "id": "c9",
+                "type": "divider"
+              },
+              {
+                "id": "c10",
+                "type": "divider"
+              },
+              {
+                "id": "c11",
+                "type": "divider"
+              },
+              {
+                "id": "c12",
+                "type": "divider"
+              },
+              {
+                "id": "c13",
+                "type": "divider"
+              },
+              {
+                "id": "c14",
+                "type": "divider"
+              },
+              {
+                "id": "c15",
+                "type": "divider"
+              },
+              {
+                "id": "c16",
+                "type": "divider"
+              },
+              {
+                "id": "c17",
+                "type": "divider"
+              },
+              {
+                "id": "c18",
+                "type": "divider"
+              },
+              {
+                "id": "c19",
+                "type": "divider"
+              },
+              {
+                "id": "c20",
+                "type": "divider"
+              },
+              {
+                "id": "c21",
+                "type": "divider"
+              },
+              {
+                "id": "c22",
+                "type": "divider"
+              },
+              {
+                "id": "c23",
+                "type": "divider"
+              },
+              {
+                "id": "c24",
+                "type": "divider"
+              },
+              {
+                "id": "c25",
+                "type": "divider"
+              },
+              {
+                "id": "c26",
+                "type": "divider"
+              },
+              {
+                "id": "c27",
+                "type": "divider"
+              },
+              {
+                "id": "c28",
+                "type": "divider"
+              },
+              {
+                "id": "c29",
+                "type": "divider"
+              },
+              {
+                "id": "c30",
+                "type": "divider"
+              },
+              {
+                "id": "c31",
+                "type": "divider"
+              },
+              {
+                "id": "c32",
+                "type": "divider"
+              },
+              {
+                "id": "c33",
+                "type": "divider"
+              },
+              {
+                "id": "c34",
+                "type": "divider"
+              },
+              {
+                "id": "c35",
+                "type": "divider"
+              },
+              {
+                "id": "c36",
+                "type": "divider"
+              },
+              {
+                "id": "c37",
+                "type": "divider"
+              },
+              {
+                "id": "c38",
+                "type": "divider"
+              },
+              {
+                "id": "c39",
+                "type": "divider"
+              },
+              {
+                "id": "c40",
+                "type": "divider"
+              },
+              {
+                "id": "c41",
+                "type": "divider"
+              },
+              {
+                "id": "c42",
+                "type": "divider"
+              },
+              {
+                "id": "c43",
+                "type": "divider"
+              },
+              {
+                "id": "c44",
+                "type": "divider"
+              },
+              {
+                "id": "c45",
+                "type": "divider"
+              },
+              {
+                "id": "c46",
+                "type": "divider"
+              },
+              {
+                "id": "c47",
+                "type": "divider"
+              },
+              {
+                "id": "c48",
+                "type": "divider"
+              },
+              {
+                "id": "c49",
+                "type": "divider"
+              },
+              {
+                "id": "c50",
+                "type": "divider"
+              },
+              {
+                "id": "c51",
+                "type": "divider"
+              },
+              {
+                "id": "c52",
+                "type": "divider"
+              },
+              {
+                "id": "c53",
+                "type": "divider"
+              },
+              {
+                "id": "c54",
+                "type": "divider"
+              },
+              {
+                "id": "c55",
+                "type": "divider"
+              },
+              {
+                "id": "c56",
+                "type": "divider"
+              },
+              {
+                "id": "c57",
+                "type": "divider"
+              },
+              {
+                "id": "c58",
+                "type": "divider"
+              },
+              {
+                "id": "c59",
+                "type": "divider"
+              },
+              {
+                "id": "c60",
+                "type": "divider"
+              },
+              {
+                "id": "c61",
+                "type": "divider"
+              },
+              {
+                "id": "c62",
+                "type": "divider"
+              },
+              {
+                "id": "c63",
+                "type": "divider"
+              },
+              {
+                "id": "c64",
+                "type": "divider"
+              },
+              {
+                "id": "c65",
+                "type": "divider"
+              },
+              {
+                "id": "c66",
+                "type": "divider"
+              },
+              {
+                "id": "c67",
+                "type": "divider"
+              },
+              {
+                "id": "c68",
+                "type": "divider"
+              },
+              {
+                "id": "c69",
+                "type": "divider"
+              },
+              {
+                "id": "c70",
+                "type": "divider"
+              },
+              {
+                "id": "c71",
+                "type": "divider"
+              },
+              {
+                "id": "c72",
+                "type": "divider"
+              },
+              {
+                "id": "c73",
+                "type": "divider"
+              },
+              {
+                "id": "c74",
+                "type": "divider"
+              },
+              {
+                "id": "c75",
+                "type": "divider"
+              },
+              {
+                "id": "c76",
+                "type": "divider"
+              },
+              {
+                "id": "c77",
+                "type": "divider"
+              },
+              {
+                "id": "c78",
+                "type": "divider"
+              },
+              {
+                "id": "c79",
+                "type": "divider"
+              },
+              {
+                "id": "c80",
+                "type": "divider"
+              },
+              {
+                "id": "c81",
+                "type": "divider"
+              },
+              {
+                "id": "c82",
+                "type": "divider"
+              },
+              {
+                "id": "c83",
+                "type": "divider"
+              },
+              {
+                "id": "c84",
+                "type": "divider"
+              },
+              {
+                "id": "c85",
+                "type": "divider"
+              },
+              {
+                "id": "c86",
+                "type": "divider"
+              },
+              {
+                "id": "c87",
+                "type": "divider"
+              },
+              {
+                "id": "c88",
+                "type": "divider"
+              },
+              {
+                "id": "c89",
+                "type": "divider"
+              },
+              {
+                "id": "c90",
+                "type": "divider"
+              },
+              {
+                "id": "c91",
+                "type": "divider"
+              },
+              {
+                "id": "c92",
+                "type": "divider"
+              },
+              {
+                "id": "c93",
+                "type": "divider"
+              },
+              {
+                "id": "c94",
+                "type": "divider"
+              },
+              {
+                "id": "c95",
+                "type": "divider"
+              },
+              {
+                "id": "c96",
+                "type": "divider"
+              },
+              {
+                "id": "c97",
+                "type": "divider"
+              },
+              {
+                "id": "c98",
+                "type": "divider"
+              },
+              {
+                "id": "c99",
+                "type": "divider"
+              },
+              {
+                "id": "c100",
+                "type": "divider"
+              },
+              {
+                "id": "c101",
+                "type": "divider"
+              },
+              {
+                "id": "c102",
+                "type": "divider"
+              },
+              {
+                "id": "c103",
+                "type": "divider"
+              },
+              {
+                "id": "c104",
+                "type": "divider"
+              },
+              {
+                "id": "c105",
+                "type": "divider"
+              },
+              {
+                "id": "c106",
+                "type": "divider"
+              },
+              {
+                "id": "c107",
+                "type": "divider"
+              },
+              {
+                "id": "c108",
+                "type": "divider"
+              },
+              {
+                "id": "c109",
+                "type": "divider"
+              },
+              {
+                "id": "c110",
+                "type": "divider"
+              },
+              {
+                "id": "c111",
+                "type": "divider"
+              },
+              {
+                "id": "c112",
+                "type": "divider"
+              },
+              {
+                "id": "c113",
+                "type": "divider"
+              },
+              {
+                "id": "c114",
+                "type": "divider"
+              },
+              {
+                "id": "c115",
+                "type": "divider"
+              },
+              {
+                "id": "c116",
+                "type": "divider"
+              },
+              {
+                "id": "c117",
+                "type": "divider"
+              },
+              {
+                "id": "c118",
+                "type": "divider"
+              },
+              {
+                "id": "c119",
+                "type": "divider"
+              },
+              {
+                "id": "c120",
+                "type": "divider"
+              },
+              {
+                "id": "c121",
+                "type": "divider"
+              },
+              {
+                "id": "c122",
+                "type": "divider"
+              },
+              {
+                "id": "c123",
+                "type": "divider"
+              },
+              {
+                "id": "c124",
+                "type": "divider"
+              },
+              {
+                "id": "c125",
+                "type": "divider"
+              },
+              {
+                "id": "c126",
+                "type": "divider"
+              },
+              {
+                "id": "c127",
+                "type": "divider"
+              },
+              {
+                "id": "c128",
+                "type": "divider"
+              },
+              {
+                "id": "c129",
+                "type": "divider"
+              },
+              {
+                "id": "c130",
+                "type": "divider"
+              },
+              {
+                "id": "c131",
+                "type": "divider"
+              },
+              {
+                "id": "c132",
+                "type": "divider"
+              },
+              {
+                "id": "c133",
+                "type": "divider"
+              },
+              {
+                "id": "c134",
+                "type": "divider"
+              },
+              {
+                "id": "c135",
+                "type": "divider"
+              },
+              {
+                "id": "c136",
+                "type": "divider"
+              },
+              {
+                "id": "c137",
+                "type": "divider"
+              },
+              {
+                "id": "c138",
+                "type": "divider"
+              },
+              {
+                "id": "c139",
+                "type": "divider"
+              },
+              {
+                "id": "c140",
+                "type": "divider"
+              },
+              {
+                "id": "c141",
+                "type": "divider"
+              },
+              {
+                "id": "c142",
+                "type": "divider"
+              },
+              {
+                "id": "c143",
+                "type": "divider"
+              },
+              {
+                "id": "c144",
+                "type": "divider"
+              },
+              {
+                "id": "c145",
+                "type": "divider"
+              },
+              {
+                "id": "c146",
+                "type": "divider"
+              },
+              {
+                "id": "c147",
+                "type": "divider"
+              },
+              {
+                "id": "c148",
+                "type": "divider"
+              },
+              {
+                "id": "c149",
+                "type": "divider"
+              },
+              {
+                "id": "c150",
+                "type": "divider"
+              },
+              {
+                "id": "c151",
+                "type": "divider"
+              },
+              {
+                "id": "c152",
+                "type": "divider"
+              },
+              {
+                "id": "c153",
+                "type": "divider"
+              },
+              {
+                "id": "c154",
+                "type": "divider"
+              },
+              {
+                "id": "c155",
+                "type": "divider"
+              },
+              {
+                "id": "c156",
+                "type": "divider"
+              },
+              {
+                "id": "c157",
+                "type": "divider"
+              },
+              {
+                "id": "c158",
+                "type": "divider"
+              },
+              {
+                "id": "c159",
+                "type": "divider"
+              },
+              {
+                "id": "c160",
+                "type": "divider"
+              },
+              {
+                "id": "c161",
+                "type": "divider"
+              },
+              {
+                "id": "c162",
+                "type": "divider"
+              },
+              {
+                "id": "c163",
+                "type": "divider"
+              },
+              {
+                "id": "c164",
+                "type": "divider"
+              },
+              {
+                "id": "c165",
+                "type": "divider"
+              },
+              {
+                "id": "c166",
+                "type": "divider"
+              },
+              {
+                "id": "c167",
+                "type": "divider"
+              },
+              {
+                "id": "c168",
+                "type": "divider"
+              },
+              {
+                "id": "c169",
+                "type": "divider"
+              },
+              {
+                "id": "c170",
+                "type": "divider"
+              },
+              {
+                "id": "c171",
+                "type": "divider"
+              },
+              {
+                "id": "c172",
+                "type": "divider"
+              },
+              {
+                "id": "c173",
+                "type": "divider"
+              },
+              {
+                "id": "c174",
+                "type": "divider"
+              },
+              {
+                "id": "c175",
+                "type": "divider"
+              },
+              {
+                "id": "c176",
+                "type": "divider"
+              },
+              {
+                "id": "c177",
+                "type": "divider"
+              },
+              {
+                "id": "c178",
+                "type": "divider"
+              },
+              {
+                "id": "c179",
+                "type": "divider"
+              },
+              {
+                "id": "c180",
+                "type": "divider"
+              },
+              {
+                "id": "c181",
+                "type": "divider"
+              },
+              {
+                "id": "c182",
+                "type": "divider"
+              },
+              {
+                "id": "c183",
+                "type": "divider"
+              },
+              {
+                "id": "c184",
+                "type": "divider"
+              },
+              {
+                "id": "c185",
+                "type": "divider"
+              },
+              {
+                "id": "c186",
+                "type": "divider"
+              },
+              {
+                "id": "c187",
+                "type": "divider"
+              },
+              {
+                "id": "c188",
+                "type": "divider"
+              },
+              {
+                "id": "c189",
+                "type": "divider"
+              },
+              {
+                "id": "c190",
+                "type": "divider"
+              },
+              {
+                "id": "c191",
+                "type": "divider"
+              },
+              {
+                "id": "c192",
+                "type": "divider"
+              },
+              {
+                "id": "c193",
+                "type": "divider"
+              },
+              {
+                "id": "c194",
+                "type": "divider"
+              },
+              {
+                "id": "c195",
+                "type": "divider"
+              },
+              {
+                "id": "c196",
+                "type": "divider"
+              },
+              {
+                "id": "c197",
+                "type": "divider"
+              },
+              {
+                "id": "c198",
+                "type": "divider"
+              },
+              {
+                "id": "c199",
+                "type": "divider"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "actions": {},
+      "expiresAt": "2026-10-01T10:45:00Z"
+    }
+  },
+  {
+    "kind": "ui",
+    "name": "surface without actions member",
+    "reason": "actions is required (may be empty)",
+    "object": {
+      "surfaceId": "0198f1c1-2e40-7a15-9b26-3c4d5e6f7a81",
+      "conversationId": "0198f1c0-3a5e-7b10-8c2d-4f6a7b8c9d01",
+      "turnId": "0198f1c1-0a01-7f33-9c44-7a8b9c0d1e2f",
+      "revision": 1,
+      "kind": "display",
+      "origin": "model",
+      "status": "active",
+      "catalog": "dai-ui/1",
+      "title": "Open orders for ACME GmbH",
+      "anchor": 64,
+      "tree": {
+        "id": "root",
+        "type": "card",
+        "props": {
+          "title": "Open orders for ACME GmbH"
+        },
+        "children": [
+          {
+            "id": "t1",
+            "type": "table",
+            "props": {
+              "caption": "Open orders for ACME GmbH",
+              "columns": [
+                {
+                  "key": "id",
+                  "label": "Order",
+                  "align": "end"
+                },
+                {
+                  "key": "status",
+                  "label": "Status"
+                },
+                {
+                  "key": "total",
+                  "label": "Total",
+                  "format": "currency",
+                  "align": "end"
+                }
+              ],
+              "rows": {
+                "$data": "/rows"
+              },
+              "rowKey": "id",
+              "hasMore": {
+                "$data": "/page/hasMore"
+              },
+              "onPage": "a_more",
+              "emptyText": "No open orders."
+            }
+          },
+          {
+            "id": "more",
+            "type": "button",
+            "visibleWhen": {
+              "path": "/page/hasMore",
+              "truthy": true
+            },
+            "props": {
+              "label": "Show more",
+              "action": "a_more",
+              "variant": "secondary"
+            }
+          }
+        ]
+      },
+      "data": {
+        "rows": [
+          {
+            "id": 101,
+            "status": "PAID",
+            "total": "120.50"
+          },
+          {
+            "id": 102,
+            "status": "OPEN",
+            "total": "80.00"
+          }
+        ],
+        "page": {
+          "hasMore": true
+        }
+      },
+      "expiresAt": "2026-10-01T22:00:00Z"
+    }
+  }
+]

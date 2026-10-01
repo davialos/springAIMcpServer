@@ -13,6 +13,8 @@ import com.springaimcpservercommon.ai.agent.OutputSpec;
 import com.springaimcpservercommon.ai.agent.ModelSelection;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.model.ResolvedModel;
+import com.springaimcpservercommon.ai.safety.TurnSafety;
+import com.springaimcpservercommon.core.display.StructuredResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
 import com.springaimcpservercommon.ai.tool.ToolCallScope;
@@ -62,6 +64,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * </ol>
  * {@code ToolCallingAdvisor} is auto-registered by Spring AI at {@code HIGHEST_PRECEDENCE + 300}.
  *
+ * <p>Guardrails ({@link TurnSafety}, LLD-06 §8): the prompt is validated (malicious content, business scope, host
+ * validators) and optionally PII-redacted before the model sees it; the answer is PII-redacted (chunk-safe on
+ * streams), cut at {@code maxOutputChars}, and accompanied by a structured display ({@link StructuredResponse}: the
+ * sync result's {@code display}, a {@code ui.component} event of type {@value #STRUCTURED_RESPONSE} on streams).
+ *
  * <p>Not a Spring {@code @Component} — registered by {@code DaiAiAutoConfiguration} when a
  * {@link ModelRouter} and {@link MetadataRegistry} bean are present.
  */
@@ -80,6 +87,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     static final String OBSERVATION_CONTEXT_KEY = "micrometer.observation";
     /** Largest structured answer held back for validation on a stream; more fails the turn. */
     private static final int MAX_STRUCTURED_ANSWER_CHARS = 1_000_000;
+    /** {@code componentType} of the stream event carrying the structured display. */
+    public static final String STRUCTURED_RESPONSE = "structured-response";
 
     private final ModelRouter modelRouter;
     private final @Nullable ToolBridge toolBridge;
@@ -95,6 +104,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final ObservationRegistry observationRegistry;
     private final ChatMemory chatMemory;
     private final @Nullable JsonSchemaValidationPort schemaValidator;
+    private final TurnSafety turnSafety;
 
     /**
      * Creates the invoker.
@@ -124,14 +134,57 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 ChatMemory chatMemory,
                                 @Nullable JsonSchemaValidationPort schemaValidator) {
         this(modelRouter, toolBridge, metadataRegistry, killSwitchChecker, budgetChecker, usageSink, turnRecorder,
-                conversationRecorder, observationRegistry, chatMemory, schemaValidator, null, 0);
+                conversationRecorder, observationRegistry, chatMemory, schemaValidator, TurnSafety.disabled(), null, 0);
     }
 
     /**
-     * Same, with the knowledge packs agents may draw context from.
+     * Creates the invoker with guardrails.
      *
-     * @param knowledgeStore    the bundled knowledge packs, or {@code null} to give agents none
-     * @param knowledgeMaxChars most characters of retrieved text added to one prompt
+     * @param modelRouter          resolves the {@link ChatModel} for each turn
+     * @param toolBridge           assembles per-request tool callbacks; {@code null} if tools are unavailable
+     * @param metadataRegistry     current effective catalog snapshot
+     * @param killSwitchChecker    runtime kill-switch check
+     * @param budgetChecker        token-budget pre-check
+     * @param usageSink            token usage accounting
+     * @param turnRecorder         receives one record per finished turn (trace viewer, F-72)
+     * @param conversationRecorder receives the user message and answer of each successful turn (F-44)
+     * @param observationRegistry  Micrometer observation registry
+     * @param chatMemory           conversation history store
+     * @param schemaValidator      optional JSON Schema conformance validator (Level 2)
+     * @param turnSafety           prompt validation, PII redaction and structured display (F-76)
+     */
+    public DefaultAgentInvoker(ModelRouter modelRouter,
+                                @Nullable ToolBridge toolBridge,
+                                MetadataRegistry metadataRegistry,
+                                InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
+                                InvocationGuardAdvisor.BudgetChecker budgetChecker,
+                                UsageMeteringAdvisor.UsageSink usageSink,
+                                TurnRecorder turnRecorder,
+                                ConversationRecorder conversationRecorder,
+                                ObservationRegistry observationRegistry,
+                                ChatMemory chatMemory,
+                                @Nullable JsonSchemaValidationPort schemaValidator,
+                                TurnSafety turnSafety) {
+        this(modelRouter, toolBridge, metadataRegistry, killSwitchChecker, budgetChecker, usageSink, turnRecorder,
+                conversationRecorder, observationRegistry, chatMemory, schemaValidator, turnSafety, null, 0);
+    }
+
+    /**
+     * Same, with the knowledge packs agents may draw context from (guardrails disabled).
+     *
+     * @param modelRouter          resolves the {@link ChatModel} for each turn
+     * @param toolBridge           assembles per-request tool callbacks; {@code null} if tools are unavailable
+     * @param metadataRegistry     current effective catalog snapshot
+     * @param killSwitchChecker    runtime kill-switch check
+     * @param budgetChecker        token-budget pre-check
+     * @param usageSink            token usage accounting
+     * @param turnRecorder         receives one record per finished turn (trace viewer, F-72)
+     * @param conversationRecorder receives the user message and answer of each successful turn (F-44)
+     * @param observationRegistry  Micrometer observation registry
+     * @param chatMemory           conversation history store
+     * @param schemaValidator      optional JSON Schema conformance validator (Level 2)
+     * @param knowledgeStore       the bundled knowledge packs, or {@code null} to give agents none
+     * @param knowledgeMaxChars    most characters of retrieved text added to one prompt
      */
     public DefaultAgentInvoker(ModelRouter modelRouter,
                                 @Nullable ToolBridge toolBridge,
@@ -146,6 +199,44 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 @Nullable JsonSchemaValidationPort schemaValidator,
                                 @Nullable KnowledgeStore knowledgeStore,
                                 int knowledgeMaxChars) {
+        this(modelRouter, toolBridge, metadataRegistry, killSwitchChecker, budgetChecker, usageSink, turnRecorder,
+                conversationRecorder, observationRegistry, chatMemory, schemaValidator, TurnSafety.disabled(),
+                knowledgeStore, knowledgeMaxChars);
+    }
+
+    /**
+     * Creates the invoker with guardrails and knowledge packs.
+     *
+     * @param modelRouter          resolves the {@link ChatModel} for each turn
+     * @param toolBridge           assembles per-request tool callbacks; {@code null} if tools are unavailable
+     * @param metadataRegistry     current effective catalog snapshot
+     * @param killSwitchChecker    runtime kill-switch check
+     * @param budgetChecker        token-budget pre-check
+     * @param usageSink            token usage accounting
+     * @param turnRecorder         receives one record per finished turn (trace viewer, F-72)
+     * @param conversationRecorder receives the user message and answer of each successful turn (F-44)
+     * @param observationRegistry  Micrometer observation registry
+     * @param chatMemory           conversation history store
+     * @param schemaValidator      optional JSON Schema conformance validator (Level 2)
+     * @param turnSafety           prompt validation, PII redaction and structured display (F-76)
+     * @param knowledgeStore       the bundled knowledge packs, or {@code null} to give agents none
+     * @param knowledgeMaxChars    most characters of retrieved text added to one prompt
+     */
+    public DefaultAgentInvoker(ModelRouter modelRouter,
+                                @Nullable ToolBridge toolBridge,
+                                MetadataRegistry metadataRegistry,
+                                InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
+                                InvocationGuardAdvisor.BudgetChecker budgetChecker,
+                                UsageMeteringAdvisor.UsageSink usageSink,
+                                TurnRecorder turnRecorder,
+                                ConversationRecorder conversationRecorder,
+                                ObservationRegistry observationRegistry,
+                                ChatMemory chatMemory,
+                                @Nullable JsonSchemaValidationPort schemaValidator,
+                                TurnSafety turnSafety,
+                                @Nullable KnowledgeStore knowledgeStore,
+                                int knowledgeMaxChars) {
+        this.turnSafety = Objects.requireNonNull(turnSafety, "turnSafety");
         this.knowledgeStore = knowledgeStore;
         this.knowledgeMaxChars = knowledgeMaxChars;
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter");
@@ -188,11 +279,14 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
             ChatClient client = buildChatClient(agent, principal, resolved);
             String convKey = convKey(principal, agent, conversationId);
+            // the model and the chat memory only ever see the prompt after input redaction; validation judges the raw one
+            String userText = turnSafety.prepareInput(agent, request.message());
 
             ChatResponse response = client.prompt()
-                    .user(request.message())
+                    .user(userText)
                     .toolCallbacks(callbacks)
-                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
+                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey)
+                            .param(InvocationGuardAdvisor.RAW_INPUT_KEY, request.message()))
                     .call()
                     .chatResponse();
 
@@ -200,11 +294,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 throw new AgentInvocationException("empty-response",
                         "Agent returned no response.", true);
             }
-            SyncChatResult result = mapSyncResult(response, conversationId, turnId);
+            SyncChatResult result = guardSyncResult(agent, mapSyncResult(response, conversationId, turnId));
             recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, null,
                     result.usage().inputTokens(), result.usage().outputTokens());
-            recordExchange(agent, request, principal, turnId, conversationId, startedAt, result.message());
+            recordExchange(agent, request, principal, turnId, conversationId, startedAt, userText, result.message());
             return result;
         } catch (AgentInvocationException e) {
             boolean budget = "budget-exhausted".equals(e.code());
@@ -243,7 +337,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             }
             try {
                 // Streamed turns skip the call-advisor chain, so the input checks run here (LLD-06 §4)
-                var violation = new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker)
+                var violation = new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker, turnSafety)
                         .checkInput(request.message());
                 if (violation.isPresent()) {
                     String code = violation.get().code().replace('_', '-');
@@ -268,6 +362,9 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
                 ChatClient client = buildChatClient(agent, principal, resolved);
                 String convKey = convKey(principal, agent, conversationId);
+                String userText = turnSafety.prepareInput(agent, request.message());
+                TurnSafety.OutputGuard outputGuard = turnSafety.outputGuard(agent);
+                StringBuilder rawAnswer = new StringBuilder();
 
                 AtomicInteger seq = new AtomicInteger(0);
                 AtomicReference<@Nullable ChatResponse> lastResponse = new AtomicReference<>();
@@ -281,9 +378,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 AtomicBoolean heldTooLarge = new AtomicBoolean(false);
 
                 Flux<StreamEvent> content = client.prompt()
-                        .user(request.message())
+                        .user(userText)
                         .toolCallbacks(callbacks)
-                        .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey))
+                        // the input checks above already ran; the stream advisor must not run them a second time
+                        .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, convKey)
+                                .param(InvocationGuardAdvisor.PRECHECKED_KEY, Boolean.TRUE))
                         .stream()
                         .chatResponse()
                         // A stream has no stable thread, so its span can't be current in a ThreadLocal. Spring AI's
@@ -292,33 +391,29 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         .timeout(agent.limits().turnTimeout())
                         .doOnNext(lastResponse::set)
                         .flatMapIterable(r -> {
-                            List<StreamEvent> deltas = extractTextDeltas(r, seq);
+                            String text = extractText(r);
+                            if (text.isEmpty()) {
+                                return List.<StreamEvent>of();
+                            }
+                            firstText.compareAndSet(null, clock.instant());
                             if (structured) {
-                                for (StreamEvent e : deltas) {
-                                    if (e instanceof StreamEvent.TextDelta d) {
-                                        firstText.compareAndSet(null, clock.instant());
-                                        if (held.length() + d.text().length() > MAX_STRUCTURED_ANSWER_CHARS) {
-                                            heldTooLarge.set(true);
-                                        } else {
-                                            held.append(d.text());
-                                        }
-                                    }
+                                if (held.length() + text.length() > MAX_STRUCTURED_ANSWER_CHARS) {
+                                    heldTooLarge.set(true);
+                                } else {
+                                    held.append(text);
                                 }
                                 return List.<StreamEvent>of();
                             }
-                            if (!deltas.isEmpty()) {
-                                firstText.compareAndSet(null, clock.instant());
-                                for (StreamEvent e : deltas) {
-                                    if (e instanceof StreamEvent.TextDelta d) {
-                                        synchronized (answer) {
-                                            if (answer.length() < MAX_RECORDED_ANSWER_CHARS) {
-                                                answer.append(d.text());
-                                            }
-                                        }
-                                    }
-                                }
+                            if (rawAnswer.length() < MAX_RECORDED_ANSWER_CHARS) {
+                                rawAnswer.append(text);
                             }
-                            return deltas;
+                            // redaction holds back text that could be the start of personal data (chunk-safe)
+                            String safe = outputGuard.onChunk(text);
+                            if (safe.isEmpty()) {
+                                return List.<StreamEvent>of();
+                            }
+                            appendRecorded(answer, safe);
+                            return List.<StreamEvent>of(new StreamEvent.TextDelta(seq.incrementAndGet(), safe));
                         });
 
                 Flux<StreamEvent> ending = Flux.defer(() -> {
@@ -336,15 +431,23 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                             return Flux.just(new StreamEvent.ErrorEvent("/errors/agent/" + code,
                                     failed.get().message(), code, false, turnId));
                         }
-                        synchronized (answer) {
-                            answer.append(text, 0, Math.min(text.length(), MAX_RECORDED_ANSWER_CHARS));
-                        }
+                        String safe = outputGuard.finish(text);
+                        appendRecorded(answer, safe);
                         List<StreamEvent> events = new ArrayList<>();
-                        events.add(new StreamEvent.TextDelta(seq.incrementAndGet(), text));
+                        events.add(new StreamEvent.TextDelta(seq.incrementAndGet(), safe));
+                        addDisplay(events, outputGuard.display(text));
                         events.addAll(buildEndingEvents(last, agent, turnId));
                         return Flux.fromIterable(events);
                     }
-                    return Flux.fromIterable(buildEndingEvents(last, agent, turnId));
+                    List<StreamEvent> events = new ArrayList<>();
+                    String tail = outputGuard.finishStream();
+                    if (!tail.isEmpty()) {
+                        appendRecorded(answer, tail);
+                        events.add(new StreamEvent.TextDelta(seq.incrementAndGet(), tail));
+                    }
+                    addDisplay(events, outputGuard.display(rawAnswer.toString()));
+                    events.addAll(buildEndingEvents(last, agent, turnId));
+                    return Flux.fromIterable(events);
                 });
 
                 StreamEvent turnStart = new StreamEvent.TurnStart(
@@ -388,7 +491,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                         synchronized (answer) {
                             text = answer.toString();
                         }
-                        recordExchange(agent, request, principal, turnId, conversationId, startedAt, text);
+                        recordExchange(agent, request, principal, turnId, conversationId, startedAt, userText, text);
                     }
                 });
             } catch (Exception e) {
@@ -462,13 +565,14 @@ public final class DefaultAgentInvoker implements AgentInvoker {
 
     /** Hands the message pair of a successful turn to the conversation recorder (never affects the turn). */
     private void recordExchange(AgentDefinition agent, AgentChatRequest request, DaiPrincipal principal, UUID turnId,
-                                UUID conversationId, Instant startedAt, String answer) {
-        if (answer.isBlank() || request.message().isBlank()) {
+                                UUID conversationId, Instant startedAt, String userMessage, String answer) {
+        if (answer.isBlank() || userMessage.isBlank()) {
             return;
         }
         try {
+            // what was sent and shown: the prompt after input redaction, the answer after output redaction
             conversationRecorder.record(new ConversationRecorder.Exchange(conversationId, turnId, agent, principal,
-                    request.effectiveChannel(), request.message(), answer, startedAt));
+                    request.effectiveChannel(), userMessage, answer, startedAt));
         } catch (RuntimeException e) {
             LOG.warn("Conversation recording failed for agent {} turn {}; the turn is unaffected",
                     agent.slug(), turnId, e);
@@ -495,7 +599,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private ChatClient buildChatClient(AgentDefinition agent, DaiPrincipal principal, ResolvedModel resolved) {
         ChatModel chatModel = resolved.model();
         List<Advisor> advisors = new ArrayList<>();
-        advisors.add(new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker));
+        advisors.add(new InvocationGuardAdvisor(agent, principal, killSwitchChecker, budgetChecker, turnSafety));
         if (agent.memory().strategy() == MemorySpec.Strategy.SUMMARY) {
             advisors.add(new SummaryMemoryAdvisor(chatMemory, chatModel, MEMORY_ORDER));
         } else if (agent.memory().strategy() == MemorySpec.Strategy.WINDOW) {
@@ -572,11 +676,35 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 List.of(), new UsageRecord(promptTokens, completionTokens));
     }
 
-    private static List<StreamEvent> extractTextDeltas(ChatResponse response, AtomicInteger seq) {
-        if (response.getResult() == null) return List.of();
+    private static String extractText(ChatResponse response) {
+        if (response.getResult() == null) return "";
         String text = response.getResult().getOutput().getText();
-        if (text == null || text.isEmpty()) return List.of();
-        return List.of(new StreamEvent.TextDelta(seq.incrementAndGet(), text));
+        return text == null ? "" : text;
+    }
+
+    /** Output guardrails of a synchronous answer: redaction, length limit and structured display (LLD-06 §8). */
+    private SyncChatResult guardSyncResult(AgentDefinition agent, SyncChatResult raw) {
+        TurnSafety.OutputGuard guard = turnSafety.outputGuard(agent);
+        if (!guard.active()) {
+            return raw;
+        }
+        return new SyncChatResult(raw.conversationId(), raw.turnId(), guard.finish(raw.message()), raw.toolCalls(),
+                raw.usage(), guard.display(raw.message()));
+    }
+
+    private static void appendRecorded(StringBuilder answer, String text) {
+        synchronized (answer) {
+            int room = MAX_RECORDED_ANSWER_CHARS - answer.length();
+            if (room > 0) {
+                answer.append(text, 0, Math.min(text.length(), room));
+            }
+        }
+    }
+
+    private static void addDisplay(List<StreamEvent> events, @Nullable StructuredResponse display) {
+        if (display != null) {
+            events.add(new StreamEvent.UiComponent(STRUCTURED_RESPONSE, display.toJson()));
+        }
     }
 
     /** Streamed turns bypass the call advisor chain, so their usage is recorded here (failures never break the turn). */

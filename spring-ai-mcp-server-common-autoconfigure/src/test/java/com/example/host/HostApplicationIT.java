@@ -328,6 +328,8 @@ class HostApplicationIT {
 
         var answer = call("POST", "/dynamic-ai/api/agents/helper/chat", "alice", Map.of("message", "hi"), 200);
         assertThat(answer.toString()).contains("Hello from the model");
+        // the structured, PII-free display tree rides along with the text answer (F-76)
+        assertThat(answer.get("display").get("blocks").get(0).get("text").asString()).isEqualTo("Hello from the model");
     }
 
     // ─── annotated host code becomes safe AI tools ────────────────────────────────────────────────────────
@@ -834,7 +836,8 @@ class HostApplicationIT {
                 Thread.sleep(100);
             }
         }
-        assertThat(transcript).contains("[EMAIL]").contains("[CREDIT_CARD]").contains("[EMPLOYEE_ID]")
+        assertThat(transcript).contains("[redacted email]").contains("[redacted credit card]")
+                .contains("[redacted other]")
                 .doesNotContain("jane.doe").doesNotContain("4111").doesNotContain("E-123456");
         // the model's chat memory is stored through the same redactor
         var jdbc = new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class));

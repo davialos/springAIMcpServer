@@ -738,6 +738,10 @@ public class AgentChatController {
         usage.put("inputTokens", result.usage().inputTokens());
         usage.put("outputTokens", result.usage().outputTokens());
         m.put("usage", usage);
+        // structured, backend-controlled view of the answer with personal data removed (LLD-06 §8.3)
+        if (result.display() != null) {
+            m.put("display", result.display().tree());
+        }
 
         return CanonicalJson.write(m);
     }

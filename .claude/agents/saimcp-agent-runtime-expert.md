@@ -26,14 +26,17 @@ ordered by `getOrder()`; say so when people expect `@Around`-style behaviour.
 
 | Order | Advisor | What it does |
 |---|---|---|
-| `HIGHEST_PRECEDENCE + 200` | `InvocationGuardAdvisor` | agent kill switch, max input chars, blocked patterns, topic allow-list, **budget pre-check** (`BudgetChecker` → `LedgerBudgetChecker` over `dai_budget` + `dai_usage_hourly`, cached) — aborts before any tool runs |
+| `HIGHEST_PRECEDENCE + 200` | `InvocationGuardAdvisor` | agent kill switch, max input chars, blocked patterns, topic allow-list, **prompt validation** (`TurnSafety`: malicious content, business scope against the catalog, host `PromptValidator`s; host floor `dynamic.ai.agent.guardrails.*` that agents can only tighten), **budget pre-check** (`BudgetChecker` → `LedgerBudgetChecker` over `dai_budget` + `dai_usage_hourly`, cached) — aborts before any tool runs |
 | `+201` | `MessageChatMemoryAdvisor` (WINDOW) / `SummaryMemoryAdvisor` (SUMMARY) | history from `ChatMemory` keyed by workspace+agent+principal+conversation hash |
 | `+202` | `KnowledgeAdvisor` | retrieves from knowledge packs (hybrid BM25 + embeddings) into the prompt, capped chars |
 | `+300` | Spring AI tool calling | the model ↔ tool loop; our `SecuredToolCallback`s run here |
 | `LOWEST - 100` | `StructuredOutputValidationAdvisor` | JSON-schema validation for `JSON_SCHEMA` agents (also on streams) |
 | `LOWEST` | `UsageMeteringAdvisor` | token usage + cost (`ModelCostCalculator` with `dai_model_price`) → `LedgerUsageSink` → `dai_usage_hourly` |
 
-4. After the turn: `TurnRecorder` (→ `dai_agent_turn`, `dai_model_call`), `ConversationRecorder` (→ redacted messages in
+4. Before the user sees it: `TurnSafety.outputGuard` redacts personal data from the answer (chunk-safe for streams),
+   enforces `maxOutputChars`, renders the structured response; with prompt redaction on, PII is removed **before** the
+   provider and memory see the prompt (F-76, LLD-06 §8).
+5. After the turn: `TurnRecorder` (→ `dai_agent_turn`, `dai_model_call`), `ConversationRecorder` (→ redacted messages in
    `dai_conversation_message` via a bounded async writer), observations `dai.agent.turn` with Spring AI's own client
    spans nested.
 
@@ -74,4 +77,4 @@ ordered by `getOrder()`; say so when people expect `@Around`-style behaviour.
 `ai/runtime/DefaultAgentInvoker.java`, `ai/advisor/*`, `ai/knowledge/*`, `webmvc/endpoint/AgentChatController.java`,
 `autoconfigure/DaiAiAutoConfiguration.java`, `autoconfigure/ResilientChatModel.java`, `autoconfigure/ProviderBreaker.java`,
 `autoconfigure/DefaultModelRouter.java`, `autoconfigure/LedgerBudgetChecker.java`, `autoconfigure/LedgerUsageSink.java`,
-`autoconfigure/StoreChatMemoryRepository.java`, `autoconfigure/MessageRedactor.java`; LLD-06, LLD-13, LLD-14, ADR-0022.
+`autoconfigure/StoreChatMemoryRepository.java`, `autoconfigure/MessageRedactor.java`, `ai/safety/TurnSafety.java`; LLD-06, LLD-13, LLD-14, ADR-0022.

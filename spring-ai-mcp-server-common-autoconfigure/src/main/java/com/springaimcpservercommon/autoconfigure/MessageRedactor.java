@@ -1,11 +1,10 @@
 package com.springaimcpservercommon.autoconfigure;
 
-import com.springaimcpservercommon.core.lint.PiiDetector;
+import com.springaimcpservercommon.core.guard.PiiRedactor;
 import com.springaimcpservercommon.core.lint.SecretScanner;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -14,8 +13,9 @@ import java.util.Objects;
  * <p>A message that contains a credential (private key, cloud or API token, JWT, URL with credentials, password
  * assignment; the {@link SecretScanner} defaults) is <em>replaced</em> by a placeholder and flagged
  * {@code redacted}, because masking only the matched part of free text is not reliable; the credential never
- * reaches the store. Personal data found by the {@link PiiDetector} is masked (each match replaced by its label,
- * for example {@code [EMAIL]}) or the whole message is replaced, per {@link DaiPiiProperties.Mode} (F-76, OQ-44).
+ * reaches the store. Personal data found by the {@link ConversationPii} policy (the guardrails' {@link PiiRedactor},
+ * F-76) is masked (each match replaced by its typed placeholder, for example {@code [redacted email]}) or the whole
+ * message is replaced, per {@link DaiPiiProperties.Mode} (OQ-44).
  * Longer messages are cut at the storage limit.
  */
 @NullMarked
@@ -39,16 +39,14 @@ final class MessageRedactor {
 
     private final SecretScanner scanner;
     private final int maxChars;
-    private final PiiDetector pii;
-    private final DaiPiiProperties.Mode piiMode;
+    private final ConversationPii pii;
 
     MessageRedactor(SecretScanner scanner, int maxChars) {
-        this(scanner, maxChars, PiiDetector.NONE, DaiPiiProperties.Mode.OFF);
+        this(scanner, maxChars, ConversationPii.off());
     }
 
-    MessageRedactor(SecretScanner scanner, int maxChars, PiiDetector pii, DaiPiiProperties.Mode piiMode) {
+    MessageRedactor(SecretScanner scanner, int maxChars, ConversationPii pii) {
         this.pii = Objects.requireNonNull(pii, "pii");
-        this.piiMode = Objects.requireNonNull(piiMode, "piiMode");
         this.scanner = Objects.requireNonNull(scanner, "scanner");
         if (maxChars < 100) {
             throw new IllegalArgumentException("maxChars must be at least 100");
@@ -67,26 +65,22 @@ final class MessageRedactor {
             return new Redacted(REMOVED, true);
         }
         boolean masked = false;
-        if (piiMode != DaiPiiProperties.Mode.OFF) {
-            List<PiiDetector.Match> matches;
-            try {
-                matches = pii.find(text);
-            } catch (RuntimeException e) {
-                // a detector that fails must not let personal data through: keep nothing of this message
-                return new Redacted(REMOVED_PII, true);
-            }
-            if (!matches.isEmpty()) {
-                if (piiMode == DaiPiiProperties.Mode.REMOVE) {
+        PiiRedactor redactor = pii.redactor();
+        if (redactor != null) {
+            if (pii.mode() == DaiPiiProperties.Mode.REMOVE) {
+                // containsPii is true when a detector fails: never let unchecked text through
+                if (redactor.containsPii(text)) {
                     return new Redacted(REMOVED_PII, true);
                 }
-                StringBuilder out = new StringBuilder(text.length());
-                int from = 0;
-                for (PiiDetector.Match m : matches) {
-                    out.append(text, from, m.start()).append('[').append(m.label()).append(']');
-                    from = m.end();
+            } else {
+                PiiRedactor.Redaction r = redactor.redact(text);
+                if (r.withheld()) {
+                    return new Redacted(REMOVED_PII, true); // a detector failed: keep nothing of this message
                 }
-                text = out.append(text, from, text.length()).toString();
-                masked = true;
+                if (r.changed()) {
+                    text = r.text();
+                    masked = true;
+                }
             }
         }
         if (text.length() > maxChars) {

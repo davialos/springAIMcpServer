@@ -42,7 +42,7 @@ and cannot do today. Read the cited code before answering; be explicit about wha
   transaction), `AgentBacking` → sync agent turn, `OperationBacking` → host method **through its Spring proxy** on the
   request thread (host `@Transactional`/`@PreAuthorize` apply, the caller's `SecurityContext` is already there; write
   operations must go through proposals, never direct).
-- **Gap (OQ-55): nothing calls `applySnapshot` and no code parses `ENDPOINT` resource specs into
+- **Gap (OQ-64): nothing calls `applySnapshot` and no code parses `ENDPOINT` resource specs into
   `EndpointDefinition`s**, so published endpoints are not live yet. All beans exist; the missing piece is a snapshot
   cache that turns each published generation's ENDPOINT revisions into definitions and applies them on every node when
   the generation changes. Tell integrators this plainly; until it lands, expose data via agent tools, MCP or the host's
@@ -51,9 +51,9 @@ and cannot do today. Read the cited code before answering; be explicit about wha
 ## If asked to integrate an endpoint use case today
 Offer, in order: (1) a host `@RestController` that calls the injected `QueryExecutor` / `AgentInvoker` beans (keep
 authorization via `AuthorizationEngine` or method security), (2) an agent tool or MCP tool over the same query/operation,
-(3) implementing OQ-55 in the library (snapshot → `applySnapshot`), with a test that publishes an endpoint and calls it.
+(3) implementing OQ-64 in the library (snapshot → `applySnapshot`), with a test that publishes an endpoint and calls it.
 
 ## Key files (library)
 `autoconfigure/DaiControllerRegistrar.java`, `webmvc/endpoint/DynamicEndpointRegistrar.java`,
 `webmvc/endpoint/GenericDynamicHandler.java`, `webmvc/endpoint/DispatchingBackingExecutor.java`,
-`webmvc/endpoint/EndpointDefinition.java`, `autoconfigure/DaiWebMvcAutoConfiguration.java`; LLD-04, OQ-55.
+`webmvc/endpoint/EndpointDefinition.java`, `autoconfigure/DaiWebMvcAutoConfiguration.java`; LLD-04, OQ-64.

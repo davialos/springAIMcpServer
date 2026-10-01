@@ -64,4 +64,34 @@ public final class SecretScanner {
         }
         return Optional.empty();
     }
+
+    /**
+     * Where a secret was found: the pattern name and the character range, never the matched text.
+     *
+     * @param name  pattern name
+     * @param start index of the first character (inclusive)
+     * @param end   index after the last character (exclusive)
+     */
+    public record SecretSpan(String name, int start, int end) {
+    }
+
+    /**
+     * Finds every secret-looking range so a caller can mask it in place (the PII redactor uses this for
+     * credentials, F-76).
+     *
+     * @param text text to check
+     * @return ranges in pattern order, possibly overlapping
+     */
+    public List<SecretSpan> findAll(String text) {
+        List<SecretSpan> spans = new ArrayList<>();
+        for (NamedPattern p : patterns) {
+            var m = p.pattern().matcher(text);
+            while (m.find()) {
+                if (m.end() > m.start()) {
+                    spans.add(new SecretSpan(p.name(), m.start(), m.end()));
+                }
+            }
+        }
+        return List.copyOf(spans);
+    }
 }

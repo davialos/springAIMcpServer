@@ -2,6 +2,7 @@ package com.springaimcpservercommon.ai.advisor;
 
 import com.springaimcpservercommon.ai.agent.AgentDefinition;
 import com.springaimcpservercommon.ai.agent.GuardrailSpec;
+import com.springaimcpservercommon.ai.safety.TurnSafety;
 import com.springaimcpservercommon.core.principal.DaiPrincipal;
 import org.jspecify.annotations.NullMarked;
 import org.slf4j.Logger;
@@ -36,6 +37,8 @@ import java.util.regex.Pattern;
  *   <li>Input size: rejects prompts exceeding {@link GuardrailSpec#maxInputChars()}.</li>
  *   <li>Input blocked patterns: rejects if the user input matches any {@link GuardrailSpec#blockedPatterns()}.</li>
  *   <li>Topic allowlist: when non-empty, rejects if the input does not mention any allowed topic.</li>
+ *   <li>Prompt validation ({@link TurnSafety#validatePrompt}): malicious content and business scope against the
+ *       effective catalog, plus host {@code PromptValidator}s (F-76).</li>
  *   <li>Budget pre-check: delegates to the {@link BudgetChecker} port.</li>
  * </ol>
  *
@@ -85,9 +88,22 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
     private final DaiPrincipal principal;
     private final KillSwitchChecker killSwitchChecker;
     private final BudgetChecker budgetChecker;
+    private final TurnSafety turnSafety;
 
     /**
-     * Creates the advisor for a specific agent turn.
+     * Advisor-context key under which the invoker passes the prompt as typed, so that validation judges the user's
+     * words even when the message sent to the model has had personal data redacted.
+     */
+    public static final String RAW_INPUT_KEY = "dai.rawUserInput";
+
+    /**
+     * Advisor-context key the streaming path sets when it has already run {@link #check} itself (it must answer with
+     * an error event before the stream opens), so validators are not run a second time for the same prompt.
+     */
+    public static final String PRECHECKED_KEY = "dai.inputPrechecked";
+
+    /**
+     * Creates the advisor for a specific agent turn, without prompt validation.
      *
      * @param agent             the agent definition governing this turn
      * @param principal         the calling principal
@@ -96,10 +112,26 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
      */
     public InvocationGuardAdvisor(AgentDefinition agent, DaiPrincipal principal,
                                    KillSwitchChecker killSwitchChecker, BudgetChecker budgetChecker) {
+        this(agent, principal, killSwitchChecker, budgetChecker, TurnSafety.disabled());
+    }
+
+    /**
+     * Creates the advisor for a specific agent turn.
+     *
+     * @param agent             the agent definition governing this turn
+     * @param principal         the calling principal
+     * @param killSwitchChecker checks whether the agent is currently enabled
+     * @param budgetChecker     budget pre-check port
+     * @param turnSafety        prompt validation (F-76)
+     */
+    public InvocationGuardAdvisor(AgentDefinition agent, DaiPrincipal principal,
+                                   KillSwitchChecker killSwitchChecker, BudgetChecker budgetChecker,
+                                   TurnSafety turnSafety) {
         this.agent = Objects.requireNonNull(agent, "agent");
         this.principal = Objects.requireNonNull(principal, "principal");
         this.killSwitchChecker = Objects.requireNonNull(killSwitchChecker, "killSwitchChecker");
         this.budgetChecker = Objects.requireNonNull(budgetChecker, "budgetChecker");
+        this.turnSafety = Objects.requireNonNull(turnSafety, "turnSafety");
     }
 
     @Override
@@ -122,7 +154,7 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
 
     /**
      * Runs the pre-turn checks that depend only on the agent, the caller and the user's input: kill switch, input
-     * size, blocked patterns and topic allow-list. Shared by the call advisor and the streaming path, which does not
+     * size, blocked patterns, topic allow-list and prompt validation. Shared by the call advisor and the streaming path, which does not
      * pass through call advisors (LLD-06 §4).
      *
      * @param userInput the user's message
@@ -161,6 +193,10 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
                         "I can only help with: " + String.join(", ", g.topicAllowList()) + "."));
             }
         }
+        TurnSafety.Rejection rejection = turnSafety.validatePrompt(agent, principal, userInput);
+        if (rejection != null) {
+            return Optional.of(new Violation(rejection.code(), rejection.message()));
+        }
         return Optional.empty();
     }
 
@@ -185,6 +221,9 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
 
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        if (Boolean.TRUE.equals(request.context().get(PRECHECKED_KEY))) {
+            return chain.nextCall(request);
+        }
         Optional<Violation> violation = check(extractUserInput(request));
         if (violation.isPresent()) {
             return blocked(request, violation.get().code(), violation.get().message());
@@ -194,6 +233,9 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
 
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        if (Boolean.TRUE.equals(request.context().get(PRECHECKED_KEY))) {
+            return chain.nextStream(request);
+        }
         Optional<Violation> violation = check(extractUserInput(request));
         if (violation.isPresent()) {
             return Flux.just(blocked(request, violation.get().code(), violation.get().message()));
@@ -202,6 +244,9 @@ public final class InvocationGuardAdvisor implements CallAdvisor, StreamAdvisor 
     }
 
     private static String extractUserInput(ChatClientRequest request) {
+        if (request.context().get(RAW_INPUT_KEY) instanceof String raw) {
+            return raw;
+        }
         String user = request.prompt().getUserMessage().getText();
         return user != null ? user : "";
     }

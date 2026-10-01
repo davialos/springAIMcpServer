@@ -190,7 +190,7 @@ requirements · status. "Written/read by" names the store method and the entry p
 - **Purpose**: records which host entities/attributes/operations a revision depends on and their signature hash
   at authoring time, so a later host deploy that changes them is detected (catalog drift).
 - **Status**: **never written.** `ConfigStore#replaceReferences` (`:204`) has no caller, so `#references` (`:247`)
-  and `#pinned` (`:764`) always read an empty table. Tracked as **OQ-54** (§7).
+  and `#pinned` (`:764`) always read an empty table. Tracked as **OQ-63** (§7).
 - **Features / requirements**: F-14, LLD-03 §6.
 
 #### `dai_snapshot`, `dai_snapshot_entry` — published generations ✅
@@ -467,7 +467,7 @@ Flows (rows) × tables. `·` = not touched. Partitioned telemetry/audit tables a
 | Feature | Tables | Status |
 |---|---|---|
 | F-01 drop-in starter, F-75 environments | environment | ✅ |
-| F-14 catalog drift detection | revision_reference | ○ (OQ-54) |
+| F-14 catalog drift detection | revision_reference | ○ (OQ-63) |
 | F-16 AI write guard | tool_invocation, audit_event | ✅ |
 | F-20…F-27 dynamic endpoints | resource, resource_revision, snapshot(_entry), grant, change_proposal* (F-27) | ✅ |
 | F-40…F-46 agents, playground, memory | resource*, agent_turn, model_call, tool_invocation, conversation(_message), chat_memory_message | ✅ |
@@ -505,7 +505,7 @@ ADR-0022), F-49 routing, F-53 web components.
 
 | # | Finding | Evidence | Suggested next step |
 |---|---|---|---|
-| 1 | **Drift pins are never recorded** — `dai_revision_reference` is empty, so F-14 cannot work. | `ConfigStore#replaceReferences` (`persistence/config/ConfigStore.java:204`) has no caller; `#references`/`#pinned` only read | OQ-54 (added): record pins on draft create/edit, then build the drift report |
+| 1 | **Drift pins are never recorded** — `dai_revision_reference` is empty, so F-14 cannot work. | `ConfigStore#replaceReferences` (`persistence/config/ConfigStore.java:204`) has no caller; `#references`/`#pinned` only read | OQ-63 (added): record pins on draft create/edit, then build the drift report |
 | 2 | **Audit evidence mode is a store without wiring** — three tables and `EvidenceStore` are unreachable. | No bean for `EvidenceStore` in `autoconfigure`; only `EvidenceStoreIT` uses it | Keep deferred (OQ-27); wire it when a regulated workspace needs it |
 | 3 | **`dai_mcp_session` is never written** (stateless MCP only). | `TelemetryStore#openMcpSession` (`:119`) has no caller | Expected until stateful MCP exists (OQ-22, OQ-49); the FK from proposals stays NULL |
 | 4 | **`dai_job_run` is write-only** — operators cannot see maintenance outcomes through the API. | Only `PartitionMaintenance#finish` writes; no reader | OQ-46: expose runs in the cluster admin API |

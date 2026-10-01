@@ -49,7 +49,7 @@ Classification order: PUBLIC < INTERNAL < CONFIDENTIAL < RESTRICTED; a caller on
 6. `PolicyMerger` produces the immutable `EffectiveCatalog` (generation, scan + policy fingerprints, entities,
    operations, issues). Merge rules: `enabled` is a logical AND (any layer can disable, none re-enables); limits take
    the minimum; classification only tightens. Layers modelled: CODE, FILE, OVERLAY, KILL_SWITCH — **today the bootstrap
-   merges the CODE layer only** (policy-file and dashboard overlays are designed, not wired); kill switches are enforced
+   merges the CODE layer only** (policy-file and dashboard overlays are designed, not wired — OQ-54); kill switches are enforced
    at request time by the authorization engine instead.
 7. `SwappableMetadataRegistry.publish(effective)` swaps an `AtomicReference`: readers (`registry.current()`) never lock
    and always see one consistent generation. Published queries carry the catalog fingerprint they were validated

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>spring-ai-mcp-server-common-jfr-analyzer</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: JFR Analyzer</name>
+    <description>Command-line analyzer for Java Flight Recorder (.jfr) files: CPU hot spots, allocation, heap, GC and
+        thread blocking, attributed to methods in the packages you name. Writes an HTML and a JSON report.
+        A developer tool: not part of the starter and not managed by the BOM.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.jfranalyzer</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <!--
+          Only for core.json.CanonicalJson, the single JSON writer (ADR-0020). CanonicalJson itself needs nothing but
+          the JDK at run time, so the analyzer runs with just this jar and the core jar on the class path
+          (scripts/jfr-analyze.sh). Everything else uses the JDK's own jdk.jfr.consumer API.
+        -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-core</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.springaimcpservercommon.jfranalyzer.JfrAnalyzerCli</mainClass>
+                        </manifest>
+                        <manifestEntries>
+                            <Automatic-Module-Name>${automatic.module.name}</Automatic-Module-Name>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -277,5 +277,7 @@ class HostApplicationIT {
 
         var answer = call("POST", "/dynamic-ai/api/agents/helper/chat", "alice", Map.of("message", "hi"), 200);
         assertThat(answer.toString()).contains("Hello from the model");
+        // the structured, PII-free display tree rides along with the text answer (F-76)
+        assertThat(answer.get("display").get("blocks").get(0).get("text").asString()).isEqualTo("Hello from the model");
     }
 }

@@ -10,8 +10,10 @@
 
 ## 1. Purpose & responsibilities
 Point it at a Spring Boot project; it produces a runnable Grafana k6 suite for that project's REST APIs:
-- **discovers** the operations (Java sources, OpenAPI 3, `/actuator/mappings`), their parameters and request
-  bodies with validation constraints, and the project's JPA entities;
+- **discovers** the operations (Java sources, OpenAPI 3, `/actuator/mappings`, browser recordings in HAR
+  format), their parameters and request bodies with validation constraints, and the project's JPA entities;
+- **learns from a browser recording** (Chrome/Edge DevTools ▸ Network ▸ Export HAR): the API calls a person
+  actually made, the values they sent, and the order — replayable as a correlated journey;
 - **plans the data** of every request field: semantic kind (email, firstName, price, id …), constraints, the
   database column holding real values for it, and user-supplied values;
 - **collects real data**: samples the bound columns from the database, harvests values from the running API's
@@ -27,9 +29,11 @@ at runtime (the module is never on a host's classpath).
 ```
   project dir ──► SpringSourceScanner ─┐          ┌──► DataPlan (FieldPlan per field: kind, pool)
   OpenAPI doc ──► OpenApiReader ───────┼► Catalog ┤
-  /actuator   ──► ActuatorMappings ────┘  Merger  └──► RealDataCollector ◄── DatabaseSampler (JDBC, read-only)
+  HAR file    ──► HarReader ───────────┤  Merger  │
+  /actuator   ──► ActuatorMappings ────┘          └──► RealDataCollector ◄── DatabaseSampler (JDBC, read-only)
                                                           │               ◄── ApiHarvester (GET collections)
   user values (json/csv/--value/--interactive) ──────────┤
+  HAR observations ──► RecordedTraffic (recorded values, journey) ──┤
                                                           ▼
                                           K6SuiteGenerator ──► suite/ (k6 project) ──► K6Runner ──► k6
 ```
@@ -48,6 +52,7 @@ at runtime (the module is never on a host's classpath).
 | `data/user.json` | team | merged — new values appended |
 | `data/real.json` | generator | pools re-sampled; pools not re-sampled this time are kept |
 | `data/plan.json`, `README.md`, `run.sh` | generator | yes |
+| `data/journey.json` | generator | replaced when generated with `--har`, otherwise kept |
 | `hooks.js` | team | never (created once) |
 
 - Field keys (one scheme for plan, JS and user data; `data.FieldKeys`): `<apiId>.path|query|header.<name>`,
@@ -79,6 +84,21 @@ Jackson (`@JsonProperty`, `@JsonIgnore`, READ_ONLY, `@JsonNaming`, global SNAKE_
 (example, allowableValues, required). (5) Merge by `METHOD + path with anonymised variables`; filters
 (Ant patterns, `METHOD pattern`, or an id) and default excludes.
 
+**Browser recordings (HAR).** `HarReader` keeps API calls only (`_resourceType` fetch/xhr, or JSON
+request/response for exporters without types), drops documents/scripts/styles/images/fonts, CORS preflights,
+non-HTTP schemes and non-JSON bodies, and keeps the most-called host (`--har-host` to choose). URLs become
+templates: a known template from sources/OpenAPI first, then id-like segments (numbers, UUIDs, ≥16-hex, opaque
+ids), then digit-bearing segments that differ between otherwise identical calls; variables are named after the
+preceding collection (`/orders/9001` → `/orders/{orderId}`). Parameter and body schemas are inferred from the
+values sent (`SchemaInference`: types and formats only). Precedence in the merge: OpenAPI > sources > HAR >
+actuator. `RecordedTraffic` then maps every successful call (status < 400) onto the merged catalog: recorded
+values of planned, non-sensitive fields become user data under the plan's keys; whole bodies without sensitive
+fields become payloads; the sequence becomes `data/journey.json` — per step the API, recorded path/query/custom
+headers/body, `fill` (sensitive body paths removed, generated at replay), the pause before it, and
+**correlations**: an id-like value (key `id`, `…Id`, `…uuid`, `sku`, `…number`, `…code`, `slug`, `ref`) sent by
+a step that an earlier response returned becomes `{"$from": step, "at": "content.0.id", "alt": [...],
+"recorded": v}` — the latest response first, up to three earlier ones as fallbacks, the recorded value last.
+
 **Data plan.** Kind = format → enum → name heuristics → type. Real-data binding (`RealDataBinder`), cautious:
 explicit bindings first; then identifiers (`{id}` → PK of the collection before it, `customerId` → PK of
 `customer(s)`), natural keys (`productSku` → `product.sku` when `sku` is Product's `@Id`), query filters of
@@ -101,7 +121,11 @@ iteration suffix.
 
 **Modes.** Profiles in `loadtest.config.json → modes`: `smoke` (1 VU, 3 iterations of every API), `load`,
 `stress` (1×–4× base VUs in steps), `spike` (10× within 10 s), `soak` (1 h), `breakpoint` (arrival rate ramp,
-abort on first failed threshold). Per-API form runs one scenario per API in turn (isolates the API that
+abort on first failed threshold). Journey form `journey-<profile>` runs one scenario whose iteration replays
+the whole recording: in `auto`/`user` data mode with the recorded values (sensitive fields generated), in other
+data modes with generated values; pauses are scaled/capped by `journey.pauseScale`/`maxPauseMs`; correlations
+apply in every data mode; steps of disabled APIs (DELETE by default) are skipped; `journey-preview` prints the
+steps. Per-API form runs one scenario per API in turn (isolates the API that
 degrades; `PER_API=parallel` overlaps them); `mixed-<profile>` runs one scenario choosing an API per iteration
 by weight (GET 6, POST 2, PUT/PATCH 1, DELETE 0 by default). `preview` builds and prints requests without
 sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
@@ -126,6 +150,11 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 - Secrets only from the environment (`AUTH_TOKEN`, `AUTH_USER`/`AUTH_PASSWORD`, `API_KEY`,
   `LOADTEST_DB_PASSWORD`); the config holds `${ENV}` placeholders only. The JDBC URL is logged with any
   `password=` parameter masked.
+- HAR files carry credentials and personal data. Cookies, `Authorization`, CSRF/XSRF, API-key, session and
+  tracing headers are never read; only custom `X-…` headers are kept; sensitive body fields (same name rule) are
+  never kept as values, payloads or journey literals — the replay generates them. Other recorded values (e-mails,
+  names) are kept in `data/user.json`/`journey.json` on purpose; use `--har-no-values` (or record with test
+  accounts) when that is not acceptable. Prefer Chrome's default "Export HAR (sanitized)".
 - Dummy e-mail/web domains are RFC 2606 reserved (`example.com/.org/.net`); card numbers are public test numbers.
 - DELETE disabled by default; `READ_ONLY=true` / `safety.readOnly` restrict a run to GET/HEAD.
 
@@ -133,9 +162,10 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 CLI (generation): `--project`, `--openapi`, `--actuator`, `--include`/`--exclude`/`--no-default-excludes`,
 `--header`, `--out`, `--base-url`, `--data-mode`, `--db-url`/`--db-user`/`--db-password`/`--db-schema`/`--no-db`
 (defaults: the project's `spring.datasource.*`), `--sample-size` (200), `--harvest`, `--user-data`, `--value`,
-`--bind`, `--interactive`, `--drop-unverified`, `--auth`/`--login-path`. Suite: `loadtest.config.json`
+`--bind`, `--interactive`, `--drop-unverified`, `--auth`/`--login-path`, `--har` (repeatable), `--har-host`,
+`--har-no-values` (with a HAR and no `--base-url`, the target defaults to the recorded origin + context path). Suite: `loadtest.config.json`
 (`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `thresholds`, `defaults.p95Ms`,
-`defaults.maxErrorRate`, `perApi`, `modes`, `apis.<id>.{enabled, weight, expectedStatuses, p95Ms, maxErrorRate}`)
+`defaults.maxErrorRate`, `perApi`, `journey.{pauseScale, maxPauseMs}`, `modes`, `apis.<id>.{enabled, weight, expectedStatuses, p95Ms, maxErrorRate}`)
 and env (`MODE`, `DATA_MODE`, `BASE_URL`, `API`, `VUS`, `RATE`, `DURATION_SCALE`, `PER_API`, `READ_ONLY`,
 `ALLOW_PROD`, `PREVIEW_COUNT`).
 
@@ -151,7 +181,9 @@ Generation is offline and linear in source size. At run time pools and user valu
 to exhaust); regex patterns are parsed once per VU and cached.
 
 ## 11. Limits / follow-ups
-Multipart and form bodies are skipped; Kotlin sources are not scanned (use `--openapi`/`--actuator`);
+Multipart and form bodies are skipped (also in recordings); recorded GraphQL calls become a single
+`POST /graphql` operation (no per-query split); correlation does not cover values returned in response
+headers (e.g. `Location`) or tokens reused in `Authorization` (configure `auth.type=login` instead); Kotlin sources are not scanned (use `--openapi`/`--actuator`);
 polymorphic DTOs (interfaces/abstract classes) become free-form objects; request chaining (create → read the
 created id) is a `hooks.js` recipe rather than generated; MySQL/SQL Server/Oracle sampling needs the driver on
 `LOADTEST_CLASSPATH` (only PostgreSQL is tested).

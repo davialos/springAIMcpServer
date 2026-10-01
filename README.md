@@ -43,10 +43,12 @@ See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency
 mappings), generates a k6 suite with a data provider per API and per request DTO — dummy, random, real
 (sampled from and checked against the project's database, or harvested from the running API) and
 user-supplied values — and runs it in smoke, load, stress, spike, soak or breakpoint mode, per API or as a
-weighted mix of all APIs (`mixed-spike`, `mixed-stress`, …).
+weighted mix of all APIs (`mixed-spike`, `mixed-stress`, …), or as replays of a browser recording exported
+from DevTools' Network tab (`journey-spike`, …), with ids correlated from call to call.
 
 ```
 scripts/loadtest.sh generate --project ../my-service              # writes ../my-service/load-tests
+scripts/loadtest.sh generate --project ../my-service --har checkout.har   # + a recorded browser flow (DevTools ▸ Export HAR)
 cd ../my-service/load-tests && ./run.sh smoke                      # then: ./run.sh mixed-spike mixed
 ```
 

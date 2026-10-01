@@ -30,8 +30,9 @@ PROD").
   it never runs inside it. Dependencies: Jackson 3 (+ YAML), the PostgreSQL driver — all already vendored.
 - Source discovery uses the JDK's own compiler tree API (`jdk.compiler`) instead of a parser library: no new
   dependency, and the target project does not need to compile on our classpath.
-- Discovery precedence: OpenAPI (the published contract) > Java sources (constraints, entities) > actuator
-  mappings (live routes, including this library's runtime-registered dynamic endpoints, LLD-04).
+- Discovery precedence: OpenAPI (the published contract) > Java sources (constraints, entities) > browser
+  recordings (HAR: observed shapes, values and call order) > actuator mappings (live routes, including this
+  library's runtime-registered dynamic endpoints, LLD-04).
 - **Division of ownership (one owner per fact):** Java decides *what* a field is (its semantic kind, its
   constraints, its real-data column) and writes it into the generated code; the suite's `lib/dummy.js` /
   `lib/random.js` decide *how* a value of that kind is produced at run time, so every request gets fresh

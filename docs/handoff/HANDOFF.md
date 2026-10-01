@@ -61,8 +61,8 @@ False alarm worth knowing: `ChatClient.tools(ToolCallback[])` and `toolCallbacks
    exfiltration filtering, per-workspace redaction policy, authoring-time template validation, a NER detector for names.
 
 **Smaller / known limits**
-- Load-test generator (LLD-16 §11): multipart bodies skipped, Kotlin sources not scanned, request chaining is a
-  `hooks.js` recipe; its k6 end-to-end tests skip unless a `k6` binary is on `PATH`/`K6_BIN`.
+- Load-test generator (LLD-16 §11): multipart bodies skipped, Kotlin sources not scanned; request chaining is
+  automatic only for recorded journeys (`--har`), otherwise a `hooks.js` recipe; its k6 end-to-end tests skip unless a `k6` binary is on `PATH`/`K6_BIN`.
 - Tool-call messages are not remembered across turns (OQ-45); breaker state has no admin metric beyond
   `GET /dynamic-ai/admin/api/v1/model-providers`; no same-provider retry with backoff (OQ-47).
 - Maintenance: audit/telemetry retention beyond partition drop, MCP idle-session sweep (moot until stateful MCP),

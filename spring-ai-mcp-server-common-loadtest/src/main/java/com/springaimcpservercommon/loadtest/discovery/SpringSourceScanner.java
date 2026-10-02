@@ -18,12 +18,14 @@ import com.sun.source.tree.AnnotationTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ModifiersTree;
+import com.sun.source.tree.ParameterizedTypeTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.VariableTree;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -84,66 +86,227 @@ public final class SpringSourceScanner {
         SourceTrees trees = SourceTrees.parse(files);
         TypeMapper mapper = new TypeMapper(trees, settings.snakeCaseJson());
         List<EntityTable> entities = new JpaEntityScanner(trees).scan();
+        Context ctx = new Context(trees, mapper, entities, settings, stereotypes(trees), composedMappings(trees));
         Map<String, ApiEndpoint> endpoints = new LinkedHashMap<>();
         for (SourceTrees.TypeDecl decl : trees.types()) {
             ClassTree ct = decl.tree();
-            if (isController(ct)) {
-                for (ApiEndpoint e : controller(ct, trees, mapper, entities)) {
-                    endpoints.putIfAbsent(e.routeKey(), e); // interface + implementation: first wins
+            if (isController(ct, ctx)) {
+                for (ApiEndpoint e : controller(ct, ctx)) {
+                    endpoints.putIfAbsent(e.routeKey(), e); // first declaration wins
+                }
+            }
+        }
+        int mvc = endpoints.size();
+        for (ApiEndpoint e : new FunctionalRouteScanner(trees, settings).scan()) {
+            endpoints.putIfAbsent(e.routeKey(), e);
+        }
+        int functional = endpoints.size() - mvc;
+        int dataRest = 0;
+        if (ProjectFiles.declares(projectDir, "spring-boot-starter-data-rest")
+                || ProjectFiles.declares(projectDir, "spring-data-rest-webmvc")) {
+            for (ApiEndpoint e : new DataRestScanner(trees, mapper, entities, settings).scan()) {
+                if (endpoints.putIfAbsent(e.routeKey(), e) == null) {
+                    dataRest++;
                 }
             }
         }
         Path fileName = projectDir.toAbsolutePath().normalize().getFileName();
         String project = fileName == null ? "project" : fileName.toString();
-        log.accept("source: " + files.size() + " Java files, " + endpoints.size() + " operations, "
+        log.accept("source: " + files.size() + " Java files, " + endpoints.size() + " operations ("
+                + mvc + " controller, " + functional + " functional route, " + dataRest + " Spring Data REST), "
                 + entities.size() + " JPA entities");
         return new ApiCatalog(project, settings.contextPath(), new ArrayList<>(endpoints.values()),
                 mapper.schemas(), entities);
     }
 
-    private static boolean isController(ClassTree ct) {
+    /**
+     * OpenAPI documents bundled with a project (API-first projects generate their controllers from them).
+     *
+     * @param projectDir project root
+     * @return spec files
+     */
+    public static List<Path> bundledOpenApiSpecs(Path projectDir) {
+        return ProjectFiles.openApiSpecs(projectDir);
+    }
+
+    /** Everything a scan needs, shared by the helpers. */
+    private record Context(SourceTrees trees, TypeMapper mapper, List<EntityTable> entities,
+                           ProjectSettings settings, Set<String> stereotypes,
+                           Map<String, List<String>> composedMappings) {
+    }
+
+    private static final Set<String> MVC_MAPPINGS = Set.of("GetMapping", "PostMapping", "PutMapping",
+            "PatchMapping", "DeleteMapping", "RequestMapping");
+    private static final Map<String, HttpMethod> EXCHANGE_SHORTCUTS = Map.of(
+            "GetExchange", HttpMethod.GET, "PostExchange", HttpMethod.POST, "PutExchange", HttpMethod.PUT,
+            "PatchExchange", HttpMethod.PATCH, "DeleteExchange", HttpMethod.DELETE);
+
+    /**
+     * Controller stereotypes: {@code @RestController}, {@code @Controller} and every annotation of the project
+     * that is (transitively) meta-annotated with one of them, e.g. a team's own {@code @ApiController}.
+     */
+    private static Set<String> stereotypes(SourceTrees trees) {
+        Set<String> out = new HashSet<>(Set.of("RestController", "Controller"));
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (SourceTrees.TypeDecl d : trees.types()) {
+                if (d.tree().getKind() == Tree.Kind.ANNOTATION_TYPE && !out.contains(d.simpleName())
+                        && d.tree().getModifiers().getAnnotations().stream()
+                        .anyMatch(a -> out.contains(SourceTrees.simpleName(a)))) {
+                    out.add(d.simpleName());
+                    changed = true;
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Base paths contributed by composed annotations that carry {@code @RequestMapping}. */
+    private static Map<String, List<String>> composedMappings(SourceTrees trees) {
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        for (SourceTrees.TypeDecl d : trees.types()) {
+            if (d.tree().getKind() == Tree.Kind.ANNOTATION_TYPE) {
+                SourceTrees.annotation(d.tree().getModifiers(), "RequestMapping")
+                        .map(a -> trees.strings(a, "value", "path")).filter(l -> !l.isEmpty())
+                        .ifPresent(paths -> out.put(d.simpleName(), paths));
+            }
+        }
+        return out;
+    }
+
+    private static boolean isController(ClassTree ct, Context ctx) {
         ModifiersTree mods = ct.getModifiers();
-        if (SourceTrees.has(mods, "RestController", "Controller", "RequestMapping")) {
+        if (ct.getKind() == Tree.Kind.ANNOTATION_TYPE
+                || mods.getFlags().contains(javax.lang.model.element.Modifier.ABSTRACT)
+                && ct.getKind() == Tree.Kind.CLASS) {
+            return false; // annotations, and abstract base controllers (scanned through their subclasses)
+        }
+        if (mods.getAnnotations().stream().anyMatch(a -> ctx.stereotypes().contains(SourceTrees.simpleName(a)))
+                || (ct.getKind() == Tree.Kind.CLASS && SourceTrees.has(mods, "RequestMapping"))) {
             return true;
         }
-        // API-first interfaces (OpenAPI generator style) carry the mappings on interface methods only.
+        // API-first interfaces (OpenAPI generator style) carry Spring MVC mappings on interface methods only.
+        // (@HttpExchange interfaces are HTTP clients unless a controller implements them; see controller().)
         return ct.getKind() == Tree.Kind.INTERFACE && ct.getMembers().stream()
-                .anyMatch(m -> m instanceof MethodTree mt && mapping(mt.getModifiers()).isPresent());
+                .anyMatch(m -> m instanceof MethodTree mt && mvcMapping(mt.getModifiers()).isPresent());
+    }
+
+    private static Optional<AnnotationTree> mvcMapping(ModifiersTree mods) {
+        for (AnnotationTree a : mods.getAnnotations()) {
+            if (MVC_MAPPINGS.contains(SourceTrees.simpleName(a))) {
+                return Optional.of(a);
+            }
+        }
+        return Optional.empty();
     }
 
     private static Optional<AnnotationTree> mapping(ModifiersTree mods) {
-        return SourceTrees.annotation(mods, "GetMapping", "PostMapping", "PutMapping", "PatchMapping",
-                "DeleteMapping", "RequestMapping");
+        for (AnnotationTree a : mods.getAnnotations()) {
+            String n = SourceTrees.simpleName(a);
+            if (MVC_MAPPINGS.contains(n) || EXCHANGE_SHORTCUTS.containsKey(n) || n.equals("HttpExchange")) {
+                return Optional.of(a);
+            }
+        }
+        return Optional.empty();
     }
 
-    private List<ApiEndpoint> controller(ClassTree ct, SourceTrees trees, TypeMapper mapper,
-                                         List<EntityTable> entities) {
-        String controllerName = ct.getSimpleName().toString();
-        List<String> bases = SourceTrees.annotation(ct.getModifiers(), "RequestMapping")
-                .map(a -> trees.strings(a, "value", "path")).filter(l -> !l.isEmpty()).orElse(List.of(""));
-        String resource = resourceOf(controllerName, entities);
-        List<ApiEndpoint> out = new ArrayList<>();
+    /**
+     * Class-level base paths of a type: its own {@code @RequestMapping}/{@code @HttpExchange}, else the one
+     * carried by a composed annotation (Spring: a directly declared mapping wins over a meta-annotation).
+     * Empty when the type declares none.
+     */
+    private static List<String> classBases(ClassTree ct, Context ctx) {
+        ModifiersTree mods = ct.getModifiers();
+        Optional<AnnotationTree> own = SourceTrees.annotation(mods, "RequestMapping", "HttpExchange");
+        if (own.isPresent()) {
+            List<String> paths = ctx.trees().strings(own.get(), "value", "path", "url");
+            return paths.isEmpty() ? List.of("") : paths;
+        }
+        for (AnnotationTree a : mods.getAnnotations()) {
+            List<String> composed = ctx.composedMappings().get(SourceTrees.simpleName(a));
+            if (composed != null) {
+                return composed;
+            }
+        }
+        return List.of();
+    }
+
+    /** A mapped handler method and the type that declares it, with the generic bindings of that type. */
+    private record Declared(MethodTree method, ClassTree owner, Map<String, Tree> bindings) {
+    }
+
+    /**
+     * Mapped methods of a controller: its own, then those inherited from parsed superclasses (a generic
+     * {@code AbstractCrudController<T, ID>}) and interfaces, with type variables bound to the subtype's arguments.
+     */
+    private static List<Declared> mappedMethods(ClassTree ct, Map<String, Tree> bindings, Context ctx,
+                                                Set<String> seen) {
+        List<Declared> out = new ArrayList<>();
+        if (!seen.add(ct.getSimpleName().toString())) {
+            return out;
+        }
         for (Tree member : ct.getMembers()) {
-            if (!(member instanceof MethodTree m)) {
+            if (member instanceof MethodTree m && mapping(m.getModifiers()).isPresent()) {
+                out.add(new Declared(m, ct, bindings));
+            }
+        }
+        List<Tree> supertypes = new ArrayList<>();
+        if (ct.getExtendsClause() != null) {
+            supertypes.add(ct.getExtendsClause());
+        }
+        supertypes.addAll(ct.getImplementsClause());
+        for (Tree sup : supertypes) {
+            Optional<SourceTrees.TypeDecl> decl = ctx.trees().type(TypeMapper.simpleName(sup));
+            if (decl.isEmpty()) {
                 continue;
             }
-            Optional<AnnotationTree> mapping = mapping(m.getModifiers());
-            if (mapping.isEmpty()) {
-                continue;
+            ClassTree st = decl.get().tree();
+            Map<String, Tree> supBindings = new LinkedHashMap<>();
+            if (sup instanceof ParameterizedTypeTree pt) {
+                for (int i = 0; i < st.getTypeParameters().size() && i < pt.getTypeArguments().size(); i++) {
+                    Tree arg = pt.getTypeArguments().get(i);
+                    Tree bound = bindings.get(TypeMapper.simpleName(arg));
+                    supBindings.put(st.getTypeParameters().get(i).getName().toString(), bound != null ? bound : arg);
+                }
             }
-            AnnotationTree a = mapping.get();
+            out.addAll(mappedMethods(st, supBindings, ctx, seen));
+        }
+        return out;
+    }
+
+    private List<ApiEndpoint> controller(ClassTree ct, Context ctx) {
+        SourceTrees trees = ctx.trees();
+        String controllerName = ct.getSimpleName().toString();
+        List<String> ownBases = classBases(ct, ctx);
+        String resource = resourceOf(controllerName, ctx.entities());
+        List<ApiEndpoint> out = new ArrayList<>();
+        for (Declared d : mappedMethods(ct, Map.of(), ctx, new HashSet<>())) {
+            MethodTree m = d.method();
+            AnnotationTree a = mapping(m.getModifiers()).orElseThrow();
             String annotation = SourceTrees.simpleName(a);
-            List<HttpMethod> methods = SHORTCUTS.containsKey(annotation)
-                    ? List.of(SHORTCUTS.get(annotation))
+            boolean exchange = annotation.equals("HttpExchange") || EXCHANGE_SHORTCUTS.containsKey(annotation);
+            if (exchange && d.owner() == ct && ct.getKind() == Tree.Kind.INTERFACE) {
+                continue; // an @HttpExchange interface on its own is an HTTP client, not an endpoint
+            }
+            List<HttpMethod> methods = SHORTCUTS.containsKey(annotation) ? List.of(SHORTCUTS.get(annotation))
+                    : EXCHANGE_SHORTCUTS.containsKey(annotation) ? List.of(EXCHANGE_SHORTCUTS.get(annotation))
                     : trees.strings(a, "method").stream().map(HttpMethod::parse).toList();
             if (methods.isEmpty()) {
                 methods = List.of(HttpMethod.GET); // @RequestMapping without method: matches all, GET is the safe pick
             }
-            List<String> paths = trees.strings(a, "value", "path");
+            List<String> paths = trees.strings(a, "value", "path", "url");
             if (paths.isEmpty()) {
                 paths = List.of("");
             }
-            Handler handler = handler(m, trees, mapper, controllerName);
+            // Spring looks the class-level mapping up on the controller first, then on the declaring type.
+            List<String> bases = !ownBases.isEmpty() ? ownBases
+                    : d.owner() == ct ? List.of("") : classBases(d.owner(), ctx);
+            if (bases.isEmpty()) {
+                bases = List.of("");
+            }
+            Handler handler = ctx.mapper().withBindings(d.bindings(),
+                    () -> handler(m, trees, ctx.mapper(), controllerName));
             if (handler == null) {
                 continue;
             }
@@ -155,9 +318,10 @@ public final class SpringSourceScanner {
             for (String base : bases) {
                 for (String path : paths) {
                     for (HttpMethod method : methods) {
-                        String full = joinPath(base, path);
+                        String full = joinPath(ctx.settings().resolvePlaceholders(base),
+                                ctx.settings().resolvePlaceholders(path));
                         List<ApiParam> params = withPathConstraints(full, handler.params());
-                        Schema body = method.hasBody() ? handler.body() : null;
+                        Schema body = method.hasBody() ? wrapRoot(handler.body(), ctx) : null;
                         out.add(new ApiEndpoint(id, method, stripRegex(full), summary, List.of(controllerName),
                                 params, body, resource, Set.of("source")));
                     }
@@ -167,13 +331,32 @@ public final class SpringSourceScanner {
         return out;
     }
 
+    /**
+     * With {@code spring.jackson.deserialization.unwrap-root-value=true} Jackson expects every body wrapped in an
+     * object named by {@code @JsonRootName} (or the class name): {@code {"user": {...}}}.
+     */
+    private static @Nullable Schema wrapRoot(@Nullable Schema body, Context ctx) {
+        if (body == null || !ctx.settings().unwrapRootValue() || !(body instanceof RefSchema(String name))) {
+            return body;
+        }
+        String root = ctx.trees().type(name)
+                .flatMap(d -> SourceTrees.annotation(d.tree().getModifiers(), "JsonRootName"))
+                .flatMap(a -> ctx.trees().string(a, "value")).orElse(name);
+        return new ObjectSchema(Map.of(root, new Property(body, true, false, null)), false);
+    }
+
     /** Generic handler names get the controller's subject: {@code get} in {@code CustomerController} → {@code getCustomer}. */
     static String operationId(String method, String controller) {
         if (!GENERIC_NAMES.contains(method)) {
             return method;
         }
         String subject = controller.replaceAll("(Rest)?(Controller|Resource|Api|Endpoint)(Impl)?$", "");
-        return subject.isEmpty() ? method : method + subject;
+        if (subject.isEmpty()) {
+            return method;
+        }
+        boolean many = method.equals("list") || method.equals("all") || method.startsWith("findAll")
+                || method.equals("getAll") || method.equals("search") || method.equals("index");
+        return method + (many ? DataRestScanner.plural(subject) : subject);
     }
 
     private record Handler(List<ApiParam> params, @Nullable Schema body) {

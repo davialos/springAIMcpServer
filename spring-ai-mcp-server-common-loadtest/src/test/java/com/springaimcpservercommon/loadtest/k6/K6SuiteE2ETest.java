@@ -258,7 +258,7 @@ class K6SuiteE2ETest {
     @Test
     void perApiStressRunsOnlyTheSelectedApisAndRandomDataAccepts4xx() throws Exception {
         HITS.clear();
-        Outcome o = k6("stress", "random", Map.of("DURATION_SCALE", "0.01", "VUS", "2", "API", "getOrder,searchOrder"));
+        Outcome o = k6("stress", "random", Map.of("DURATION_SCALE", "0.01", "VUS", "2", "API", "getOrder,searchOrders"));
         assertThat(o.exit()).as(o.output()).isZero();
         assertThat(HITS.keySet()).allMatch(k -> k.contains("/orders/"));
     }

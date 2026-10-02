@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+      Maven plugin over the load-test generator's public API (ADR-0022, LLD-16): mvn loadtest:discover | generate |
+      run | compare in a Spring Boot project. Runs inside Maven's JVM, so Maven must run on JDK 25 (the generator's
+      release). Developer tool: not part of the starter or the BOM.
+    -->
+    <artifactId>spring-ai-mcp-server-common-loadtest-maven-plugin</artifactId>
+    <packaging>maven-plugin</packaging>
+    <name>springAIMcpServerCommon :: Load Test :: Maven Plugin</name>
+    <description>mvn loadtest:generate / run / compare — k6 load tests for a Spring Boot project.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.loadtest.maven</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-loadtest</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.maven</groupId>
+            <artifactId>maven-plugin-api</artifactId>
+            <version>${maven-plugin-api.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.maven.plugin-tools</groupId>
+            <artifactId>maven-plugin-annotations</artifactId>
+            <version>${maven-plugin-tools.version}</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-plugin-plugin</artifactId>
+                <version>${maven-plugin-tools.version}</version>
+                <configuration>
+                    <goalPrefix>loadtest</goalPrefix>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

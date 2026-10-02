@@ -44,13 +44,18 @@ export function uuid() {
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
-/** A Date within [-pastDays, +futureDays] of now, honouring a PAST/FUTURE constraint. */
+/**
+ * A Date within [-pastDays, +futureDays] of today, honouring a PAST/FUTURE constraint. Days count from UTC
+ * midnight and keep a two-day margin, so a PAST/FUTURE value is still past/future as a calendar date
+ * (LocalDate) whatever the time of day and the server's time zone.
+ */
 export function date(schema = {}, pastDays = 3650, futureDays = 365) {
   let from = -pastDays;
   let to = futureDays;
-  if (schema.temporal === 'PAST') to = -1;
-  if (schema.temporal === 'FUTURE') from = 1;
-  return new Date(Date.now() + int(from, to) * 86400000 + int(0, 86399) * 1000);
+  if (schema.temporal === 'PAST') to = -2;
+  if (schema.temporal === 'FUTURE') from = 2;
+  const midnight = Math.floor(Date.now() / 86400000) * 86400000;
+  return new Date(midnight + int(from, to) * 86400000 + int(0, 86399) * 1000);
 }
 
 export function isoDate(d) {

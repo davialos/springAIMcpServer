@@ -19,11 +19,15 @@ import java.util.Set;
  * @param fieldReferences Java field name → referenced entity simple name, for {@code @ManyToOne}/{@code @OneToOne}
  * @param joinColumns     Java field name → join column, for the references
  * @param sensitiveFields fields that must never be sampled (classification or name based)
+ * @param columnLengths   Java field → {@code @Column(length)} (255 when {@code @Column} gives none), strings only
+ * @param uniqueFields    fields mapped to {@code @Column(unique = true)} (generated values must not repeat)
+ * @param idGenerated     whether the id is {@code @GeneratedValue} (the server assigns it on create)
  */
 public record EntityTable(String entityName, @Nullable String schema, String table, @Nullable String idField,
                           @Nullable String idColumn, Map<String, String> fieldColumns,
                           Map<String, String> fieldReferences, Map<String, String> joinColumns,
-                          Set<String> sensitiveFields) {
+                          Set<String> sensitiveFields, Map<String, Integer> columnLengths, Set<String> uniqueFields,
+                          boolean idGenerated) {
 
     /** Compact constructor: ordered, unmodifiable copies. */
     public EntityTable {
@@ -31,6 +35,29 @@ public record EntityTable(String entityName, @Nullable String schema, String tab
         fieldReferences = Collections.unmodifiableMap(new LinkedHashMap<>(fieldReferences));
         joinColumns = Collections.unmodifiableMap(new LinkedHashMap<>(joinColumns));
         sensitiveFields = Set.copyOf(sensitiveFields);
+        columnLengths = Collections.unmodifiableMap(new LinkedHashMap<>(columnLengths));
+        uniqueFields = Set.copyOf(uniqueFields);
+    }
+
+    /**
+     * An entity without column facts (lengths, uniqueness) and with a server-generated id.
+     *
+     * @param entityName      simple class name
+     * @param schema          database schema, or {@code null}
+     * @param table           table name
+     * @param idField         id field, or {@code null}
+     * @param idColumn        id column, or {@code null}
+     * @param fieldColumns    field → column
+     * @param fieldReferences field → referenced entity
+     * @param joinColumns     field → join column
+     * @param sensitiveFields sensitive fields
+     */
+    public EntityTable(String entityName, @Nullable String schema, String table, @Nullable String idField,
+                       @Nullable String idColumn, Map<String, String> fieldColumns,
+                       Map<String, String> fieldReferences, Map<String, String> joinColumns,
+                       Set<String> sensitiveFields) {
+        this(entityName, schema, table, idField, idColumn, fieldColumns, fieldReferences, joinColumns,
+                sensitiveFields, Map.of(), Set.of(), true);
     }
 
     /**

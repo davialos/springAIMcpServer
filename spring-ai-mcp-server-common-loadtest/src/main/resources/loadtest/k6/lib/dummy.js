@@ -127,7 +127,14 @@ export function generate(kind, schema, ctx, spec) {
       if (!isFinite(v)) return R.scalar(schema);
       return R.fitNumber(v, schema);
     default: {
-      v = R.fitLength(String(v), schema);
+      v = String(v);
+      // a unique column: never send the same value twice (kinds such as email already carry a suffix)
+      if (schema.unique && ['email', 'username', 'code', 'slug', 'uuid', 'id'].indexOf(kind) < 0) {
+        const suffix = `-${uniqueSuffix()}`;
+        const max = schema.maxLength !== undefined ? schema.maxLength : Infinity;
+        v = max <= suffix.length ? uniqueSuffix().slice(0, max) : v.slice(0, Math.max(0, max - suffix.length)) + suffix;
+      }
+      v = R.fitLength(v, schema);
       if (schema.pattern) {
         try {
           if (!new RegExp(schema.pattern).test(v)) {

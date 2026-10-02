@@ -34,22 +34,29 @@ See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency
 | `-webmvc` | Dynamic endpoints, admin API, SSE streaming |
 | `-autoconfigure` | Spring Boot auto-configuration |
 | `-spring-boot-starter` | The one dependency hosts add |
-| `-loadtest` | Developer tool (not in the starter): generates Grafana k6 load tests for any Spring Boot project |
-| `-jfr-analyzer` | Developer tool, not shipped to hosts: JFR recording → HTML, JSON, Excel dashboard and shareable summary (`scripts/jfr-analyze.sh`, [docs](docs/tools/jfr-analyzer.md)) |
+| `-loadtest` | Developer tool (not in the starter): generates Grafana k6 load tests for any Spring Boot project; public Java API |
+| `-loadtest-maven-plugin`, `-loadtest-junit`, `-loadtest-mcp` | Load-test integrations: `mvn loadtest:*`, `@K6LoadTest` for JUnit 5, MCP server for coding agents (`scripts/loadtest-mcp.sh`) |
+| `-jfr-analyzer` | Developer tool, not shipped to hosts: JFR recording → HTML + JSON hot-spot report (`scripts/jfr-analyze.sh`, [docs](docs/tools/jfr-analyzer.md)) |
 
 ## Load testing any Spring Boot project (k6)
 
-`spring-ai-mcp-server-common-loadtest` discovers a project's REST APIs (Java sources, OpenAPI, actuator
-mappings), generates a k6 suite with a data provider per API and per request DTO — dummy, random, real
-(sampled from and checked against the project's database, or harvested from the running API) and
-user-supplied values — and runs it in smoke, load, stress, spike, soak or breakpoint mode, per API or as a
+`spring-ai-mcp-server-common-loadtest` discovers a Spring project's REST APIs (every controller style,
+functional routes, Spring Data REST, OpenAPI, actuator mappings), builds payloads from the entity/table
+relationships (JPA, database foreign keys, or Flyway/`schema.sql` DDL), seeds test data through the
+application's own create endpoints parents-first, generates a k6 suite with a data provider per API and per
+request DTO — dummy, random, real (sampled from and checked against the project's database, created by
+seeding, or harvested from the running API) and user-supplied values — and runs it in smoke, load, stress, spike, soak or breakpoint mode, per API or as a
 weighted mix of all APIs (`mixed-spike`, `mixed-stress`, …), or as replays of a browser recording exported
-from DevTools' Network tab (`journey-spike`, …), with ids correlated from call to call.
+from DevTools' Network tab (`journey-spike`, …), with ids correlated from call to call. Every suite carries a
+Prometheus + Grafana stack with a per-API dashboard next to the app's own metrics, and a regression gate
+(`loadtest compare`). Use it from the CLI, the Java API, Maven (`mvn loadtest:run`), Gradle, JUnit 5
+(`@K6LoadTest`) or a coding agent (MCP server + Claude Code plugin with skills).
 
 ```
 scripts/loadtest.sh generate --project ../my-service              # writes ../my-service/load-tests
 scripts/loadtest.sh generate --project ../my-service --har checkout.har   # + a recorded browser flow (DevTools ▸ Export HAR)
 cd ../my-service/load-tests && ./run.sh smoke                      # then: ./run.sh mixed-spike mixed
+docker compose -f grafana/docker-compose.yml up -d && GRAFANA=1 ./run.sh mixed-load   # live dashboard on :3000
 ```
 
-Design: [`docs/lld/16-load-test-generator.md`](docs/lld/16-load-test-generator.md), [ADR-0022](docs/adr/0022-k6-load-test-generator-module.md).
+Design: [`docs/lld/16-load-test-generator.md`](docs/lld/16-load-test-generator.md), [ADR-0022](docs/adr/0022-k6-load-test-generator-module.md), [ADR-0024](docs/adr/0024-load-test-integrations-and-agent-tooling.md); guide: [`docs/integration/load-testing-guide.md`](docs/integration/load-testing-guide.md); agent plugin: [`claude-plugins/spring-loadtest`](claude-plugins/spring-loadtest/README.md).

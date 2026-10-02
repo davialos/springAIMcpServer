@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "spring-loadtest": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "if [ -z \"$LOADTEST_HOME\" ]; then echo 'spring-loadtest: set LOADTEST_HOME to your springAIMcpServer checkout' >&2; exit 1; fi; exec \"$LOADTEST_HOME/scripts/loadtest-mcp.sh\" --root \"$PWD\""
+      ]
+    }
+  }
+}

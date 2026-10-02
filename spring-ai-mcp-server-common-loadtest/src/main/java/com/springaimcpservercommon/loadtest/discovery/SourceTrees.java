@@ -228,6 +228,24 @@ final class SourceTrees {
         return values.isEmpty() ? Optional.empty() : Optional.of(values.getFirst());
     }
 
+    /**
+     * Value of a compile-time constant string expression (literal, concatenation, {@code static final} field).
+     *
+     * @param e expression
+     * @return the value, if the expression is a constant
+     */
+    Optional<String> constant(ExpressionTree e) {
+        if (!(e instanceof LiteralTree) && !(e instanceof BinaryTree) && !(e instanceof MemberSelectTree)
+                && !(e instanceof IdentifierTree) && !(e instanceof ParenthesizedTree)) {
+            return Optional.empty();
+        }
+        if (e instanceof IdentifierTree id && constantsBySimpleName.getOrDefault(id.getName().toString(), List.of())
+                .size() != 1) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(evaluate(e, new HashSet<>()));
+    }
+
     private void collect(ExpressionTree e, List<String> out) {
         if (e instanceof NewArrayTree arr) {
             if (arr.getInitializers() != null) {

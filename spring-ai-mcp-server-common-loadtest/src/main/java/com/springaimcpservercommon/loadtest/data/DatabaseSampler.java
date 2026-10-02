@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -93,18 +94,64 @@ public final class DatabaseSampler implements AutoCloseable {
         for (Map.Entry<String, DbTable> e : new ArrayList<>(tables.entrySet())) {
             DbTable t = e.getValue();
             Map<String, String> columns = new LinkedHashMap<>();
+            Map<String, Integer> sizes = new LinkedHashMap<>();
             try (ResultSet rs = md.getColumns(null, t.schema(), t.name(), "%")) {
                 while (rs.next()) {
-                    columns.put(rs.getString("COLUMN_NAME"), rs.getString("TYPE_NAME"));
+                    String column = rs.getString("COLUMN_NAME");
+                    String type = rs.getString("TYPE_NAME");
+                    columns.put(column, type);
+                    String lower = type == null ? "" : type.toLowerCase(Locale.ROOT);
+                    int size = rs.getInt("COLUMN_SIZE");
+                    if (size > 0 && size < Integer.MAX_VALUE && (lower.contains("char") || lower.contains("text"))) {
+                        sizes.put(column, size);
+                    }
                 }
             }
-            Map<Integer, String> pk = new java.util.TreeMap<>();
+            Map<Integer, String> pk = new TreeMap<>();
             try (ResultSet rs = md.getPrimaryKeys(null, t.schema(), t.name())) {
                 while (rs.next()) {
                     pk.put(rs.getInt("KEY_SEQ"), rs.getString("COLUMN_NAME"));
                 }
             }
-            e.setValue(new DbTable(t.schema(), t.name(), columns, new ArrayList<>(pk.values())));
+            record FkColumn(String constraint, String column, PoolRef target) {
+            }
+            List<FkColumn> fkColumns = new ArrayList<>();
+            try (ResultSet rs = md.getImportedKeys(null, t.schema(), t.name())) {
+                while (rs.next()) {
+                    fkColumns.add(new FkColumn(rs.getString("FK_NAME") + "/" + rs.getString("PKTABLE_NAME"),
+                            rs.getString("FKCOLUMN_NAME"), new PoolRef(rs.getString("PKTABLE_SCHEM"),
+                            rs.getString("PKTABLE_NAME"), rs.getString("PKCOLUMN_NAME"))));
+                }
+            } catch (SQLException ex) {
+                // a driver without foreign-key metadata: relationships come from JPA only
+            }
+            Map<String, Long> width = new HashMap<>();
+            fkColumns.forEach(f -> width.merge(f.constraint(), 1L, Long::sum));
+            Map<String, PoolRef> singleColumnFks = new LinkedHashMap<>();
+            for (FkColumn f : fkColumns) {
+                if (width.get(f.constraint()) == 1) { // composite keys cannot be filled from one pool
+                    singleColumnFks.put(f.column(), f.target());
+                }
+            }
+            Map<String, Set<String>> indexColumns = new LinkedHashMap<>();
+            try (ResultSet rs = md.getIndexInfo(null, t.schema(), t.name(), true, true)) {
+                while (rs.next()) {
+                    String index = rs.getString("INDEX_NAME");
+                    String column = rs.getString("COLUMN_NAME");
+                    if (index != null && column != null) {
+                        indexColumns.computeIfAbsent(index, k -> new LinkedHashSet<>()).add(column);
+                    }
+                }
+            } catch (SQLException ex) {
+                // no index metadata: uniqueness comes from JPA only
+            }
+            Set<String> unique = new LinkedHashSet<>();
+            indexColumns.values().stream().filter(c -> c.size() == 1).forEach(unique::addAll);
+            if (pk.size() == 1) {
+                unique.removeAll(pk.values()); // the primary key's own index says nothing new
+            }
+            e.setValue(new DbTable(t.schema(), t.name(), columns, new ArrayList<>(pk.values()), singleColumnFks,
+                    sizes, unique));
         }
     }
 

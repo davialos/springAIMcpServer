@@ -15,7 +15,9 @@ function baseUrl(config) {
  * Resolves the APIs this run uses (enabled in config, READ_ONLY, API filter), with their expected statuses.
  * Throws when BASE_URL looks like production and ALLOW_PROD is not set (safety.blockedHostPattern).
  */
-export function prepare(config, modules) {
+export function prepare(config, modules, seedSteps) {
+  const creates = {};
+  for (const step of seedSteps || []) creates[step.api] = step;
   const url = baseUrl(config);
   const safety = config.safety || {};
   if (safety.blockedHostPattern && __ENV.ALLOW_PROD !== 'true') {
@@ -45,6 +47,7 @@ export function prepare(config, modules) {
       weight: c.weight !== undefined ? c.weight : 1,
       expected,
       callback: http.expectedStatuses(...expected),
+      creates: creates[meta.id], // the table this API inserts into, if it is a create endpoint
       mod,
     };
     byId[api.id] = api;
@@ -125,9 +128,12 @@ function fillPath(template, params) {
   return template.replace(/\{([^}]+)\}/g, (_, name) => encodeURIComponent(String(params && params[name] !== undefined ? params[name] : '')));
 }
 
-/** Builds the request for an API without sending it. */
-export function buildRequest(api, hooks) {
-  const ctx = data.context(api.id);
+/**
+ * Builds the request for an API without sending it. `seeded`: pools of ids created in setup; `complete`: include
+ * every optional field (seeding).
+ */
+export function buildRequest(api, hooks, seeded, complete) {
+  const ctx = data.context(api.id, seeded, complete);
   let req = api.mod.build(ctx);
   const payload = data.userPayload(ctx);
   if (payload !== undefined) req.body = payload;
@@ -137,15 +143,21 @@ export function buildRequest(api, hooks) {
 
 /** Builds, sends and checks one request, then pauses for the configured think time. */
 export function call(api, runtime, auth, hooks) {
-  const { req, ctx } = buildRequest(api, hooks);
+  const { req, ctx } = buildRequest(api, hooks, auth && auth.seeded);
   const res = send(api, req, ctx, runtime, auth, hooks);
+  if (api.creates && res.status >= 200 && res.status < 300) {
+    // later requests of this VU can use the new row, by id and by its other keys (slug, username …)
+    data.remember(api.creates.pool, createdId(api.creates, res, req));
+    const keys = capturedKeys(api.creates, res, req);
+    for (const pool of Object.keys(keys)) data.remember(pool, keys[pool]);
+  }
   const think = runtime.config.thinkTime || {};
   if (think.max > 0) sleep(think.min + Math.random() * (think.max - think.min));
   return res;
 }
 
 /** Sends a built request: URL, auth and JSON body, tags, expected-status check, afterResponse hook. */
-export function send(api, req, ctx, runtime, auth, hooks) {
+export function send(api, req, ctx, runtime, auth, hooks, phase) {
   const config = runtime.config;
   const url = runtime.baseUrl + fillPath(api.path, req.path) + queryString(req.query);
   const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, (auth && auth.headers) || {});
@@ -157,11 +169,12 @@ export function send(api, req, ctx, runtime, auth, hooks) {
   }
   const res = http.request(api.method, url, body, {
     headers,
-    tags: { api: api.id, name: api.name },
+    tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : { api: api.id, name: api.name },
     responseCallback: api.callback,
     timeout: (config.http && config.http.timeout) || '30s',
   });
-  check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, { api: api.id });
+  check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 },
+    phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id });
   if (hooks && typeof hooks.afterResponse === 'function') hooks.afterResponse(api.id, res, req, ctx);
   return res;
 }
@@ -212,8 +225,8 @@ function onlyRefs(values, results) {
   return out;
 }
 
-function stepRequest(step, api, runtime, results) {
-  const ctx = data.context(api.id);
+function stepRequest(step, api, runtime, results, seeded) {
+  const ctx = data.context(api.id, seeded);
   const req = api.mod.build(ctx);
   if (runtime.dataMode === 'auto' || runtime.dataMode === 'user') {
     req.path = Object.assign({}, req.path, resolveRefs(step.path, results));
@@ -249,7 +262,7 @@ export function replay(runtime, steps, auth, hooks) {
     }
     const pause = Math.min(step.pauseMs || 0, maxPause) * scale;
     if (i > 0 && pause > 0) sleep(pause / 1000);
-    let { req, ctx } = stepRequest(step, api, runtime, results);
+    let { req, ctx } = stepRequest(step, api, runtime, results, auth && auth.seeded);
     if (hooks && typeof hooks.beforeRequest === 'function') req = hooks.beforeRequest(api.id, req, ctx) || req;
     const res = send(api, req, ctx, runtime, auth, hooks);
     let json;
@@ -280,6 +293,137 @@ export function previewJourney(runtime, steps, hooks) {
       skipped: runtime.apis.every((a) => a.id !== api.id) || undefined,
     }));
   }
+}
+
+// ── Seeding: test data created through the application's own create endpoints (data/seed.json) ──────────
+// Steps are ordered by the entity relationships (parents first); each created id goes into a pool that the
+// next steps' payloads (foreign keys) and the load test itself (path ids, references) draw from.
+
+function findKey(value, key, depth) {
+  if (!value || typeof value !== 'object' || depth > 3) return undefined;
+  if (!Array.isArray(value) && value[key] !== undefined && typeof value[key] !== 'object') return value[key];
+  for (const v of Array.isArray(value) ? value.slice(0, 1) : Object.values(value)) {
+    const found = findKey(v, key, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** The id of a created row: from the response body, else the Location header, else (natural keys) the request. */
+export function createdId(step, res, req) {
+  if (step.idFromRequest) {
+    const fromRequest = findKey(req.body, step.idField, 0);
+    if (fromRequest !== undefined) return fromRequest;
+  }
+  let body;
+  try {
+    body = res.json();
+  } catch (e) {
+    body = undefined;
+  }
+  let id = findKey(body, step.idField, 0);
+  if (id === undefined && step.idField !== 'id') id = findKey(body, 'id', 0);
+  if (id === undefined) {
+    const location = res.headers.Location || res.headers.location;
+    if (location) id = decodeURIComponent(location.replace(/\/+$/, '').split('/').pop());
+  }
+  if (typeof id === 'string' && /^\d+$/.test(id) && id.length < 16) id = parseInt(id, 10);
+  return id;
+}
+
+function responseBody(res) {
+  try {
+    return res.json();
+  } catch (e) {
+    return undefined;
+  }
+}
+
+/** The other keys of a created row (step.captures: pool → property), from the response, else the request. */
+export function capturedKeys(step, res, req) {
+  const out = {};
+  const body = step.captures ? responseBody(res) : undefined;
+  for (const pool of Object.keys(step.captures || {})) {
+    const property = step.captures[pool];
+    let v = findKey(body, property, 0);
+    if (v === undefined) v = findKey(req.body, property, 0);
+    if (v !== undefined && v !== null) out[pool] = v;
+  }
+  return out;
+}
+
+function seedingEnabled(runtime) {
+  const cfg = runtime.config.seed || {};
+  if (__ENV.SEED !== undefined) return __ENV.SEED === 'true';
+  return cfg.enabled !== false && __ENV.READ_ONLY !== 'true' && !(runtime.config.safety || {}).readOnly;
+}
+
+/**
+ * Runs in k6 setup(): creates config.seed.perTable rows per table (SEED_PER_TABLE overrides) and returns the
+ * created ids by pool, for every VU. Tables whose create fails are logged and simply have no seeded rows.
+ */
+export function seed(runtime, steps, auth, hooks) {
+  const seeded = {};
+  if (!seedingEnabled(runtime) || !steps || !steps.length) return seeded;
+  const cfg = runtime.config.seed || {};
+  const perTable = parseInt(__ENV.SEED_PER_TABLE || cfg.perTable || 5, 10);
+  const report = [];
+  for (const step of steps) {
+    const api = runtime.byId[step.api];
+    if (!api || ((runtime.config.apis || {})[step.api] || {}).enabled === false) continue;
+    const ids = [];
+    const keys = {};
+    let created = 0;
+    for (let i = 0; i < perTable; i++) {
+      const { req, ctx } = buildRequest(api, hooks, seeded, true);
+      const res = send(api, req, ctx, runtime, auth, hooks, 'seed');
+      if (res.status >= 200 && res.status < 300) {
+        created++;
+        const id = createdId(step, res, req);
+        if (id !== undefined && id !== null) ids.push(id);
+        const captured = capturedKeys(step, res, req);
+        for (const pool of Object.keys(captured)) (keys[pool] || (keys[pool] = [])).push(captured[pool]);
+      }
+    }
+    if (ids.length) seeded[step.pool] = ids;
+    for (const pool of Object.keys(keys)) seeded[pool] = keys[pool];
+    const failures = perTable - created;
+    report.push(`${step.table} ${created}/${perTable}${failures ? ` (${failures} failed)` : ''}`);
+  }
+  console.log(`seed: ${report.join(', ')}`);
+  return seeded;
+}
+
+/**
+ * Runs in k6 teardown() when config.seed.cleanup (or SEED_CLEANUP=true): deletes seeded rows, children first.
+ * A table whose rows cannot all be deleted (no delete endpoint, or a delete refused) keeps its parents too:
+ * deleting them would only violate the foreign keys. Rows created during the load itself are not touched.
+ */
+export function cleanup(runtime, steps, setupData, hooks) {
+  const cfg = runtime.config.seed || {};
+  const wanted = __ENV.SEED_CLEANUP !== undefined ? __ENV.SEED_CLEANUP === 'true' : cfg.cleanup === true;
+  if (!wanted || !setupData || !setupData.seeded) return;
+  const kept = {};
+  const report = [];
+  for (const step of (steps || []).slice().reverse()) {
+    const ids = setupData.seeded[step.deletePool || step.pool] || [];
+    if (!ids.length) continue;
+    const api = step.deleteApi && runtime.byId[step.deleteApi];
+    let deleted = 0;
+    if (api && !kept[step.pool]) {
+      const param = (api.path.match(/\{([^}]+)\}/) || [])[1];
+      for (const id of ids) {
+        const res = send(api, { path: { [param]: id }, query: {}, headers: {} }, data.context(api.id), runtime,
+          setupData, hooks, 'cleanup');
+        if ((res.status >= 200 && res.status < 300) || res.status === 404) deleted++;
+      }
+    }
+    if (deleted < ids.length) {
+      for (const parent of step.dependsOn || []) kept[parent] = true; // still referenced: keep the parents
+    }
+    report.push(`${step.table} ${deleted}/${ids.length}${kept[step.pool] ? ' (kept: still referenced)' : ''}`);
+  }
+  console.log(`cleanup: ${report.join(', ')}`);
 }
 
 /** MODE=preview: prints PREVIEW_COUNT requests per API, with the data source of every field. Sends nothing. */

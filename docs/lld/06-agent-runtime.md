@@ -133,7 +133,8 @@ Order in `InvocationGuardAdvisor.checkInput` (also run by the stream path before
      `minRelevance` (0.25). Prompts with fewer than `minTermsToJudge` (2) content words — greetings, "and the second
      one?" — are not judged. Vocabulary built once per catalog generation (ADR-0021). Rejects → `off_topic`,
      naming the entities (or allow-list topics) the agent can help with.
-  3. Host `PromptValidator` beans, in `@Order` order.
+  3. Host `PromptValidator` beans, in `@Order` order. They always run: the built-in validators pass when their
+     switch is off, but the chain itself is never skipped (only `TurnSafety.disabled()` skips it).
   The validators judge the prompt **as typed** (`RAW_INPUT_KEY`), even when the model receives a redacted one.
   The stream path sets `PRECHECKED_KEY` so the stream advisor does not run the chain a second time.
 - **Input redaction** (`piiRedactionInput` or `redact-input-pii`): the prompt sent to the provider, stored in
@@ -150,8 +151,9 @@ Order in `InvocationGuardAdvisor.checkInput` (also run by the stream path before
   (`redactJson`) so they stay valid JSON; values under sensitive keys are masked there too.
 - **`maxOutputChars`** is enforced (text agents; sync and stream), the answer ending in ` …[truncated]`.
 - **Exfiltration patterns** in the output (Markdown images with query data) are not stripped yet (OQ-55).
-- Transcripts record the redacted prompt and answer. Chat memory stores the model's own (unredacted) answer so
-  follow-ups stay coherent; it is protected like the transcript (OQ-45, OQ-55).
+- Transcripts record the redacted prompt and answer. Stored conversation text (transcript, audit copy, persistent
+  chat memory) is additionally masked by `conversations.pii.*` with the same detectors; in-heap chat memory
+  (`memory.persistent=false`) is not masked (OQ-55).
 
 ### 8.3 Structured display (backend-controlled)
 Every answer (when `structured-display` is on, default) also gets a **display tree** (`StructuredResponse`):

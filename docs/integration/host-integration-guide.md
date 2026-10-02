@@ -707,6 +707,11 @@ Expired memories are deleted by the same background job as expired conversations
 Every agent turn passes the guardrails of LLD-06 §8. The host sets a floor; an agent's spec can switch more on,
 never off.
 
+> **Full guide:** [guardrails-integration-guide.md](guardrails-integration-guide.md) covers how business scope
+> is scored from your `@Ai*` descriptions, the display template reference, the client contract (responses, stream
+> events, error codes), custom validators and detectors, testing, rollout and troubleshooting. This section is the
+> summary.
+
 ```yaml
 dynamic.ai.agent.guardrails:
   threat-detection: true     # default; reject prompt injection, jailbreaks, SQL/script/command injection,

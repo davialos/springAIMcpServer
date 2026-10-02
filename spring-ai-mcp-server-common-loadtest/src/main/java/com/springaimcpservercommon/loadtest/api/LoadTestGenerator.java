@@ -20,6 +20,7 @@ import com.springaimcpservercommon.loadtest.discovery.OpenApiReader;
 import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
 import com.springaimcpservercommon.loadtest.discovery.SpringSourceScanner;
 import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
+import com.springaimcpservercommon.loadtest.k6.GrafanaStack;
 import com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import org.jspecify.annotations.Nullable;
@@ -302,6 +303,8 @@ public final class LoadTestGenerator {
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
                     journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, s.authType,
                             s.loginPath));
+            GrafanaStack.write(r.outDir(), catalog.project(),
+                    GrafanaStack.scrape(baseUrl, d.settings().properties()));
             return new GenerationResult(r.outDir(), baseUrl, r.apis(), r.fields(), r.pools(), seed,
                     journey == null ? 0 : journey.size());
         } finally {

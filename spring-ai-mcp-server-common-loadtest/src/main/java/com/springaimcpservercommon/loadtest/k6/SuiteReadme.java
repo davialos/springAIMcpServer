@@ -84,6 +84,20 @@ final class SuiteReadme {
             }
             md.append('\n');
         }
+        md.append("## Grafana dashboard\n\n")
+                .append("`grafana/` holds a local Prometheus + Grafana stack. k6 streams its metrics to Prometheus ")
+                .append("(remote write), Prometheus also scrapes the application's `/actuator/prometheus`, and the ")
+                .append("dashboard shows every API (requests/s, p95/p99, failures) next to the application's HTTP, ")
+                .append("HikariCP and JVM metrics, with each run marked as an annotation.\n\n```\n")
+                .append("docker compose -f grafana/docker-compose.yml up -d   # Prometheus :9090, Grafana :3000\n")
+                .append("GRAFANA=1 ./run.sh mixed-load                         # then open http://localhost:3000\n")
+                .append("```\n\n")
+                .append("The application needs `io.micrometer:micrometer-registry-prometheus` and ")
+                .append("`management.endpoints.web.exposure.include=prometheus`; the scrape target is in ")
+                .append("`grafana/prometheus.yml`. Pick a run with the *Test run* variable (`testid`). Elsewhere: ")
+                .append("`K6_PROMETHEUS_RW_SERVER_URL`, `GRAFANA_URL`, `GRAFANA_TOKEN`. The compose file, ")
+                .append("`prometheus.yml` and provisioning are yours after the first generation; ")
+                .append("`dashboards/k6-load-test.json` is regenerated (save your changes under another name).\n\n");
         md.append("## APIs\n\n| id | Endpoint | Weight | Enabled | Source |\n|---|---|---:|---|---|\n");
         for (ApiEndpoint e : catalog.endpoints()) {
             JsonNode c = config.path("apis").path(e.id());
@@ -106,7 +120,9 @@ final class SuiteReadme {
                 .append("(generated)\n")
                 .append("- `lib/` — runtime (data sources, dummy/random generators, modes, HTTP, report)\n")
                 .append("- `hooks.js` — `beforeRequest`/`afterResponse` customisation (yours)\n")
-                .append("- `data/real.json`, `data/user.json`, `data/plan.json` — real pools, your values, field plan\n");
+                .append("- `data/real.json`, `data/user.json`, `data/plan.json` — real pools, your values, field plan\n")
+                .append("- `grafana/` — Prometheus + Grafana stack and dashboard; `reports/` — one JSON + Markdown ")
+                .append("report per run (`loadtest compare` gates regressions)\n");
         return md.toString();
     }
 }

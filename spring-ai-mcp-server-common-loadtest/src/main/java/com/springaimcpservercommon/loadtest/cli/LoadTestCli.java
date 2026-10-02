@@ -338,6 +338,7 @@ public final class LoadTestCli {
         }
         if (a.flag("grafana") || a.get("prometheus-url") != null) {
             runner.grafana(a.get("prometheus-url", "http://localhost:9090/api/v1/write"));
+            runner.grafanaAnnotations(a.get("grafana-url", "http://localhost:3000"), System.getenv("GRAFANA_TOKEN"));
         }
         if (a.get("k6") != null) {
             runner.k6(a.get("k6"));
@@ -468,7 +469,8 @@ public final class LoadTestCli {
                 Run
                   --suite <dir> --mode <mode> [--data-mode <mode>] [--api id1,id2] [--vus n] [--rate n]
                   [--duration-scale 0.1] [--base-url url] [--per-api parallel] [--read-only] [--k6 path]
-                  [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack
+                  [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack (grafana/)
+                  [--grafana-url url]                  annotate the run there (default http://localhost:3000)
                   [--baseline report.json]             also compare with a baseline (exit 3 on regression)
                   [-- extra k6 args]
 

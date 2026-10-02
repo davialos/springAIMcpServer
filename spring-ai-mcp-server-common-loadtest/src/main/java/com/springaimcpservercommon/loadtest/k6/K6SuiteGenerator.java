@@ -38,6 +38,7 @@ import java.util.stream.Stream;
  * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * hooks.js               user hooks (created once, never overwritten)
+ * grafana/               Prometheus + Grafana stack and dashboard (written by GrafanaStack)
  * README.md              how to run; API and field tables
  * </pre>
  */
@@ -45,7 +46,7 @@ public final class K6SuiteGenerator {
 
     private static final List<String> RUNTIME_FILES = List.of(
             "lib/data.js", "lib/dummy.js", "lib/random.js", "lib/modes.js", "lib/http.js", "lib/report.js",
-            "lib/dictionaries.json");
+            "lib/grafana.js", "lib/dictionaries.json");
 
     /**
      * Generation options.
@@ -257,7 +258,10 @@ public final class K6SuiteGenerator {
                 #   ./run.sh preview random            print generated requests, send nothing
                 #   ./run.sh journey-load              replay the recorded browser flow (generate --har) under load
                 # Env (k6 reads it directly): BASE_URL, VUS, RATE, DURATION_SCALE, API, PER_API, READ_ONLY,
-                #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT
+                #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT, SEED, SEED_PER_TABLE,
+                #   SEED_CLEANUP
+                # Grafana: docker compose -f grafana/docker-compose.yml up -d, then GRAFANA=1 ./run.sh mixed-load
+                #   (K6_PROMETHEUS_RW_SERVER_URL, GRAFANA_URL, GRAFANA_TOKEN, TEST_ID override the local defaults)
                 set -euo pipefail
                 cd "$(dirname "$0")"
                 mode="${1:-smoke}"
@@ -267,6 +271,16 @@ public final class K6SuiteGenerator {
                 args=(run -e "MODE=$mode")
                 if [ -n "$data" ]; then args+=(-e "DATA_MODE=$data"); fi
                 case "$mode" in *preview) args+=(--log-format=raw --quiet) ;; esac
+                case "${GRAFANA:-}" in
+                  1|true|yes)
+                    export K6_PROMETHEUS_RW_SERVER_URL="${K6_PROMETHEUS_RW_SERVER_URL:-http://localhost:9090/api/v1/write}"
+                    export K6_PROMETHEUS_RW_TREND_STATS="${K6_PROMETHEUS_RW_TREND_STATS:-p(95),p(99),avg,max}"
+                    export GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
+                    export TEST_ID="${TEST_ID:-$mode-$(date -u +%Y%m%dT%H%M%SZ)}"
+                    args+=(--out experimental-prometheus-rw --tag "testid=$TEST_ID")
+                    echo "grafana: streaming to $K6_PROMETHEUS_RW_SERVER_URL, test run $TEST_ID ($GRAFANA_URL)" >&2
+                    ;;
+                esac
                 exec "${K6:-k6}" "${args[@]}" "$@" main.js
                 """;
     }

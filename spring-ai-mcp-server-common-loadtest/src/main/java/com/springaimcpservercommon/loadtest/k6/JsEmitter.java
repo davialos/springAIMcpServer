@@ -285,6 +285,7 @@ final class JsEmitter {
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
                 import { prepare, call, replay, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney } from './lib/http.js';
                 import { summary } from './lib/report.js';
+                import * as grafana from './lib/grafana.js';
                 import * as hooks from './hooks.js';
                 %s
                 const CONFIG = JSON.parse(open('./loadtest.config.json'));
@@ -321,13 +322,16 @@ final class JsEmitter {
 
                 export function setup() {
                   if (parseMode(__ENV.MODE).profile === 'preview') return { headers: {}, seeded: {} };
+                  const annotation = grafana.start(parseMode(__ENV.MODE).mode, RUNTIME.dataMode, RUNTIME.baseUrl);
                   const auth = setupAuth(CONFIG);
                   auth.seeded = seed(RUNTIME, SEED, auth, hooks);
+                  auth.annotation = annotation;
                   return auth;
                 }
 
                 export function teardown(data) {
                   cleanup(RUNTIME, SEED, data, hooks);
+                  if (data) grafana.end(data.annotation);
                 }
 
                 %sexport function mixed(auth) {

@@ -146,6 +146,22 @@ public final class LoadTestRunner {
     }
 
     /**
+     * Marks the run on Grafana dashboards: an annotation region from start to end, tagged {@code k6}, the mode and
+     * the run's test id. Best effort: an unreachable Grafana never fails the run.
+     *
+     * @param grafanaUrl e.g. {@code http://localhost:3000}
+     * @param token      service-account token, or {@code null} for a Grafana with anonymous access
+     * @return this
+     */
+    public LoadTestRunner grafanaAnnotations(String grafanaUrl, @Nullable String token) {
+        processEnv.put("GRAFANA_URL", grafanaUrl);
+        if (token != null) {
+            processEnv.put("GRAFANA_TOKEN", token);
+        }
+        return this;
+    }
+
+    /**
      * An extra k6 argument (e.g. {@code --out}, {@code json=results.json}).
      *
      * @param arg argument

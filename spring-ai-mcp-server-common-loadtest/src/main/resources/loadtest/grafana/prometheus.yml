@@ -1,0 +1,13 @@
+# Prometheus for this load-test suite. k6 pushes its metrics (remote write, labels api, name, testid …);
+# the job below scrapes the application under test. Created once by the generator and then yours.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+scrape_configs:
+  # The Spring Boot application: needs io.micrometer:micrometer-registry-prometheus and
+  # management.endpoints.web.exposure.include=prometheus (add health,info,… as you like).
+  - job_name: spring-app
+    scheme: ${SCHEME}
+    metrics_path: ${METRICS_PATH}
+    static_configs:
+      - targets: ["${SCRAPE_TARGET}"]

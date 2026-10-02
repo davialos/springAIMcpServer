@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+      JUnit 5 extension over the load-test generator (ADR-0022, LLD-16): @K6LoadTest next to
+      @SpringBootTest(webEnvironment = RANDOM_PORT) generates the suite once per test class and runs k6 against the
+      started application. No Spring dependency (the port is read from the @LocalServerPort field by name).
+      Test-scope tool for hosts: not part of the starter or the BOM.
+    -->
+    <artifactId>spring-ai-mcp-server-common-loadtest-junit</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: Load Test :: JUnit 5</name>
+    <description>@K6LoadTest: generate and run k6 load tests from JUnit 5 / @SpringBootTest.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.loadtest.junit</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-loadtest</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- the test classpath of the host already has JUnit Jupiter -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>

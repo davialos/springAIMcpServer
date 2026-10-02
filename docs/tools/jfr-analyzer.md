@@ -1,8 +1,15 @@
 # JFR analyzer (`spring-ai-mcp-server-common-jfr-analyzer`)
 
-A command-line developer tool. It reads a Java Flight Recorder file (`.jfr`) and writes an **HTML report** and a
-**JSON report**. Each cost (CPU time, allocated bytes, lock contention, parking, blocking I/O, exceptions) is pinned to
-the **method and source line in the packages you name**, so the report leads straight to the code to change.
+A command-line developer tool. It reads a Java Flight Recorder file (`.jfr`) and pins each cost (CPU time,
+allocated bytes, lock contention, parking, blocking I/O, exceptions) to the **method and source line in the packages
+you name**, so the report leads straight to the code to change. One run writes four files:
+
+| File | For | Content |
+|---|---|---|
+| `<name>.html` | engineers | Interactive report: hot spots with lines, call paths and charts. |
+| `<name>.json` | tooling | The complete analysis, machine-readable (`meta.schemaVersion` = `jfr-analyzer/report/2`). |
+| `<name>.xlsx` | teams, leadership | Excel dashboard (health banner, KPI tiles, top issues, recommendations, native charts) plus filterable detail sheets. |
+| `<name>-summary.json` | sharing | Status, score, key metrics, findings and top hot spots, without stacks, thread names, paths, endpoints or command lines (`jfr-analyzer/summary/1`). |
 
 It is not part of the starter, is not in the BOM, and no host ever depends on it. It lives in the reactor so the
 offline build compiles and tests it.
@@ -26,7 +33,7 @@ scripts/jfr-analyze.sh app.jfr -p com.acme.orders -p com.acme.billing -o reports
 | `-x, --exclude <prefix>` | Never attribute to this package, even inside `-p` (e.g. generated proxies). |
 | `-o, --output <dir>` | Output directory (default: next to the recording). |
 | `-n, --name <base>` | File name without extension (default `<recording>-report`). |
-| `--format html,json` | Either or both (default both). |
+| `--format html,json,xlsx,summary` | Any subset (default: all four). |
 | `--top <n>` / `--stacks <n>` / `--depth <n>` | Rows per list (25), call paths per hot spot (5), frames per path (24). |
 | `--compact-json` | Do not indent the JSON. |
 
@@ -75,6 +82,61 @@ Two kinds of event are off or thresholded in the stock settings:
   throw sites.
 - Blocking events are recorded only above a threshold: 20 ms in `default` and 10 ms in `profile`.
 
+## Executive summary (status, score, key metrics)
+
+Every output starts from the same executive summary (`model.ExecutiveSummary`), so the Excel dashboard, the HTML
+banner and both JSON files always agree:
+
+- **Health score** = 100 − 25 per CRITICAL finding − 8 per WARNING finding (floor 0).
+- **Status**: RED with any critical finding or a score under 50, AMBER with any warning or a score under 80, else
+  GREEN.
+- **Key metrics** carry a stable `id` (for tracking across runs), the value and unit, a display string, a
+  RED/AMBER/GREEN/UNKNOWN status and one sentence on why it matters. They are judged against the same thresholds as
+  the findings (`FindingsEngine`), so a metric shown AMBER or RED always has a matching finding:
+
+| Metric id | AMBER at | RED at |
+|---|---|---|
+| `cpu.jvmAvgPercent` | machine CPU peak ≥ 90 % | — |
+| `cpu.hottestMethodPercent` | 15 % of samples | 35 % |
+| `gc.overheadPercent` | 5 % of time paused | 15 % |
+| `gc.maxPauseMs`, `gc.p99PauseMs` | 200 ms | 1 000 ms |
+| `heap.liveSetPercentOfMax` | 70 % of max heap after GC | 85 % |
+| `allocation.rateBytesPerSec` | 1 GiB/s | — |
+| `threads.lockBlockedMs` | blocked time ≥ 5 % of the recording | — |
+| `exceptions.perSecond` | 1 000/s | — |
+| `threads.virtualPinnedEvents` | any | — |
+
+- **Top issues** restate CRITICAL and WARNING findings as impact plus next action. **Recommendations** are ordered
+  next steps, each naming the line to start at.
+
+## Excel workbook
+
+| Sheet | Content |
+|---|---|
+| Dashboard | Health banner and headline, 8 KPI tiles (status-colored, with label and icon so color is never the only cue), top issues with the line to look at, recommendations, 6 native charts (heap over time with after-GC points and max heap, CPU load, GC pauses, allocation rate, top CPU hot spots, top allocation sites), top hot spots per area with data bars. Links jump to the detail sheets. |
+| Findings | Every finding with severity, area, impact, what to do and the full location; filterable. |
+| Key metrics | The executive-summary metrics with status, value, raw value, unit and meaning. |
+| Hot spots / Hot lines | Every hot spot (and hottest line) of every area in one filterable table: cost in samples, MiB, ms or events, share, self %, top frame, top detail, top thread. |
+| GC / Memory / Threads | The section numbers, plus per-collector, per-cause, longest-pause, allocated-type, lock-owner and blocked-thread tables. |
+| Recording | File, time range, JVM, OS, CPU and JVM arguments (secrets masked), and event counts. |
+| Chart data | The numbers the dashboard charts draw. |
+
+Charts are native Excel charts with cached values, so they render in Excel, LibreOffice, Google Sheets and Numbers
+and stay editable. Stack traces are not in the workbook; they stay in the HTML and JSON.
+
+## Sharing and privacy
+
+- **Secrets:** JVM and application arguments are masked before they reach any output (`collect.Redactor`). This
+  covers values of `*password*`, `*secret*`, `*token*`, `*apikey*`/`*api.key*`, `*credential*`, `*private.key*` and
+  `*access.key*` arguments, and passwords in URLs (`user:****@host`).
+- **What the summary JSON leaves out:**
+  - stack traces and thread names;
+  - the recording's directory (it keeps the file name);
+  - file paths and socket endpoints;
+  - command lines.
+- **What it keeps:** code locations in the requested packages, which is what a reader needs to act.
+- **What the Excel workbook leaves out:** stack traces and the recording's directory.
+
 ## JSON
 
 The JSON is the same model as the HTML (`model.AnalysisReport`). Units are fixed:
@@ -93,6 +155,12 @@ one line.
   constant-pool objects within a chunk. Call paths are capped at 4,096 distinct paths per method.
 - **JDK-only at run time.** The analyzer jar plus the core jar, whose `CanonicalJson` needs only the JDK. Fields are
   read defensively (`Fields`), because event fields differ between JDK versions.
+- **Excel without Apache POI.** `report.xlsx` is a small OOXML writer covering what the dashboard needs: inline
+  strings, shared styles, merges, frozen panes, autofilters, data bars, internal links, and scatter and bar charts.
+  POI would bring roughly 20 MB of transitive jars into `offline-repo` and the run-time class path. Parts follow
+  the schema's element order; entries carry a fixed timestamp, so equal content gives equal bytes.
+  `XlsxWorkbookTest` checks package integrity (content types, relationships, well-formed XML, element order). The
+  generated workbook is also verified to open in LibreOffice Calc and openpyxl.
 - **Self-contained HTML.** No external script, style or font, so the report works offline and can be attached to a
   ticket. Charts are drawn in the browser from embedded data. Every table is plain HTML. Light and dark themes;
   usable at phone width.

@@ -3,8 +3,10 @@ package com.springaimcpservercommon.jfranalyzer;
 import com.springaimcpservercommon.jfranalyzer.collect.Format;
 import com.springaimcpservercommon.jfranalyzer.model.AnalysisReport;
 import com.springaimcpservercommon.jfranalyzer.model.Finding;
+import com.springaimcpservercommon.jfranalyzer.report.ExcelReportWriter;
 import com.springaimcpservercommon.jfranalyzer.report.HtmlReportWriter;
 import com.springaimcpservercommon.jfranalyzer.report.JsonReportWriter;
+import com.springaimcpservercommon.jfranalyzer.report.SummaryJsonWriter;
 
 import org.jspecify.annotations.Nullable;
 
@@ -26,8 +28,13 @@ public final class JfrAnalyzerCli {
     static final String USAGE = """
             Usage: jfr-analyze <recording.jfr> [options]
 
-            Analyzes a Java Flight Recorder file and writes an HTML and a JSON report that attribute CPU time,
-            allocation, lock contention, parking, I/O and exceptions to methods (and lines) in your packages.
+            Analyzes a Java Flight Recorder file and attributes CPU time, allocation, lock contention, parking, I/O
+            and exceptions to methods (and lines) in your packages. Writes:
+              <name>.html          interactive report with stacks and charts (engineers)
+              <name>.json          the complete analysis, machine-readable
+              <name>.xlsx          Excel dashboard and filterable sheets (teams, leadership)
+              <name>-summary.json  shareable summary: status, metrics, findings, top hot spots; no stacks,
+                                   thread names, paths, endpoints or command lines
 
             Options:
               -p, --package <prefix>   package (or class) to attribute costs to; repeatable or comma-separated.
@@ -35,7 +42,7 @@ public final class JfrAnalyzerCli {
               -x, --exclude <prefix>   package never attributed to (e.g. generated proxies); repeatable.
               -o, --output <dir>       output directory (default: next to the recording)
               -n, --name <base>        report file name without extension (default: <recording>-report)
-                  --format <list>      html,json (default) | html | json
+                  --format <list>      any of html,json,xlsx,summary (default: all four)
                   --top <n>            rows per ranked list (default 25)
                   --stacks <n>         call paths kept per hot spot (default 5)
                   --depth <n>          frames kept per call path (default 24)
@@ -92,6 +99,17 @@ public final class JfrAnalyzerCli {
                 Files.writeString(json, JsonReportWriter.write(report, options.prettyJson()), StandardCharsets.UTF_8);
                 written.add(json);
             }
+            if (options.writeExcel()) {
+                Path xlsx = options.outputDirectory().resolve(options.baseName() + ".xlsx");
+                Files.write(xlsx, ExcelReportWriter.write(report));
+                written.add(xlsx);
+            }
+            if (options.writeSummary()) {
+                Path summary = options.outputDirectory().resolve(options.baseName() + "-summary.json");
+                Files.writeString(summary, SummaryJsonWriter.write(report, options.prettyJson()),
+                        StandardCharsets.UTF_8);
+                written.add(summary);
+            }
             printSummary(report, out);
             out.printf("%nAnalyzed in %s%n", Format.millis((System.nanoTime() - started) / 1e6));
             written.forEach(p -> out.println("Wrote " + p.toAbsolutePath().normalize()));
@@ -116,6 +134,8 @@ public final class JfrAnalyzerCli {
         if (s.topBlockingLocation() != null) {
             out.println("Most blocked:      " + s.topBlockingLocation());
         }
+        var exec = report.executiveSummary();
+        out.printf("Status: %s, health score %d/100. %s%n", exec.status(), exec.healthScore(), exec.headline());
         out.printf("GC: %d collections, %s paused (%s), max pause %s%n", s.gcCount(), Format.millis(s.gcTotalPauseMs()),
                 Format.percent(s.gcOverheadPercent()), Format.millis(s.gcMaxPauseMs()));
         List<Finding> findings = report.findings();
@@ -136,6 +156,8 @@ public final class JfrAnalyzerCli {
         String name = null;
         boolean html = true;
         boolean json = true;
+        boolean xlsx = true;
+        boolean summary = true;
         boolean pretty = true;
         int top = AnalyzerOptions.DEFAULT_TOP_N;
         int stacks = AnalyzerOptions.DEFAULT_STACKS_PER_HOTSPOT;
@@ -156,11 +178,16 @@ public final class JfrAnalyzerCli {
                 case "-n", "--name" -> name = value(args, ++i, arg, inline);
                 case "--format" -> {
                     List<String> formats = split(value(args, ++i, arg, inline));
+                    List<String> unknown = formats.stream()
+                            .filter(f -> !List.of("html", "json", "xlsx", "summary").contains(f)).toList();
+                    if (formats.isEmpty() || !unknown.isEmpty()) {
+                        throw new IllegalArgumentException("--format takes html, json, xlsx and/or summary"
+                                + (unknown.isEmpty() ? "" : "; unknown: " + String.join(", ", unknown)));
+                    }
                     html = formats.contains("html");
                     json = formats.contains("json");
-                    if (!html && !json) {
-                        throw new IllegalArgumentException("--format must name html and/or json");
-                    }
+                    xlsx = formats.contains("xlsx");
+                    summary = formats.contains("summary");
                 }
                 case "--top" -> top = number(value(args, ++i, arg, inline), arg);
                 case "--stacks" -> stacks = number(value(args, ++i, arg, inline), arg);
@@ -194,7 +221,7 @@ public final class JfrAnalyzerCli {
         AnalyzerOptions defaults = AnalyzerOptions.defaults(recording, packages);
         return new AnalyzerOptions(recording, packages, excludes,
                 output == null ? defaults.outputDirectory() : output, name == null ? defaults.baseName() : name,
-                html, json, pretty, top, stacks, depth);
+                html, json, xlsx, summary, pretty, top, stacks, depth);
     }
 
     private static String value(String[] args, int i, String option, @Nullable String inline) {

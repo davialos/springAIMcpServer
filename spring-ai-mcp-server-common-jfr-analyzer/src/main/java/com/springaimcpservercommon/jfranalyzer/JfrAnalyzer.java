@@ -2,6 +2,7 @@ package com.springaimcpservercommon.jfranalyzer;
 
 import com.springaimcpservercommon.jfranalyzer.collect.CpuCollector;
 import com.springaimcpservercommon.jfranalyzer.collect.EventCollector;
+import com.springaimcpservercommon.jfranalyzer.collect.ExecutiveSummaryBuilder;
 import com.springaimcpservercommon.jfranalyzer.collect.ExceptionCollector;
 import com.springaimcpservercommon.jfranalyzer.collect.FindingsEngine;
 import com.springaimcpservercommon.jfranalyzer.collect.GcCollector;
@@ -115,13 +116,15 @@ public final class JfrAnalyzer {
         List<Finding> findings = FindingsEngine.evaluate(matcher.restricted(), span, counts, cpuReport,
                 memoryReport, gcReport, threadReport, ioReport, exceptionReport);
 
-        ReportMeta meta = new ReportMeta(options.recording().toAbsolutePath().normalize().toString(),
+        ReportMeta meta = new ReportMeta(ReportMeta.SCHEMA_VERSION,
+                options.recording().toAbsolutePath().normalize().toString(),
                 Files.size(options.recording()), Instant.now(clock).truncatedTo(ChronoUnit.SECONDS).toString(),
                 options.packages(), options.excludedPackages(), first.toString(), last.toString(), span.millis(),
                 jvm.build(), counts);
         Summary summary = summary(span, cpuReport, memoryReport, gcReport, threadReport, exceptionReport, findings);
-        return new AnalysisReport(meta, summary, findings, cpuReport, memoryReport, gcReport, threadReport, ioReport,
-                exceptionReport);
+        return new AnalysisReport(meta, ExecutiveSummaryBuilder.build(span, findings, cpuReport, memoryReport,
+                gcReport, threadReport, exceptionReport), summary, findings, cpuReport, memoryReport, gcReport,
+                threadReport, ioReport, exceptionReport);
     }
 
     private static Summary summary(Span span, CpuReport cpu, MemoryReport memory, GcReport gc, ThreadReport threads,

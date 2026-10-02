@@ -28,7 +28,7 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 14 | [security/02-threat-model.md](security/02-threat-model.md) | access-management-architect | Draft v1 |
 | 15 | [production-readiness.md](production-readiness.md) — go-live gates | production-readiness-reviewer | Draft v1 |
 | 16 | [lld/15-database-schema.md](lld/15-database-schema.md) — PostgreSQL schema: tables, keys, indexes, partitions, retention | lld-chief-architect | Draft v1 |
-| 16b | [lld/16-load-test-generator.md](lld/16-load-test-generator.md) — k6 load-test generator: API discovery, data providers, load modes (developer tool, ADR-0022) | lld-chief-architect | Implemented v1 |
+| 16b | [lld/16-load-test-generator.md](lld/16-load-test-generator.md) — k6 load-test generator: Spring API discovery, relationship-aware payloads and seeding, load modes, Grafana stack, Java API / Maven / Gradle / JUnit / MCP / agent plugin (developer tools, ADR-0022, ADR-0024) | lld-chief-architect | Implemented v2 |
 | 17b | [integration/load-testing-guide.md](integration/load-testing-guide.md) — how to generate and run k6 load tests for a project | lld-chief-architect | v1 |
 | 16c | [data/schema-usecase-map.md](data/schema-usecase-map.md) — what each table is for: writers/readers, business flows, CRUD matrix, feature/requirement traceability, findings | schema-usecase-mapper | v1 (evidence 2026-10-01) |
 | 17 | [integration/host-integration-guide.md](integration/host-integration-guide.md) — how a host app adopts the starter | control-plane-designer | Draft v1 |

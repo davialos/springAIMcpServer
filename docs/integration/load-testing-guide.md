@@ -152,6 +152,97 @@ Auth: set `auth.type` in `loadtest.config.json` (`bearer` → `AUTH_TOKEN`, `bas
 Results: a per-API table on stdout and `reports/<mode>-<timestamp>.{json,md}`. Stream to Grafana with any k6
 output, e.g. `./run.sh mixed-load auto --out experimental-prometheus-rw`.
 
+## 3b. Watch it in Grafana
+
+Every suite has `grafana/`: Prometheus (k6 streams its metrics there) scraping your application's
+`/actuator/prometheus`, and Grafana with a ready dashboard — requests/s, p95/p99 and failures per API (one row per
+API) next to the app's HTTP-by-URI latency, 4xx/5xx, HikariCP pool, heap, GC, CPU and threads. Each run is an
+annotation, and the *Test run* variable picks one.
+
+```
+docker compose -f grafana/docker-compose.yml up -d    # Prometheus :9090, Grafana :3000 (localhost only)
+GRAFANA=1 ./run.sh mixed-load                          # or: loadtest run --grafana, mvn loadtest:run -Dloadtest.grafana
+```
+
+The application needs `io.micrometer:micrometer-registry-prometheus` and
+`management.endpoints.web.exposure.include=prometheus` (add
+`management.metrics.distribution.percentiles-histogram.http.server.requests=true` for server-side percentiles).
+The scrape target is derived from the base URL and `management.server.port`; edit `grafana/prometheus.yml` if it
+differs. For another Prometheus/Grafana: `K6_PROMETHEUS_RW_SERVER_URL`, `GRAFANA_URL`, `GRAFANA_TOKEN`.
+
+## 3c. Results and the regression gate
+
+`loadtest report --suite load-tests` prints the newest report; `loadtest compare --baseline <report.json>` compares
+the newest run of the same mode with a baseline API by API and exits 3 when one regressed (p95 more than 20 %
+slower and at least 10 ms, or 1 point more failures; tune with `--max-p95-increase`, `--max-failed-increase`).
+Commit a good run's report as `load-tests/baseline.json` and gate every build on it.
+
+## 3d. In the build and in tests
+
+**Maven** (Maven on JDK 25):
+
+```xml
+<plugin>
+  <groupId>com.springaimcpservercommon</groupId>
+  <artifactId>spring-ai-mcp-server-common-loadtest-maven-plugin</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <configuration>
+    <database>false</database>
+    <baseline>${project.basedir}/load-tests/baseline.json</baseline>
+  </configuration>
+  <executions>
+    <execution><id>load-smoke</id><phase>integration-test</phase><goals><goal>run</goal></goals></execution>
+  </executions>
+</plugin>
+```
+
+`mvn loadtest:generate` writes the suite; with `spring-boot:start`/`spring-boot:stop` around `integration-test`,
+`mvn verify` smoke-tests the started app and fails on failed thresholds or a regression. Goals: `discover`,
+`generate`, `run`, `compare`; every option also as `-Dloadtest.<name>` (`-Dloadtest.mode=mixed-load`).
+
+**Gradle**: `loadtest init-gradle --project .` writes `gradle/loadtest.gradle`; add
+`apply from: 'gradle/loadtest.gradle'` and run `./gradlew loadtestGenerate loadtestRun -Ploadtest.mode=smoke`
+(also `loadtestDiscover`, `loadtestCompare -Ploadtest.baseline=…`). The tasks run the generator on a Java 25
+toolchain, whatever JDK runs Gradle; configure them in a `loadtest { generateArgs = ['--no-db']; env = [VUS: '20'] }`
+block. The generator comes from Maven local (`mvn install` of this repository).
+
+**JUnit 5** (`spring-ai-mcp-server-common-loadtest-junit`, test scope):
+
+```java
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@K6LoadTest(exclude = "/admin/**")
+class ShopLoadTest {
+    @LocalServerPort int port;
+
+    @Test
+    void smoke(K6Suite suite) {
+        suite.assertPassed("smoke");                       // fails with the failed thresholds and APIs
+    }
+
+    @Test
+    void noRegression(K6Suite suite) {
+        suite.assertNoRegression("mixed-smoke", Path.of("load-tests/baseline.json"), ReportComparison.Rules.DEFAULTS);
+    }
+}
+```
+
+The suite is generated once per class into `target/load-tests`; runs target `http://localhost:<port><context>`.
+Without k6 the tests are skipped (`requireK6 = true` to fail instead); they are tagged `load-test`.
+
+## 3e. With a coding agent
+
+`scripts/loadtest-mcp.sh --root <workspace>` is an MCP server (stdio) with the tools `loadtest_discover`,
+`loadtest_generate`, `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`:
+
+```
+claude mcp add spring-loadtest -- /path/to/springAIMcpServer/scripts/loadtest-mcp.sh --root "$PWD"
+```
+
+The Claude Code plugin bundles it with three skills (create a suite and get smoke green, analyze a run, find
+capacity) and a `load-test-engineer` agent: `/plugin marketplace add davialos/springAIMcpServer`, then
+`/plugin install spring-loadtest@springaimcpserver` (set `LOADTEST_HOME` to a checkout of this repository). The
+agent confirms the target before it sends traffic and never runs against production.
+
 ## 4. Safety
 
 Seeding creates rows (cleanup is opt-in), so point it at a test database. DELETE operations are disabled until

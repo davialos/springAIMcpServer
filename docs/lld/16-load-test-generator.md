@@ -4,9 +4,9 @@
 |-------|-------|
 | Status | Implemented v1 |
 | Owner agent | lld-chief-architect |
-| Module(s) | `spring-ai-mcp-server-common-loadtest` (developer tool, not part of the starter) |
+| Module(s) | `spring-ai-mcp-server-common-loadtest` (generator, public API, CLI) and its integrations `-loadtest-maven-plugin`, `-loadtest-junit`, `-loadtest-mcp` (developer tools, not part of the starter or the BOM); Claude Code plugin `claude-plugins/spring-loadtest` |
 | Related features | — (tooling) |
-| Related ADRs | ADR-0022, ADR-0012, ADR-0021 |
+| Related ADRs | ADR-0022, ADR-0024, ADR-0012, ADR-0021 |
 
 ## 1. Purpose & responsibilities
 Point it at a Spring Boot project; it produces a runnable Grafana k6 suite for that project's REST APIs:
@@ -29,10 +29,14 @@ Point it at a Spring Boot project; it produces a runnable Grafana k6 suite for t
   collection endpoints, and checks user-supplied ids against the database;
 - **generates** per-API request builders, per-DTO data providers, load modes and a runtime that chooses the data
   source per field and request;
-- **runs** the suite through the k6 binary.
+- **runs** the suite through the k6 binary, reads its reports and gates regressions against a baseline;
+- **observes**: every suite carries a Prometheus + Grafana stack whose dashboard shows k6 per API next to the
+  application's Micrometer metrics, with each run annotated;
+- **integrates** (ADR-0024): a public Java API, a Maven plugin, Gradle tasks, a JUnit 5 extension, an MCP server
+  and a Claude Code plugin (skills + agent) — all thin layers over the API.
 
-Not owned: running k6 itself, result storage/dashboards (k6 outputs: `--out`), and anything inside the host
-at runtime (the module is never on a host's classpath).
+Not owned: running k6 itself, long-term result storage, and anything inside the host at runtime (the modules are
+never on a host's runtime classpath; the JUnit extension is test scope only).
 
 ## 2. Context
 ```
@@ -46,11 +50,40 @@ at runtime (the module is never on a host's classpath).
   user values (json/csv/--value/--interactive) ──────────┤
   HAR observations ──► RecordedTraffic (recorded values, journey) ──┤
                                                           ▼
-                                          K6SuiteGenerator ──► suite/ (k6 project) ──► K6Runner ──► k6
+                       K6SuiteGenerator + GrafanaStack ──► suite/ (k6 project, grafana/) ──► LoadTestRunner ──► k6
+                                                                                    │      │ remote write
+                                                                     reports/*.json ┘      ▼
+                                              LoadTestReport ─► ReportComparison    Prometheus ◄─ app /actuator/prometheus
+                                                                                         ▼
+                                                                                      Grafana (dashboard, annotations)
+
+  api.LoadTestGenerator / LoadTestRunner ◄── CLI · Maven plugin · Gradle script (JavaExec) · JUnit @K6LoadTest
+                                         ◄── MCP server (stdio) ◄── Claude Code plugin: skills + load-test-engineer
 ```
 
 ## 3. Public contracts
-- CLI `scripts/loadtest.sh <discover|generate|run|modes>` (`cli.LoadTestCli`); options in §8.
+- **Java API** (`com.springaimcpservercommon.loadtest.api`, `@NullMarked`): `LoadTestGenerator.builder()…build()`
+  → `discover()` (`DiscoveryResult`: catalog, plan, seed, settings, recordings) / `generate()`
+  (`GenerationResult`); `LoadTestRunner.suite(dir).mode(…).env(…).grafana(url).grafanaAnnotations(url, token)
+  .timeout(…).run()` → `RunResult(exitCode, output, report, testId)`; `LoadTestReport.read/latest/reports`;
+  `ReportComparison.compare(baseline, current, Rules)` (defaults: p95 +20 % ignoring < 10 ms, failed +1 pp,
+  ≥ 10 requests).
+- **CLI** `scripts/loadtest.sh <discover|generate|run|report|compare|init-gradle|modes>` (`cli.LoadTestCli`);
+  exit codes: 0 ok, 1 failure / failed thresholds (`report`), 2 usage, 3 regression, otherwise k6's (99 =
+  thresholds failed). Options in §8.
+- **Maven plugin** (prefix `loadtest`): `discover`, `generate`, `run` (fails on failed thresholds; with
+  `baseline`, on a regression; `skipIfK6Missing`), `compare` (`updateBaseline`); every parameter also
+  `-Dloadtest.<name>`. Requires Maven on JDK 25.
+- **Gradle** `gradle/loadtest.gradle` (`loadtest init-gradle`): `loadtestDiscover|Generate|Run|Compare` as
+  `JavaExec` on a Java 25 toolchain; `loadtest { version, javaVersion, outDir, generateArgs, mode, dataMode, env,
+  k6, classpath }`; `-Ploadtest.mode|dataMode|api|baseUrl|baseline|grafana`.
+- **JUnit 5** `@K6LoadTest(project, outDir, include, exclude, database, baseUrl, env, requireK6)` + `K6Suite`
+  parameter (`run`, `runner`, `assertPassed`, `assertNoRegression`, `withEnv`); target from `baseUrl`, the
+  `loadtest.baseUrl` system property, or `http://localhost:<@LocalServerPort/@K6Target field><context path>`.
+- **MCP** (stdio, `scripts/loadtest-mcp.sh [--root dir]`): `loadtest_discover`, `loadtest_generate`,
+  `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`; text summary + structured content.
+- **Agent plugin** `claude-plugins/spring-loadtest` (marketplace `.claude-plugin/marketplace.json`): skills
+  `loadtest-generate`, `loadtest-analyze`, `loadtest-capacity`; agent `load-test-engineer`; the MCP server.
 - Generated suite layout (stable; documented in the suite README):
 
 | Path | Owner | Regenerated |
@@ -66,6 +99,9 @@ at runtime (the module is never on a host's classpath).
 | `data/journey.json` | generator | replaced when generated with `--har`, otherwise kept |
 | `data/seed.json` | generator | yes — seeding steps (`SeedPlan.toJson()`) |
 | `hooks.js` | team | never (created once) |
+| `grafana/docker-compose.yml`, `prometheus.yml`, `provisioning/**` | team | never (created once) |
+| `grafana/dashboards/k6-load-test.json` | generator | yes — built by `tools/grafana-dashboard.py` |
+| `reports/<mode>-<timestamp>.{json,md}`, `reports/comparison-<mode>.md` | runs | written per run / comparison |
 
 - Field keys (one scheme for plan, JS and user data; `data.FieldKeys`): `<apiId>.path|query|header.<name>`,
   `<apiId>.body[.<prop>…]` for inline bodies, `<SchemaName>.<prop>[.<prop>…]` for DTO properties.
@@ -182,6 +218,12 @@ table's rows cannot all be deleted, its parents are kept (they are still referen
 off with `SEED=false`, `READ_ONLY=true` or `safety.readOnly`; requests are tagged `seed_<api>`/`cleanup_<api>`.
 Writes go through the application (validation, events, auditing apply), never straight into the database.
 
+**REST resources without tables.** When the table index cannot resolve a resource (no JPA entity, no DDL, no
+database table — Spring Data MongoDB, a facade over other services), `DataPlan.restResources` treats a collection
+`POST /x` (with a body) plus an item route `/x/{var}` as a resource with pool `x.<var>`: path variables under
+`/x` bind to it and `SeedPlan` seeds it like a table (key from the response, or from the request when the body
+carries it). Such pools are never sampled from a database.
+
 **Run time (k6).** `field(ctx, spec)` chooses the source by `DATA_MODE`: `auto` user > real > dummy;
 `dummy`; `random` (constraint-driven, regex-generated strings; 4xx counted as expected); `real` real > user >
 dummy; `user` user > dummy; `mixed` weighted per field per request (`data.mix`). Identifiers stay real in
@@ -213,6 +255,10 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 | Seed create refused | status not 2xx | `seed: <table> n/N (k failed)`; that table has fewer/no seeded rows, fields fall back to sampled/dummy data | fix the payload in `hooks.js`/`user.json`, or `apis.<id>.enabled=false` |
 | Relationship cycle | Kahn finds no ready table | logged; the cycle is seeded with whatever parent ids exist | `--bind`, or seed one side via `user.json` |
 | DDL statement not understood | regex miss | skipped silently (tolerant reader) | give `--db-url` for real metadata |
+| k6 missing | `LoadTestRunner.findK6` | CLI/Maven fail with a message (`skipIfK6Missing`); JUnit aborts the test unless `requireK6`; MCP returns an error result | install k6 or set `K6_BIN` |
+| Run hangs | `LoadTestRunner.timeout` | k6 killed, exit 124 (MCP caps runs at 1 h) | lower `DURATION_SCALE`, check the target |
+| Grafana/Prometheus down | annotation POST fails / remote-write errors | annotation skipped with a warning; k6 logs output errors, the run continues | `docker compose … up -d` |
+| Regression against the baseline | `ReportComparison` | CLI exit 3, Maven/Gradle build fails, JUnit assertion | fix or accept and move the baseline (`updateBaseline`) |
 
 ## 7. Security
 - Never runs inside a host; read-only JDBC connection; identifiers from configuration are matched against JDBC
@@ -230,6 +276,12 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
   accounts) when that is not acceptable. Prefer Chrome's default "Export HAR (sanitized)".
 - Dummy e-mail/web domains are RFC 2606 reserved (`example.com/.org/.net`); card numbers are public test numbers.
 - DELETE disabled by default; `READ_ONLY=true` / `safety.readOnly` restrict a run to GET/HEAD.
+- MCP server: every path argument is resolved against `--root` and refused outside it (symbolic links resolved);
+  stdout carries the protocol only; generator and k6 output are returned in results, never row data beyond what
+  the suite already holds. Runs are capped at one hour. Who may be load-tested is the suite's
+  `safety.blockedHostPattern` plus the skills' rule to confirm the target with the user.
+- Grafana stack: local only — ports bound to `127.0.0.1`, anonymous admin; annotations use `GRAFANA_TOKEN` (bearer)
+  for any other Grafana. Prometheus scrapes the app's metrics endpoint only.
 
 ## 8. Configuration
 CLI (generation): `--project`, `--openapi`, `--actuator`, `--include`/`--exclude`/`--no-default-excludes`,
@@ -243,13 +295,20 @@ Oracle, H2, SQLite and DB2 found in `~/.m2` (`MAVEN_REPO_LOCAL`) or the Gradle c
 (`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `seed.{enabled, perTable, cleanup}`, `thresholds`, `defaults.p95Ms`,
 `defaults.maxErrorRate`, `perApi`, `journey.{pauseScale, maxPauseMs}`, `modes`, `apis.<id>.{enabled, weight, expectedStatuses, p95Ms, maxErrorRate}`)
 and env (`MODE`, `DATA_MODE`, `BASE_URL`, `API`, `VUS`, `RATE`, `DURATION_SCALE`, `PER_API`, `READ_ONLY`,
-`ALLOW_PROD`, `PREVIEW_COUNT`, `SEED`, `SEED_PER_TABLE`, `SEED_CLEANUP`).
+`ALLOW_PROD`, `PREVIEW_COUNT`, `SEED`, `SEED_PER_TABLE`, `SEED_CLEANUP`; Grafana: `GRAFANA=1` in `run.sh`,
+`K6_PROMETHEUS_RW_SERVER_URL`, `K6_PROMETHEUS_RW_TREND_STATS`, `GRAFANA_URL`, `GRAFANA_TOKEN`, `TEST_ID`). CLI
+run/compare: `--grafana`, `--prometheus-url`, `--grafana-url`, `--baseline`, `--max-p95-increase`,
+`--min-p95-delta-ms`, `--max-failed-increase`, `--min-requests`.
 
 ## 9. Observability
 Every request is tagged `api=<id>` and `name=<METHOD template>` (no high-cardinality URLs). Per-API thresholds
 on `http_req_duration{api:…}` (p95) and `http_req_failed{api:…}` also surface per-API rows in the summary.
 `handleSummary` prints a per-API table and writes `reports/<mode>-<timestamp>.{json,md}`; any k6 output
-(`-- --out experimental-prometheus-rw`, InfluxDB, Grafana Cloud) works unchanged.
+(InfluxDB, Grafana Cloud) works unchanged. The suite's `grafana/` stack: k6 remote-writes to Prometheus (trend
+stats p95/p99/avg/max in seconds, labels `api`, `name`, `testid`), Prometheus scrapes the app (`job="spring-app"`,
+target derived from the base URL and `management.server.*`), and the dashboard shows k6 overview, per-API panels
+(a row repeated per `api`) and the app's HTTP-by-URI, 4xx/5xx, HikariCP, heap, GC, CPU and thread metrics, with
+`testid`/`api` variables and run annotations (`lib/grafana.js`: a region from `setup()` to `teardown()`).
 
 ## 10. Performance & capacity
 Generation is offline and linear in source size. At run time pools and user values are k6 `SharedArray`s
@@ -265,4 +324,7 @@ for seeding and for each VU's own creates, but a multi-step business flow (cart 
 or a `hooks.js` recipe; non-PostgreSQL sampling relies on the driver found in the local Maven/Gradle cache or on
 `LOADTEST_CLASSPATH` (only PostgreSQL is tested); Liquibase XML/YAML/JSON changelogs are not read (SQL
 changelogs are) — give `--db-url` or JPA entities; functional-route handlers and Data REST bodies cannot be
-typed beyond the entity; composite foreign keys are not followed.
+typed beyond the entity; composite foreign keys are not followed. Integrations (ADR-0024): the Gradle side is a
+script plugin, not a binary plugin; the Maven plugin needs Maven on JDK 25; the Claude Code plugin's MCP server
+needs `LOADTEST_HOME` until the generator is published to a Maven repository; the dashboard's server-side
+percentiles need `percentiles-histogram` enabled in the app (averages and maxima otherwise).

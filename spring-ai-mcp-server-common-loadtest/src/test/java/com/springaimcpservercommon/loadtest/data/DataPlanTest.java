@@ -53,14 +53,20 @@ class DataPlanTest {
         DbTable customers = new DbTable("public", "customers", Map.of("id", "int8", "email", "text"), List.of("id"));
         DataPlan plan = plan(List.of(customers), Map.of("*.deliveryNotes", PoolRef.parse("customers.email")));
         assertThat(pool(plan, "getCustomer.path.id")).isEqualTo("customers.id");
-        assertThat(pool(plan, "getOrder.path.orderId")).isNull(); // no orders table in this database
+        // no orders table in this database: the REST resource itself (POST /orders → /orders/{orderId}) is the
+        // pool, filled by seeding at run time rather than sampled
+        assertThat(pool(plan, "getOrder.path.orderId")).isEqualTo("orders.orderId");
         assertThat(pool(plan, "CreateOrderRequest.deliveryNotes")).isEqualTo("customers.email");
     }
 
     @Test
-    void withoutAnyTableNothingIsBound() {
+    void withoutAnyTableOnlyRestResourcesAreBound() {
         DataPlan plan = DataPlan.build(CATALOG, new RealDataBinder(new TableIndex(List.of(), List.of()), Map.of()));
-        assertThat(plan.pools()).isEmpty();
+        // created by POST /x and addressed by /x/{id}: seeding fills these; nothing is sampled from a database
+        assertThat(plan.pools()).allSatisfy(p -> assertThat(p.schema()).isNull())
+                .extracting(PoolRef::key).containsExactlyInAnyOrderElementsOf(
+                        DataPlan.restResources(CATALOG).values().stream().map(PoolRef::key).toList());
+        assertThat(pool(plan, "CreateOrderRequest.deliveryNotes")).isNull();
         assertThat(plan.fields()).isNotEmpty();
     }
 

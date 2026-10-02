@@ -96,6 +96,7 @@ public record SeedPlan(List<Step> steps) {
      * @return the plan; empty when no create endpoint maps to a table
      */
     public static SeedPlan build(ApiCatalog catalog, DataPlan plan, TableIndex index, Consumer<String> log) {
+        Map<String, PoolRef> resources = DataPlan.restResources(catalog);
         Map<String, Step> byPool = new LinkedHashMap<>();
         Map<String, ApiEndpoint> chosen = new LinkedHashMap<>();
         Map<String, TableIndex.TableRef> tables = new LinkedHashMap<>();
@@ -103,7 +104,7 @@ public record SeedPlan(List<Step> steps) {
             if (e.method() != HttpMethod.POST || e.body() == null) {
                 continue;
             }
-            Optional<TableIndex.TableRef> table = target(e, index);
+            Optional<TableIndex.TableRef> table = target(e, index, resources);
             if (table.isEmpty() || table.get().idColumn() == null) {
                 continue;
             }
@@ -160,8 +161,11 @@ public record SeedPlan(List<Step> steps) {
                     deps.add(parent);
                 }
             }
-            boolean generated = t.entity() == null || t.entity().idGenerated();
-            String idField = t.entity() != null && t.entity().idField() != null ? t.entity().idField() : "id";
+            boolean synthetic = t.entity() == null && t.db() == null;
+            boolean generated = synthetic ? !bodyHas(e, catalog, t.idColumn())
+                    : t.entity() == null || t.entity().idGenerated();
+            String idField = t.entity() != null && t.entity().idField() != null ? t.entity().idField()
+                    : synthetic ? t.idColumn() : "id";
             Map<String, String> captured = captures.getOrDefault(pool, Map.of());
             String deleteApi = null;
             String deletePool = pool;
@@ -176,6 +180,15 @@ public record SeedPlan(List<Step> steps) {
                     deleteApi, captured, deletePool));
         }
         return new SeedPlan(order(byPool, log));
+    }
+
+    /** Whether the create payload itself carries the key (client-assigned, e.g. a SKU). */
+    private static boolean bodyHas(ApiEndpoint e, ApiCatalog catalog, @Nullable String property) {
+        if (property == null || e.body() == null) {
+            return false;
+        }
+        Schema body = e.body() instanceof RefSchema(String name) ? catalog.schemas().get(name) : e.body();
+        return body instanceof ObjectSchema o && o.properties().containsKey(property);
     }
 
     private static String tableKey(@Nullable String schema, String table) {
@@ -217,13 +230,19 @@ public record SeedPlan(List<Step> steps) {
     }
 
     /** The table a create endpoint writes to: its resource entity, its collection segment, or its body DTO. */
-    private static Optional<TableIndex.TableRef> target(ApiEndpoint e, TableIndex index) {
+    private static Optional<TableIndex.TableRef> target(ApiEndpoint e, TableIndex index,
+                                                        Map<String, PoolRef> resources) {
         Optional<TableIndex.TableRef> t = index.resolve(e.resource());
         if (t.isEmpty()) {
             t = index.resolve(ApiHarvester.lastSegment(e.path()));
         }
         if (t.isEmpty() && e.body() instanceof RefSchema(String name)) {
             t = index.resolve(DataPlan.schemaResource(name));
+        }
+        PoolRef rest = resources.get(e.path().replaceAll("/+$", ""));
+        if (t.isEmpty() && rest != null) {
+            // no table: the REST resource itself (POST /orders, GET /orders/{id})
+            t = Optional.of(new TableIndex.TableRef(null, rest.table(), rest.column(), null, null));
         }
         return t;
     }

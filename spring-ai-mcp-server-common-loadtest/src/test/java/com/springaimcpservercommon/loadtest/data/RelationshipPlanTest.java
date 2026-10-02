@@ -152,6 +152,62 @@ class RelationshipPlanTest {
     }
 
     @Test
+    void withoutAnyTableRestResourcesAreSeededAndReused(@TempDir Path dir) throws IOException {
+        // a MongoDB-style app: @Document classes, no JPA, no DDL — only the REST routes tie things together
+        Path src = Files.createDirectories(dir.resolve("src/main/java/x"));
+        Files.writeString(src.resolve("Api.java"), """
+                package x;
+                import org.springframework.web.bind.annotation.*;
+                @RestController
+                @RequestMapping("/articles")
+                class Api {
+                    @PostMapping Object create(@RequestBody NewArticle a) { return null; }
+                    @GetMapping("/{slug}") Object get(@PathVariable String slug) { return null; }
+                    @DeleteMapping("/{slug}") Object remove(@PathVariable String slug) { return null; }
+                    @PostMapping("/{slug}/comments") Object comment(@PathVariable String slug, @RequestBody NewComment c) {
+                        return null;
+                    }
+                    @GetMapping("/{slug}/comments/{id}") Object getComment(@PathVariable String slug, @PathVariable String id) {
+                        return null;
+                    }
+                }
+                record NewArticle(String title) { }
+                record NewComment(String body) { }
+                @RestController
+                @RequestMapping("/products")
+                class Products {
+                    @PostMapping Object add(@RequestBody NewProduct p) { return null; }
+                    @GetMapping("/{sku}") Object get(@PathVariable String sku) { return null; }
+                }
+                record NewProduct(String sku, String name) { }
+                """);
+        ApiCatalog catalog = new SpringSourceScanner(s -> { }).scan(dir);
+        TableIndex none = new TableIndex(List.of(), List.of());
+        DataPlan plan = DataPlan.build(catalog, new RealDataBinder(none, Map.of()));
+        assertThat(DataPlan.restResources(catalog)).containsOnlyKeys("/articles", "/articles/{slug}/comments",
+                "/products");
+        assertThat(field(plan, "get.path.slug").pool().key()).isEqualTo("articles.slug");
+        assertThat(field(plan, "comment.path.slug").pool().key()).isEqualTo("articles.slug");
+        assertThat(field(plan, "getComment.path.id").pool().key()).isEqualTo("comments.id");
+
+        SeedPlan seed = SeedPlan.build(catalog, plan, none, s -> { });
+        assertThat(seed.steps()).extracting(SeedPlan.Step::table).containsSubsequence("articles", "comments");
+        SeedPlan.Step articles = seed.steps().stream().filter(s -> s.table().equals("articles")).findFirst()
+                .orElseThrow();
+        assertThat(articles.pool()).isEqualTo("articles.slug");
+        assertThat(articles.idField()).isEqualTo("slug");
+        assertThat(articles.idFromRequest()).isFalse(); // the server makes the slug: read it from the response
+        assertThat(articles.deleteApi()).isEqualTo("remove");
+        assertThat(seed.steps().stream().filter(s -> s.table().equals("comments")).findFirst().orElseThrow()
+                .dependsOn()).containsExactly("articles.slug");
+        SeedPlan.Step products = seed.steps().stream().filter(s -> s.table().equals("products")).findFirst()
+                .orElseThrow();
+        assertThat(products.idFromRequest()).isTrue(); // the client sends the SKU
+        assertThat(DataPlan.collectionOf("/articles/{slug}/comments/{id}", "id")).isEqualTo("/articles/{slug}/comments");
+        assertThat(DataPlan.collectionOf("/articles", "id")).isNull();
+    }
+
+    @Test
     void naturalKeysAreReadFromTheRequest(@TempDir Path dir) throws IOException {
         Path src = Files.createDirectories(dir.resolve("src/main/java/x"));
         Files.writeString(src.resolve("Product.java"), """

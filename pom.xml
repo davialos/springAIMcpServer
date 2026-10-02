@@ -31,6 +31,7 @@
         <module>spring-ai-mcp-server-common-spring-boot-starter</module>
         <module>spring-ai-mcp-server-common-loadtest</module>
         <!-- Load-test generator integrations (developer tools, not part of the starter): ADR-0022, LLD-16 -->
+        <module>spring-ai-mcp-server-common-loadtest-maven-plugin</module>
         <module>spring-ai-mcp-server-common-loadtest-junit</module>
         <module>spring-ai-mcp-server-common-loadtest-mcp</module>
         <!-- Developer tool, not part of the starter: JFR recording analyzer (docs/tools/jfr-analyzer.md) -->
@@ -61,6 +62,9 @@
         <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
         <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
+        <!-- Load-test Maven plugin: API matches the Maven the build requires (3.9.x); 3.15.2 ships ASM 9.9 (Java 25) -->
+        <maven-plugin-api.version>3.9.11</maven-plugin-api.version>
+        <maven-plugin-tools.version>3.15.2</maven-plugin-tools.version>
         <!-- MCP Java SDK used directly by the load-test MCP server: the version spring-ai-mcp 2.0.1 depends on -->
         <mcp-sdk.version>2.0.0</mcp-sdk.version>
     </properties>

@@ -129,10 +129,12 @@ public final class TurnSafety {
      * @return the rejection, or {@code null} when the prompt may proceed
      */
     public @Nullable Rejection validatePrompt(AgentDefinition agent, DaiPrincipal principal, String prompt) {
-        InputValidationPolicy policy = agent.guardrails().inputValidation().strictest(settings.inputFloor());
-        if (!policy.enabled()) {
+        if (this == DISABLED) {
             return null;
         }
+        InputValidationPolicy policy = agent.guardrails().inputValidation().strictest(settings.inputFloor());
+        // always run the chain: the built-in validators read the policy and pass when their check is off, while a
+        // host's own PromptValidator beans must run whatever the built-in switches say
         PromptValidationRequest request = new PromptValidationRequest(prompt, agent.workspaceId(), agent.slug(),
                 principal, policy, agent.guardrails().topicAllowList(), this::catalog);
         PromptVerdict verdict = validator.validate(request);

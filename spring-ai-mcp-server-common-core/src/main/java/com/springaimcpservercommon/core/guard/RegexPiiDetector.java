@@ -34,7 +34,7 @@ public final class RegexPiiDetector implements PiiDetector {
                     + "@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                     + "(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.[A-Za-z]{2,24}(?![\\w-])");
     private static final Pattern PHONE_INTERNATIONAL = Pattern.compile(
-            "(?<![\\w+])\\+\\d{1,3}(?:[ .-]?\\(?\\d{1,5}\\)?){1,6}(?!\\w)");
+            "(?<![\\w+])\\+\\d{1,3}(?:[ .-]?(?:\\(\\d{1,5}\\)|\\d{1,5})){1,6}(?!\\w)");
     private static final Pattern PHONE_NORTH_AMERICA = Pattern.compile(
             "(?<![\\w(])(?:\\(\\d{3}\\) ?|\\d{3}[ .-])\\d{3}[ .-]\\d{4}(?!\\w)");
     /** National format with a trunk prefix and separators: {@code 020 7946 0958}, {@code 0711-123456}. */

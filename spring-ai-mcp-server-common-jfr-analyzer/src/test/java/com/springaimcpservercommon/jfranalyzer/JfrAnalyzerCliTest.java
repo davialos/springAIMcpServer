@@ -28,9 +28,12 @@ class JfrAnalyzerCliTest {
         assertThat(code).as(err.toString(StandardCharsets.UTF_8)).isZero();
         assertThat(dir.resolve("r.html")).isRegularFile();
         assertThat(dir.resolve("r.json")).isRegularFile();
+        assertThat(dir.resolve("r.xlsx")).isRegularFile();
+        assertThat(dir.resolve("r-summary.json")).isRegularFile();
         assertThat(Files.readString(dir.resolve("r.json"))).contains("\n  \"cpu\": {");
         String printed = out.toString(StandardCharsets.UTF_8);
-        assertThat(printed).contains("Hottest line:").contains("SampleWorkload.java:").contains("Wrote ");
+        assertThat(printed).contains("Status: ")
+                .contains("Hottest line:").contains("SampleWorkload.java:").contains("Wrote ");
     }
 
     @Test
@@ -43,6 +46,17 @@ class JfrAnalyzerCliTest {
     }
 
     @Test
+    void excelAndSummaryOnly(@TempDir Path dir) {
+        int code = run(TestRecordings.sample().toString(), "-p", TestRecordings.SAMPLE_PACKAGE, "-o", dir.toString(),
+                "-n", "lead", "--format", "xlsx,summary");
+        assertThat(code).isZero();
+        assertThat(dir.resolve("lead.xlsx")).isRegularFile();
+        assertThat(dir.resolve("lead-summary.json")).isRegularFile();
+        assertThat(dir.resolve("lead.html")).doesNotExist();
+        assertThat(dir.resolve("lead.json")).doesNotExist();
+    }
+
+    @Test
     void badUsageExitsWithTwo() {
         assertThat(run()).isEqualTo(2);
         assertThat(err.toString(StandardCharsets.UTF_8)).contains("no recording given").contains("Usage:");
@@ -50,6 +64,8 @@ class JfrAnalyzerCliTest {
         assertThat(run(TestRecordings.sample().toString(), "--bogus")).isEqualTo(2);
         assertThat(run(TestRecordings.sample().toString(), "--top", "x")).isEqualTo(2);
         assertThat(run(TestRecordings.sample().toString(), "--compact-json=yes")).isEqualTo(2);
+        assertThat(run(TestRecordings.sample().toString(), "--format", "pdf")).isEqualTo(2);
+        assertThat(err.toString(StandardCharsets.UTF_8)).contains("unknown: pdf");
     }
 
     @Test

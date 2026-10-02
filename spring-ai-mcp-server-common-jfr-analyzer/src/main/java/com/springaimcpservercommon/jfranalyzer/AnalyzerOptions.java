@@ -14,6 +14,8 @@ import java.util.Objects;
  * @param baseName          report file name without extension
  * @param writeHtml         write {@code <baseName>.html}
  * @param writeJson         write {@code <baseName>.json}
+ * @param writeExcel        write {@code <baseName>.xlsx}
+ * @param writeSummary      write {@code <baseName>-summary.json}
  * @param prettyJson        indent the JSON
  * @param topN              rows per ranked list
  * @param stacksPerHotspot  representative call paths kept per hot spot
@@ -21,7 +23,8 @@ import java.util.Objects;
  */
 public record AnalyzerOptions(Path recording, List<String> packages, List<String> excludedPackages,
                               Path outputDirectory, String baseName, boolean writeHtml, boolean writeJson,
-                              boolean prettyJson, int topN, int stacksPerHotspot, int stackDepth) {
+                              boolean writeExcel, boolean writeSummary, boolean prettyJson, int topN,
+                              int stacksPerHotspot, int stackDepth) {
 
     /** Default rows per ranked list. */
     public static final int DEFAULT_TOP_N = 25;
@@ -56,6 +59,6 @@ public record AnalyzerOptions(Path recording, List<String> packages, List<String
         String file = recording.getFileName().toString();
         String base = (file.endsWith(".jfr") ? file.substring(0, file.length() - 4) : file) + "-report";
         return new AnalyzerOptions(recording, packages, List.of(), parent == null ? Path.of(".") : parent, base,
-                true, true, true, DEFAULT_TOP_N, DEFAULT_STACKS_PER_HOTSPOT, DEFAULT_STACK_DEPTH);
+                true, true, true, true, true, DEFAULT_TOP_N, DEFAULT_STACKS_PER_HOTSPOT, DEFAULT_STACK_DEPTH);
     }
 }

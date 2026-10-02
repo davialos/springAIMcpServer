@@ -24,6 +24,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -50,7 +51,7 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana");
+            "grafana", "force");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -100,6 +101,7 @@ public final class LoadTestCli {
                 case "run" -> run(a);
                 case "report" -> report(a);
                 case "compare" -> compare(a);
+                case "init-gradle" -> initGradle(a);
                 case "modes" -> modes();
                 case "help", "--help", "-h" -> {
                     usage();
@@ -138,7 +140,7 @@ public final class LoadTestCli {
         LoadTestGenerator.Builder b = LoadTestGenerator.builder().log(this::log);
         if (a.get("project") != null) {
             Path project = Path.of(a.get("project"));
-            if (!java.nio.file.Files.isDirectory(project)) {
+            if (!Files.isDirectory(project)) {
                 throw new IllegalArgumentException("--project " + project + " is not a directory");
             }
             b.project(project);
@@ -388,6 +390,31 @@ public final class LoadTestCli {
         return c.passed() ? 0 : 3;
     }
 
+    /** Writes {@code <project>/gradle/loadtest.gradle} (the Gradle tasks) unless it exists. */
+    private int initGradle(CliArgs a) {
+        Path project = Path.of(a.get("project", "."));
+        Path script = project.resolve("gradle/loadtest.gradle");
+        if (Files.exists(script) && !a.flag("force")) {
+            out.println(script + " exists (--force to overwrite)");
+            return 0;
+        }
+        try (InputStream in = LoadTestCli.class.getResourceAsStream("/loadtest/gradle/loadtest.gradle")) {
+            if (in == null) {
+                throw new IllegalStateException("missing resource /loadtest/gradle/loadtest.gradle");
+            }
+            Files.createDirectories(script.getParent());
+            Files.write(script, in.readAllBytes());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        boolean kotlin = Files.exists(project.resolve("build.gradle.kts"));
+        out.println("Wrote " + script);
+        out.println("Add to " + (kotlin ? "build.gradle.kts:  apply(from = \"gradle/loadtest.gradle\")"
+                : "build.gradle:  apply from: 'gradle/loadtest.gradle'"));
+        out.println("Then: ./gradlew loadtestGenerate loadtestRun -Ploadtest.mode=smoke");
+        return 0;
+    }
+
     private static ReportComparison.Rules rules(CliArgs a) {
         ReportComparison.Rules d = ReportComparison.Rules.DEFAULTS;
         return new ReportComparison.Rules(
@@ -435,6 +462,7 @@ public final class LoadTestCli {
                   run        run a generated suite with k6
                   report     print the newest report of a suite (exit 1 when thresholds failed)
                   compare    compare a report with a baseline report (exit 3 on regression)
+                  init-gradle  write gradle/loadtest.gradle (loadtestGenerate/Run/Compare tasks) into --project
                   modes      list load modes and data modes
 
                 Discovery (discover, generate)

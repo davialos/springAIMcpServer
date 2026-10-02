@@ -120,4 +120,39 @@ class LoadTestCliTest {
         assertThat(out()).contains("spike").contains("mixed-stress").contains("journey-spike").contains("preview")
                 .contains("DATA_MODE");
     }
+
+    @Test
+    void initGradleWritesTheScriptOnce(@TempDir Path dir) throws IOException {
+        java.nio.file.Files.writeString(dir.resolve("build.gradle.kts"), "plugins { java }\n");
+        assertThat(run("", "init-gradle", "--project", dir.toString())).isZero();
+        Path script = dir.resolve("gradle/loadtest.gradle");
+        assertThat(java.nio.file.Files.readString(script)).contains("loadtestGenerate").contains("loadtestRun")
+                .contains("JavaLanguageVersion.of(loadtest.javaVersion)");
+        assertThat(out()).contains("apply(from = \"gradle/loadtest.gradle\")");
+
+        java.nio.file.Files.writeString(script, "// mine\n");
+        assertThat(run("", "init-gradle", "--project", dir.toString())).isZero();
+        assertThat(java.nio.file.Files.readString(script)).isEqualTo("// mine\n");
+        assertThat(run("", "init-gradle", "--project", dir.toString(), "--force")).isZero();
+        assertThat(java.nio.file.Files.readString(script)).contains("loadtestCompare");
+    }
+
+    @Test
+    void reportAndCompareCommands(@TempDir Path dir) throws IOException {
+        Path reports = java.nio.file.Files.createDirectories(dir.resolve("reports"));
+        String report = """
+                {"mode":"smoke","dataMode":"auto","baseUrl":"http://x","failedThresholds":[],"metrics":{},
+                 "apis":[{"api":"getOrder","name":"GET /orders/{id}","requests":50,"failed":0,"p95":%s}]}
+                """;
+        Path base = java.nio.file.Files.writeString(reports.resolve("smoke-2026-10-01T00-00-00-000Z.json"),
+                report.formatted(100));
+        java.nio.file.Files.writeString(reports.resolve("smoke-2026-10-02T00-00-00-000Z.json"), report.formatted(400));
+        assertThat(run("", "report", "--suite", dir.toString())).isZero();
+        assertThat(out()).contains("smoke-2026-10-02").contains("getOrder").contains("400.0");
+        assertThat(run("", "compare", "--suite", dir.toString(), "--baseline", base.toString())).isEqualTo(3);
+        assertThat(out()).contains("**regression**").contains("p95 100.0 → 400.0 ms");
+        assertThat(run("", "compare", "--suite", dir.toString(), "--baseline", base.toString(),
+                "--max-p95-increase", "500")).isZero();
+        assertThat(run("", "compare", "--suite", dir.toString())).isEqualTo(2); // --baseline missing
+    }
 }

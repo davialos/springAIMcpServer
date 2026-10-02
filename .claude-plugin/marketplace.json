@@ -1,0 +1,16 @@
+{
+  "name": "springaimcpserver",
+  "owner": {
+    "name": "springAIMcpServerCommon"
+  },
+  "metadata": {
+    "description": "Claude Code plugins from springAIMcpServerCommon: Spring Boot load testing with Grafana k6."
+  },
+  "plugins": [
+    {
+      "name": "spring-loadtest",
+      "source": "./claude-plugins/spring-loadtest",
+      "description": "Grafana k6 load testing for Spring Boot projects: endpoint discovery, relationship-aware payloads and seeding, load modes, Grafana dashboards, analysis and capacity planning."
+    }
+  ]
+}

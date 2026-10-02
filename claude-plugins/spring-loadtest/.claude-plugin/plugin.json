@@ -1,0 +1,7 @@
+{
+  "name": "spring-loadtest",
+  "version": "0.1.0",
+  "description": "Grafana k6 load testing for Spring Boot projects: discover every endpoint, build payloads from the entity relationships, seed data, run smoke/load/spike/stress, analyze results and capacity. Skills, a load-test-engineer agent and an MCP server.",
+  "author": { "name": "springAIMcpServerCommon" },
+  "keywords": ["spring-boot", "k6", "grafana", "load-testing", "performance"]
+}

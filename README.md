@@ -35,7 +35,7 @@ See [`docs/offline-build.md`](docs/offline-build.md) for the vendored dependency
 | `-autoconfigure` | Spring Boot auto-configuration |
 | `-spring-boot-starter` | The one dependency hosts add |
 | `-loadtest` | Developer tool (not in the starter): generates Grafana k6 load tests for any Spring Boot project |
-| `-jfr-analyzer` | Developer tool, not shipped to hosts: JFR recording → HTML + JSON hot-spot report (`scripts/jfr-analyze.sh`, [docs](docs/tools/jfr-analyzer.md)) |
+| `-jfr-analyzer` | Developer tool, not shipped to hosts: JFR recording → HTML, JSON, Excel dashboard and shareable summary (`scripts/jfr-analyze.sh`, [docs](docs/tools/jfr-analyzer.md)) |
 
 ## Load testing any Spring Boot project (k6)
 

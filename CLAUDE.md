@@ -55,7 +55,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `autoconfigure` | `…autoconfigure` | `@AutoConfiguration` classes + `@ConfigurationProperties` only | all above (optional) |
 | `spring-boot-starter` | — | dependency aggregator | autoconfigure + defaults |
 | `loadtest` | `…loadtest` | dev tool (not in the starter/BOM): API discovery (sources, OpenAPI, actuator, HAR) → k6 suite generator, data providers, journeys, CLI (ADR-0022, LLD-16) | jackson 3, postgresql driver; **no Spring** |
-| `jfr-analyzer` | `…jfranalyzer` | developer CLI: JFR file → HTML/JSON hot-spot report (docs/tools/jfr-analyzer.md); not in the BOM | core (CanonicalJson only) |
+| `jfr-analyzer` | `…jfranalyzer` | developer CLI: JFR file → HTML, JSON, Excel dashboard and shareable summary JSON (docs/tools/jfr-analyzer.md); not in the BOM | core (CanonicalJson only) |
 
 ## Coding conventions
 

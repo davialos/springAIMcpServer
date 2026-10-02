@@ -40,6 +40,8 @@ at runtime (the module is never on a host's classpath).
 
 ## 3. Public contracts
 - CLI `scripts/loadtest.sh <discover|generate|run|modes>` (`cli.LoadTestCli`); options in §8.
+- Orchestration: `scripts/perf-test.sh` runs generate + run against any live service and profiles its JVM with JFR
+  during the load ([tools/perf-test.md](../tools/perf-test.md)); it only calls this CLI, adding no contract here.
 - Generated suite layout (stable; documented in the suite README):
 
 | Path | Owner | Regenerated |

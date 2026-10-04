@@ -118,6 +118,28 @@ public final class CatalogMerger {
     }
 
     /**
+     * Moves a catalog onto another base path: an OpenAPI document whose server URL is
+     * {@code /petclinic/api} describes paths relative to it, while the project's controllers are relative to the
+     * servlet context path {@code /petclinic}; rebasing prefixes the document's paths with {@code /api} so both
+     * agree and the base URL is the context path.
+     *
+     * @param catalog  catalog
+     * @param prefix   prefix to put in front of every path (e.g. {@code /api})
+     * @param basePath the new base path (the servlet context path), or {@code null}
+     * @return the rebased catalog
+     */
+    public static ApiCatalog rebase(ApiCatalog catalog, String prefix, @org.jspecify.annotations.Nullable String basePath) {
+        List<ApiEndpoint> moved = new ArrayList<>();
+        for (ApiEndpoint e : catalog.endpoints()) {
+            String path = (prefix + "/" + e.path()).replaceAll("/+", "/");
+            path = path.length() > 1 && path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+            moved.add(new ApiEndpoint(e.id(), e.method(), path, e.summary(), e.tags(), e.params(), e.body(),
+                    e.resource(), e.sources()));
+        }
+        return new ApiCatalog(catalog.project(), basePath, moved, catalog.schemas(), catalog.entities());
+    }
+
+    /**
      * Keeps the endpoints that match an include pattern (all when none is given) and no exclude pattern.
      * A pattern is an Ant-style path ({@code /api/**}, {@code /users/*}) optionally prefixed by a method
      * ({@code DELETE /api/**}).

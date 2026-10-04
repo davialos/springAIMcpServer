@@ -2,6 +2,7 @@ package com.springaimcpservercommon.loadtest.k6;
 
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
+import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
@@ -34,8 +35,10 @@ import java.util.stream.Stream;
  * data/real.json         real-data pools (database / API harvest)
  * data/user.json         user-supplied values, payloads and bindings
  * data/plan.json         every field: kind and real-data binding
+ * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * hooks.js               user hooks (created once, never overwritten)
+ * grafana/               Prometheus + Grafana stack and dashboard (written by GrafanaStack)
  * README.md              how to run; API and field tables
  * </pre>
  */
@@ -43,7 +46,7 @@ public final class K6SuiteGenerator {
 
     private static final List<String> RUNTIME_FILES = List.of(
             "lib/data.js", "lib/dummy.js", "lib/random.js", "lib/modes.js", "lib/http.js", "lib/report.js",
-            "lib/dictionaries.json");
+            "lib/grafana.js", "lib/dictionaries.json");
 
     /**
      * Generation options.
@@ -97,6 +100,23 @@ public final class K6SuiteGenerator {
      */
     public Result generate(ApiCatalog catalog, DataPlan plan, Map<String, List<Object>> pools, UserData user,
                            @Nullable ArrayNode journey, Options o) {
+        return generate(catalog, plan, pools, user, journey, null, o);
+    }
+
+    /**
+     * Generates (or regenerates) a suite, with a recorded journey and a seeding plan.
+     *
+     * @param catalog discovered APIs
+     * @param plan    data plan
+     * @param pools   real-data pools collected now (merged over the ones on disk)
+     * @param user    the complete user data for {@code data/user.json}
+     * @param journey recorded steps for {@code data/journey.json}, or {@code null} to keep the file on disk
+     * @param seed    relationship-ordered seeding for {@code data/seed.json}, or {@code null} for none
+     * @param o       options
+     * @return summary
+     */
+    public Result generate(ApiCatalog catalog, DataPlan plan, Map<String, List<Object>> pools, UserData user,
+                           @Nullable ArrayNode journey, @Nullable SeedPlan seed, Options o) {
         Path out = o.outDir();
         try {
             for (String dir : List.of("lib", "apis", "providers", "data", "reports")) {
@@ -128,6 +148,8 @@ public final class K6SuiteGenerator {
 
             writeJson(out.resolve("data/user.json"), user.toJson());
             writeJson(out.resolve("data/plan.json"), planJson(plan, realPools));
+            writeJson(out.resolve("data/seed.json"), seed == null ? Documents.json().createArrayNode()
+                    : seed.toJson());
             Path journeyFile = out.resolve("data/journey.json");
             if (journey != null) {
                 writeJson(journeyFile, journey);
@@ -136,7 +158,7 @@ public final class K6SuiteGenerator {
             }
 
             Files.writeString(out.resolve("README.md"),
-                    SuiteReadme.render(catalog, plan, realPools, user, config));
+                    SuiteReadme.render(catalog, plan, realPools, user, config, seed));
             Files.writeString(out.resolve("run.sh"), runScript());
             out.resolve("run.sh").toFile().setExecutable(true);
             return new Result(out, catalog.endpoints().size(), plan.fields().size(), realPools.size());
@@ -236,7 +258,10 @@ public final class K6SuiteGenerator {
                 #   ./run.sh preview random            print generated requests, send nothing
                 #   ./run.sh journey-load              replay the recorded browser flow (generate --har) under load
                 # Env (k6 reads it directly): BASE_URL, VUS, RATE, DURATION_SCALE, API, PER_API, READ_ONLY,
-                #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT
+                #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT, SEED, SEED_PER_TABLE,
+                #   SEED_CLEANUP
+                # Grafana: docker compose -f grafana/docker-compose.yml up -d, then GRAFANA=1 ./run.sh mixed-load
+                #   (K6_PROMETHEUS_RW_SERVER_URL, GRAFANA_URL, GRAFANA_TOKEN, TEST_ID override the local defaults)
                 set -euo pipefail
                 cd "$(dirname "$0")"
                 mode="${1:-smoke}"
@@ -246,6 +271,16 @@ public final class K6SuiteGenerator {
                 args=(run -e "MODE=$mode")
                 if [ -n "$data" ]; then args+=(-e "DATA_MODE=$data"); fi
                 case "$mode" in *preview) args+=(--log-format=raw --quiet) ;; esac
+                case "${GRAFANA:-}" in
+                  1|true|yes)
+                    export K6_PROMETHEUS_RW_SERVER_URL="${K6_PROMETHEUS_RW_SERVER_URL:-http://localhost:9090/api/v1/write}"
+                    export K6_PROMETHEUS_RW_TREND_STATS="${K6_PROMETHEUS_RW_TREND_STATS:-p(95),p(99),avg,max}"
+                    export GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
+                    export TEST_ID="${TEST_ID:-$mode-$(date -u +%Y%m%dT%H%M%SZ)}"
+                    args+=(--out experimental-prometheus-rw --tag "testid=$TEST_ID")
+                    echo "grafana: streaming to $K6_PROMETHEUS_RW_SERVER_URL, test run $TEST_ID ($GRAFANA_URL)" >&2
+                    ;;
+                esac
                 exec "${K6:-k6}" "${args[@]}" "$@" main.js
                 """;
     }

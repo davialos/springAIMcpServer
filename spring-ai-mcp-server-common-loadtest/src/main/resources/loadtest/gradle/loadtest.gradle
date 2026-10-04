@@ -1,0 +1,100 @@
+// k6 load tests for a Spring Boot Gradle build (springAIMcpServerCommon load-test generator, LLD-16, ADR-0022).
+//
+//   apply from: 'gradle/loadtest.gradle'            // in build.gradle (build.gradle.kts: apply(from = "gradle/loadtest.gradle"))
+//
+//   ./gradlew loadtestDiscover                      APIs, fields and seeding order found in this project
+//   ./gradlew loadtestGenerate                      write the k6 suite (default load-tests/)
+//   ./gradlew loadtestRun -Ploadtest.mode=mixed-load [-Ploadtest.baseUrl=…] [-Ploadtest.api=…] [-Ploadtest.grafana]
+//   ./gradlew loadtestCompare -Ploadtest.baseline=load-tests/baseline.json      regression gate
+//
+// The generator needs Java 25: the tasks fork a JVM from a Gradle toolchain, whatever JDK runs Gradle (Gradle
+// finds installed JDKs; enable toolchain download to fetch one). The generator jar comes from Maven local
+// (`mvn install` of springAIMcpServerCommon) or from `loadtest { classpath = files(...) }`.
+// Created by `loadtest init-gradle`; yours to edit.
+
+apply plugin: 'java-base' // toolchains
+
+class LoadTestExtension {
+    /** Generator version (Maven coordinates com.springaimcpservercommon:spring-ai-mcp-server-common-loadtest). */
+    String version = '0.1.0-SNAPSHOT'
+    /** Java version of the forked JVM. */
+    int javaVersion = 25
+    /** Suite directory, relative to the project. */
+    String outDir = 'load-tests'
+    /** Extra generator options, as on the CLI: ['--no-db', '--exclude', '/rest/**', '--harvest'] */
+    List<String> generateArgs = []
+    /** Default load mode for loadtestRun (-Ploadtest.mode overrides). */
+    String mode = 'smoke'
+    /** Default data mode for loadtestRun (-Ploadtest.dataMode overrides); null = the suite config's. */
+    String dataMode
+    /** Suite variables for loadtestRun: [VUS: '20', DURATION_SCALE: '0.5', SEED_PER_TABLE: '10'] */
+    Map<String, String> env = [:]
+    /** k6 executable; null = K6_BIN or k6 on the PATH. */
+    String k6
+    /** Generator classpath instead of Maven local (files(...) or a configuration). */
+    Object classpath
+}
+
+def loadtest = extensions.create('loadtest', LoadTestExtension)
+
+if (!repositories.any { it.name == 'MavenLocal' }) {
+    repositories.mavenLocal() { content { includeGroup 'com.springaimcpservercommon' } }
+}
+if (!repositories.any { it.name == 'MavenRepo' }) {
+    repositories.mavenCentral()
+}
+
+configurations {
+    loadtestTool {
+        canBeConsumed = false
+        canBeResolved = true
+        visible = false
+        description = 'The k6 load-test generator'
+    }
+}
+configurations.loadtestTool.defaultDependencies { deps ->
+    deps.add(project.dependencies.create(
+            "com.springaimcpservercommon:spring-ai-mcp-server-common-loadtest:${loadtest.version}"))
+}
+
+def prop = { String name -> project.findProperty("loadtest.${name}")?.toString() }
+
+def loadtestTask = { String taskName, String text, Closure<List<String>> arguments ->
+    tasks.register(taskName, JavaExec) {
+        group = 'load test'
+        description = text
+        mainClass = 'com.springaimcpservercommon.loadtest.cli.LoadTestCli'
+        classpath = loadtest.classpath != null ? files(loadtest.classpath) : configurations.loadtestTool
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(loadtest.javaVersion) }
+        workingDir = projectDir
+        environment(loadtest.env)
+        argumentProviders.add({ arguments() } as CommandLineArgumentProvider)
+    }
+}
+
+loadtestTask('loadtestDiscover', 'Lists the APIs, request fields and seeding order of this project.') {
+    ['discover', '--project', projectDir.path] + loadtest.generateArgs.findAll { it != '--no-db' }
+}
+
+loadtestTask('loadtestGenerate', 'Writes the k6 load-test suite (request builders, data, seeding, Grafana).') {
+    ['generate', '--project', projectDir.path, '--out', file(loadtest.outDir).path] + loadtest.generateArgs
+}
+
+loadtestTask('loadtestRun', 'Runs the suite with k6; fails on failed thresholds (or a regression with -Ploadtest.baseline).') {
+    def args = ['run', '--suite', file(loadtest.outDir).path, '--mode', prop('mode') ?: loadtest.mode]
+    def data = prop('dataMode') ?: loadtest.dataMode
+    if (data) args += ['--data-mode', data]
+    if (prop('api')) args += ['--api', prop('api')]
+    if (prop('baseUrl')) args += ['--base-url', prop('baseUrl')]
+    if (loadtest.k6) args += ['--k6', loadtest.k6]
+    if (project.hasProperty('loadtest.grafana')) args += ['--grafana']
+    if (prop('baseline')) args += ['--baseline', file(prop('baseline')).path]
+    args
+}
+
+loadtestTask('loadtestCompare', 'Compares the newest report with -Ploadtest.baseline=<report.json>; fails on a regression.') {
+    if (!prop('baseline')) throw new GradleException('loadtestCompare needs -Ploadtest.baseline=<report.json>')
+    def args = ['compare', '--suite', file(loadtest.outDir).path, '--baseline', file(prop('baseline')).path]
+    if (prop('maxP95Increase')) args += ['--max-p95-increase', prop('maxP95Increase')]
+    args
+}

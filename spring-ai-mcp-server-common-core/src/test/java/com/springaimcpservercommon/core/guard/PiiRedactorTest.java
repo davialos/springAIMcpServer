@@ -17,6 +17,8 @@ class PiiRedactorTest {
     @CsvSource(delimiter = '|', value = {
             "Contact jane.doe+billing@example.co.uk today|Contact [redacted email] today|EMAIL",
             "Call +44 20 7946 0958 now|Call [redacted phone] now|PHONE",
+            "Ann (+44 20 7946 0958) called|Ann ([redacted phone]) called|PHONE",
+            "Dial +44 (0)20 7946 0958 today|Dial [redacted phone] today|PHONE",
             "Call (555) 123-4567 now|Call [redacted phone] now|PHONE",
             "Call 555-123-4567.|Call [redacted phone].|PHONE",
             "Card 4111 1111 1111 1111 expires|Card [redacted credit card] expires|CREDIT_CARD",

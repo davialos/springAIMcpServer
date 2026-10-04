@@ -31,6 +31,7 @@ public final class RealDataCollector {
     }
 
     private final Consumer<String> log;
+    private final java.util.Set<String> seeded;
 
     /**
      * Creates a collector.
@@ -38,7 +39,18 @@ public final class RealDataCollector {
      * @param log receives one line per pool and per verification
      */
     public RealDataCollector(Consumer<String> log) {
+        this(log, java.util.Set.of());
+    }
+
+    /**
+     * Creates a collector for a suite that seeds data.
+     *
+     * @param log    receives one line per pool and per verification
+     * @param seeded pool keys the suite's seeding fills at run time ({@link SeedPlan#pools()})
+     */
+    public RealDataCollector(Consumer<String> log, java.util.Set<String> seeded) {
         this.log = log;
+        this.seeded = java.util.Set.copyOf(seeded);
     }
 
     /**
@@ -97,7 +109,9 @@ public final class RealDataCollector {
             }
         }
         for (PoolRef p : plan.pools()) {
-            if (!pools.containsKey(p.key())) {
+            if (!pools.containsKey(p.key()) && seeded.contains(p.key())) {
+                log.accept("real: " + p.key() + " is filled at run time by seeding (rows created in setup)");
+            } else if (!pools.containsKey(p.key())) {
                 log.accept("real: " + p.key() + " has no values; fields bound to it fall back to user/dummy data");
             }
         }

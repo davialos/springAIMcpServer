@@ -29,6 +29,20 @@ public final class Fixtures {
     }
 
     /**
+     * The sample CRM project under {@code src/test/resources/sample-crm}: composed annotations, a generic CRUD
+     * base controller, entity request bodies, relationship ids in DTOs, Spring Data REST and functional routes.
+     *
+     * @return project directory
+     */
+    public static Path sampleCrm() {
+        try {
+            return Path.of(Fixtures.class.getResource("/sample-crm").toURI());
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
      * The browser recording of the sample shop ({@code src/test/resources/sample-shop.har}), as text.
      *
      * @return HAR JSON

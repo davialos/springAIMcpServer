@@ -1,8 +1,9 @@
 # Offline build and the vendored dependency repository
 
 `offline-repo/` is a Maven local repository committed to this repository: every jar, pom and Maven plugin the
-build needs, resolved from Maven Central on 2026-09-30 (194 jars, ~120 MB). It lets the project build on a machine
-with no network and pins the exact bytes of every dependency (supply-chain reproducibility).
+build needs, resolved from Maven Central on 2026-09-30 and refreshed on 2026-10-02 for the load-test Maven plugin
+(234 jars, ~135 MB). It lets the project build on a machine with no network and pins the exact bytes of every
+dependency (supply-chain reproducibility).
 
 ## Use
 
@@ -37,5 +38,5 @@ Starting from an empty repository keeps stale artifacts out. Do not hand-edit fi
   consumes the starter should use the `bom` module and its own repository.
 - The `*.sha1` files and `_remote.repositories` markers are kept: Maven's enhanced local repository manager needs
   the markers to accept an artifact as coming from `central` in offline mode.
-- ~120 MB of binaries grows the clone size; if that becomes a problem, move `offline-repo/` to Git LFS or an
+- ~135 MB of binaries grows the clone size; if that becomes a problem, move `offline-repo/` to Git LFS or an
   internal artifact repository (the script only needs a directory).

@@ -15,6 +15,7 @@ import com.sun.source.tree.ArrayTypeTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.MemberSelectTree;
+import com.sun.source.tree.ModifiersTree;
 import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.ParameterizedTypeTree;
 import com.sun.source.tree.PrimitiveTypeTree;
@@ -52,10 +53,31 @@ final class TypeMapper {
     private final boolean snakeCaseJson;
     private final Map<String, ObjectSchema> schemas = new LinkedHashMap<>();
     private final Set<String> inProgress = new HashSet<>();
+    /** Type variables of the controller hierarchy being scanned, bound to concrete type trees. */
+    private Map<String, Tree> bindings = Map.of();
 
     TypeMapper(SourceTrees trees, boolean snakeCaseJson) {
         this.trees = trees;
         this.snakeCaseJson = snakeCaseJson;
+    }
+
+    /**
+     * Runs an action with type variables bound ({@code T} → {@code Company} for a controller extending
+     * {@code AbstractCrudController<Company, Long>}).
+     *
+     * @param newBindings type variable name → concrete type tree
+     * @param action      the mapping work
+     * @param <R>         result type
+     * @return the action's result
+     */
+    <R> R withBindings(Map<String, Tree> newBindings, java.util.function.Supplier<R> action) {
+        Map<String, Tree> previous = bindings;
+        bindings = newBindings;
+        try {
+            return action.get();
+        } finally {
+            bindings = previous;
+        }
     }
 
     /**
@@ -135,7 +157,9 @@ final class TypeMapper {
                     : new ArraySchema(map(arr.getType()), null, null);
             case WildcardTree w -> w.getBound() != null ? map(w.getBound()) : ObjectSchema.freeFormObject();
             case ParameterizedTypeTree p -> parameterized(p);
-            case IdentifierTree id -> named(id.getName().toString());
+            case IdentifierTree id -> bindings.containsKey(id.getName().toString())
+                    ? map(bindings.get(id.getName().toString()))
+                    : named(id.getName().toString());
             case MemberSelectTree ms -> named(ms.getIdentifier().toString());
             default -> ObjectSchema.freeFormObject();
         };
@@ -238,24 +262,186 @@ final class TypeMapper {
     }
 
     private ObjectSchema objectSchema(ClassTree ct) {
+        return objectSchema(ct, null);
+    }
+
+    /** Annotations of JPA/Spring Data fields the server fills in: never part of a request. */
+    private static final Set<String> SERVER_MANAGED = Set.of("Version", "CreatedDate", "LastModifiedDate",
+            "CreatedBy", "LastModifiedBy", "CreationTimestamp", "UpdateTimestamp", "Generated", "Formula",
+            "JsonBackReference", "JsonManagedReference");
+
+    /**
+     * Whether a class is a JPA entity (or a mapped superclass / embeddable of one).
+     *
+     * @param ct class
+     * @return {@code true} for {@code @Entity}, {@code @MappedSuperclass} and {@code @Embeddable}
+     */
+    static boolean isJpa(ClassTree ct) {
+        return SourceTrees.has(ct.getModifiers(), "Entity", "MappedSuperclass", "Embeddable");
+    }
+
+    /**
+     * Object schema of a DTO or of a JPA entity used as a request body. For entities: generated ids, versions,
+     * audit columns and to-many collections are left out (the server owns them); {@code @ManyToOne}/
+     * {@code @OneToOne} become a reference to the target's id — {@code {"company": {"id": 7}}} — or, for Spring
+     * Data REST ({@code links} given), the target resource's URI; {@code @Column(nullable = false, length,
+     * precision, scale)} become required flags and constraints.
+     *
+     * @param ct    the class
+     * @param links Spring Data REST mode: entity simple name → collection URI prefix (e.g. {@code /rest/deals/});
+     *              {@code null} for plain JSON references
+     * @return the schema
+     */
+    ObjectSchema objectSchema(ClassTree ct, @Nullable Map<String, String> links) {
         Map<String, Property> props = new LinkedHashMap<>();
         boolean snake = snakeCaseJson || SourceTrees.annotation(ct.getModifiers(), "JsonNaming")
                 .map(a -> a.toString().contains("Snake")).orElse(false);
+        boolean entity = isJpa(ct);
         for (VariableTree field : fields(ct, new HashSet<>())) {
-            List<? extends AnnotationTree> anns = field.getModifiers().getAnnotations();
-            if (SourceTrees.has(field.getModifiers(), "JsonIgnore", "Null", "Transient")
-                    || readOnly(field) || field.getModifiers().getFlags().contains(Modifier.TRANSIENT)) {
+            ModifiersTree mods = field.getModifiers();
+            List<? extends AnnotationTree> anns = mods.getAnnotations();
+            if (SourceTrees.has(mods, "JsonIgnore", "Null", "Transient")
+                    || readOnly(field) || mods.getFlags().contains(Modifier.TRANSIENT)) {
+                continue;
+            }
+            if (entity && (SourceTrees.has(mods, "OneToMany", "ManyToMany", "ElementCollection")
+                    || anns.stream().anyMatch(a -> SERVER_MANAGED.contains(SourceTrees.simpleName(a)))
+                    || SourceTrees.has(mods, "Id", "EmbeddedId") && SourceTrees.has(mods, "GeneratedValue"))) {
                 continue;
             }
             String javaName = field.getName().toString();
-            String jsonName = SourceTrees.annotation(field.getModifiers(), "JsonProperty")
+            String jsonName = SourceTrees.annotation(mods, "JsonProperty")
                     .flatMap(a -> trees.string(a, "value"))
-                    .filter(s -> !s.isBlank())
+                    .filter(v -> !v.isBlank())
                     .orElse(snake ? Names.snakeCase(javaName) : javaName);
-            Schema schema = map(field.getType(), anns);
-            props.put(jsonName, new Property(schema, required(field), sensitive(field, javaName), description(field)));
+            boolean required = required(field) || entity && columnRequired(field);
+            Schema schema;
+            if (entity && SourceTrees.has(mods, "ManyToOne", "OneToOne")) {
+                String target = simpleName(field.getType());
+                if (links != null) {
+                    String prefix = links.get(target);
+                    if (prefix == null) {
+                        continue; // target not exported: the association cannot be set through Spring Data REST
+                    }
+                    schema = new ScalarSchema(ScalarType.STRING, "data-rest-link", Constraints.NONE, List.of(), prefix);
+                } else {
+                    schema = reference(target);
+                    if (schema == null) {
+                        continue;
+                    }
+                }
+            } else {
+                schema = map(field.getType(), anns);
+                if (entity) {
+                    schema = columnConstraints(schema, mods);
+                }
+            }
+            props.put(jsonName, new Property(schema, required, sensitive(field, javaName), description(field)));
         }
         return new ObjectSchema(props, false);
+    }
+
+    /**
+     * A {@code <Target>Ref} schema holding only the target entity's id ({@code {"id": 7}}), how Jackson binds an
+     * entity reference in a request body.
+     */
+    private @Nullable Schema reference(String target) {
+        String name = target + "Ref";
+        if (schemas.containsKey(name)) {
+            return new RefSchema(name);
+        }
+        Optional<SourceTrees.TypeDecl> decl = trees.type(target);
+        if (decl.isEmpty()) {
+            return null;
+        }
+        for (VariableTree f : fields(decl.get().tree(), new HashSet<>())) {
+            if (SourceTrees.has(f.getModifiers(), "Id", "EmbeddedId")) {
+                Schema id = map(f.getType());
+                schemas.put(name, new ObjectSchema(Map.of(f.getName().toString(),
+                        new Property(id, true, false, null)), false));
+                return new RefSchema(name);
+            }
+        }
+        return null;
+    }
+
+    private boolean columnRequired(VariableTree field) {
+        ModifiersTree mods = field.getModifiers();
+        Optional<String> nullable = SourceTrees.annotation(mods, "Column", "JoinColumn")
+                .flatMap(a -> trees.string(a, "nullable"));
+        Optional<String> optional = SourceTrees.annotation(mods, "ManyToOne", "OneToOne", "Basic")
+                .flatMap(a -> trees.string(a, "optional"));
+        return nullable.map("false"::equals).orElse(false) || optional.map("false"::equals).orElse(false);
+    }
+
+    /**
+     * {@code @Column(length = 60)} → maxLength 60 (JPA's default 255 without {@code @Column}; none for
+     * {@code @Lob} or a {@code columnDefinition}); {@code @Column(precision = 12, scale = 2)} → maximum.
+     */
+    private Schema columnConstraints(Schema schema, ModifiersTree mods) {
+        if (!(schema instanceof ScalarSchema s)) {
+            return schema;
+        }
+        Optional<AnnotationTree> column = SourceTrees.annotation(mods, "Column");
+        Constraints c = s.constraints();
+        boolean unbounded = SourceTrees.has(mods, "Lob")
+                || column.flatMap(a -> trees.string(a, "columnDefinition")).isPresent();
+        if (s.type() == ScalarType.STRING && c.maxLength() == null && s.format() == null && !unbounded) {
+            Long length = column.flatMap(a -> trees.string(a, "length")).map(Long::valueOf).orElse(255L);
+            c = c.overlay(new Constraints(null, length, null, null, null, null));
+        }
+        if (column.isEmpty()) {
+            return s.withConstraints(c);
+        }
+        Optional<String> precision = trees.string(column.get(), "precision");
+        if ((s.type() == ScalarType.NUMBER || s.type() == ScalarType.INTEGER) && precision.isPresent()
+                && c.maximum() == null) {
+            int p = Integer.parseInt(precision.get());
+            int scale = trees.string(column.get(), "scale").map(Integer::parseInt).orElse(0);
+            if (p > scale && p - scale < 18) {
+                c = c.overlay(new Constraints(null, null, null,
+                        BigDecimal.TEN.pow(p - scale).subtract(BigDecimal.ONE), null, null));
+            }
+        }
+        return s.withConstraints(c);
+    }
+
+    /**
+     * The named Spring Data REST representation of an entity ({@code <Entity>Resource}): associations are
+     * resource URIs.
+     *
+     * @param entity entity simple name
+     * @param links  entity simple name → collection URI prefix, for exported repositories
+     * @return a reference to the registered schema, or a free-form object when the entity is not parsed
+     */
+    Schema dataRestSchema(String entity, Map<String, String> links) {
+        String name = entity + "Resource";
+        if (!schemas.containsKey(name)) {
+            Optional<SourceTrees.TypeDecl> decl = trees.type(entity);
+            if (decl.isEmpty()) {
+                return ObjectSchema.freeFormObject();
+            }
+            schemas.put(name, objectSchema(decl.get().tree(), links));
+        }
+        return new RefSchema(name);
+    }
+
+    /**
+     * Schema of an entity's {@code @Id} field.
+     *
+     * @param entity entity simple name
+     * @return the id's schema, or an int64 when unknown
+     */
+    Schema idSchema(String entity) {
+        Optional<SourceTrees.TypeDecl> decl = trees.type(entity);
+        if (decl.isPresent()) {
+            for (VariableTree f : fields(decl.get().tree(), new HashSet<>())) {
+                if (SourceTrees.has(f.getModifiers(), "Id", "EmbeddedId")) {
+                    return map(f.getType());
+                }
+            }
+        }
+        return ScalarSchema.of(ScalarType.INTEGER, "int64");
     }
 
     /** Instance fields of a class and its parsed superclasses, superclass fields first. */

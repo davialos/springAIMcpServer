@@ -4,7 +4,7 @@ import com.springaimcpservercommon.jfranalyzer.model.JvmInfo;
 import jdk.jfr.consumer.RecordedEvent;
 import org.jspecify.annotations.Nullable;
 
-/** The recorded JVM and machine. */
+/** The recorded JVM and machine; command lines are passed through {@link Redactor}. */
 public final class JvmInfoCollector implements EventCollector {
 
     private @Nullable String jvmName;
@@ -23,8 +23,8 @@ public final class JvmInfoCollector implements EventCollector {
             case "jdk.JVMInformation" -> {
                 jvmName = Fields.string(e, "jvmName");
                 jvmVersion = Fields.string(e, "jvmVersion");
-                jvmArguments = Fields.string(e, "jvmArguments");
-                javaArguments = Fields.string(e, "javaArguments");
+                jvmArguments = Redactor.commandLine(Fields.string(e, "jvmArguments"));
+                javaArguments = Redactor.commandLine(Fields.string(e, "javaArguments"));
                 pid = Fields.longValue(e, "pid");
             }
             case "jdk.OSInformation" -> os = Fields.string(e, "osVersion");

@@ -5,6 +5,7 @@ import com.springaimcpservercommon.jfranalyzer.collect.Format;
 import com.springaimcpservercommon.jfranalyzer.model.AnalysisReport;
 import com.springaimcpservercommon.jfranalyzer.model.CpuReport;
 import com.springaimcpservercommon.jfranalyzer.model.ExceptionReport;
+import com.springaimcpservercommon.jfranalyzer.model.ExecutiveSummary;
 import com.springaimcpservercommon.jfranalyzer.model.Finding;
 import com.springaimcpservercommon.jfranalyzer.model.GcEvent;
 import com.springaimcpservercommon.jfranalyzer.model.GcGroup;
@@ -104,6 +105,18 @@ public final class HtmlReportWriter {
 
     private void summary(Summary s, MemoryReport memory) {
         open("summary", "Summary");
+        ExecutiveSummary exec = report.executiveSummary();
+        out.append("<div class=\"exec ").append(exec.status().name()).append("\"><div class=\"exec-status\">")
+                .append(switch (exec.status()) {
+                    case RED -> "✖";
+                    case AMBER -> "▲";
+                    case GREEN -> "●";
+                    case UNKNOWN -> "○";
+                }).append(' ').append(exec.status().name()).append(" · health score ").append(exec.healthScore())
+                .append(" / 100</div><div class=\"exec-headline\">").append(esc(exec.headline()))
+                .append("</div><ol class=\"exec-recs\">");
+        exec.recommendations().forEach(r -> out.append("<li>").append(esc(r)).append("</li>"));
+        out.append("</ol></div>");
         out.append("<div class=\"tiles\">");
         tile("Recording", Format.millis(s.durationMillis()), Format.count(s.cpuSamples()) + " CPU samples");
         tile("CPU in your packages", Format.percent(s.cpuPercentInPackages()), s.topCpuLocation() == null ? null

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+      Stdio MCP server exposing the load-test generator to coding agents (ADR-0022, LLD-16): discover, generate, run,
+      report, compare. Plain MCP Java SDK (versions from the Spring AI BOM), no Spring. Developer tool: not part of
+      the starter or the BOM; launched by scripts/loadtest-mcp.sh.
+    -->
+    <artifactId>spring-ai-mcp-server-common-loadtest-mcp</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: Load Test :: MCP Server</name>
+    <description>MCP server (stdio) with load-test tools: discover, generate, run, report, compare.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.loadtest.mcp</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-loadtest</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-core</artifactId>
+            <version>${mcp-sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-json-jackson3</artifactId>
+            <version>${mcp-sdk.version}</version>
+        </dependency>
+    </dependencies>
+</project>

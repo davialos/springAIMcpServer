@@ -54,7 +54,10 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `webmvc` | `…webmvc` | dynamic endpoints, admin API, SSE streaming, problem details | core, security |
 | `autoconfigure` | `…autoconfigure` | `@AutoConfiguration` classes + `@ConfigurationProperties` only | all above (optional) |
 | `spring-boot-starter` | — | dependency aggregator | autoconfigure + defaults |
-| `loadtest` | `…loadtest` | dev tool (not in the starter/BOM): API discovery (sources, OpenAPI, actuator, HAR) → k6 suite generator, data providers, journeys, CLI (ADR-0022, LLD-16) | jackson 3, postgresql driver; **no Spring** |
+| `loadtest` | `…loadtest` | dev tool (not in the starter/BOM): Spring API discovery (sources, OpenAPI, actuator, HAR) → entity-relationship payloads + seeding → k6 suite generator, data providers, journeys, CLI (ADR-0022, LLD-16) | jackson 3, postgresql driver; **no Spring** |
+| `loadtest-maven-plugin` | `…loadtest.maven` | dev tool: `mvn loadtest:discover/generate/run/compare` over the loadtest public API (ADR-0024) | loadtest, maven-plugin-api (provided) |
+| `loadtest-junit` | `…loadtest.junit` | dev tool (test scope for hosts): `@K6LoadTest` JUnit 5 extension, `K6Suite` (ADR-0024) | loadtest, junit-jupiter-api (provided); **no Spring** |
+| `loadtest-mcp` | `…loadtest.mcp` | dev tool: stdio MCP server with load-test tools for coding agents; plugin in `claude-plugins/spring-loadtest` (ADR-0024) | loadtest, MCP Java SDK 2.0; **no Spring** |
 | `jfr-analyzer` | `…jfranalyzer` | developer CLI: JFR file → HTML/JSON hot-spot report (docs/tools/jfr-analyzer.md); not in the BOM | core (CanonicalJson only) |
 
 ## Coding conventions
@@ -80,7 +83,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 
 - `docs/README.md` index · `docs/01-feature-catalog.md` · `docs/02-architecture-overview.md` · `docs/lld/*.md`
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
-- `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`)
+- `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`, `scripts/loadtest-mcp.sh`); guide `docs/integration/load-testing-guide.md`
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/tools/perf-test.md` — universal performance test against any running service: k6 load + JFR profile +
   analysis in one command (`scripts/perf-test.sh`, config `scripts/perf-test.env.example`)

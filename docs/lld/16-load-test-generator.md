@@ -4,14 +4,23 @@
 |-------|-------|
 | Status | Implemented v1 |
 | Owner agent | lld-chief-architect |
-| Module(s) | `spring-ai-mcp-server-common-loadtest` (developer tool, not part of the starter) |
+| Module(s) | `spring-ai-mcp-server-common-loadtest` (generator, public API, CLI) and its integrations `-loadtest-maven-plugin`, `-loadtest-junit`, `-loadtest-mcp` (developer tools, not part of the starter or the BOM); Claude Code plugin `claude-plugins/spring-loadtest` |
 | Related features | — (tooling) |
-| Related ADRs | ADR-0022, ADR-0012, ADR-0021 |
+| Related ADRs | ADR-0022, ADR-0024, ADR-0012, ADR-0021 |
 
 ## 1. Purpose & responsibilities
 Point it at a Spring Boot project; it produces a runnable Grafana k6 suite for that project's REST APIs:
 - **discovers** the operations (Java sources, OpenAPI 3, `/actuator/mappings`, browser recordings in HAR
   format), their parameters and request bodies with validation constraints, and the project's JPA entities;
+  for Java/Spring projects every endpoint style: annotated controllers (incl. composed stereotypes and generic
+  base controllers), `@HttpExchange` interfaces a controller implements, WebMvc.fn `RouterFunction` routes,
+  Spring Data REST repositories, and API-first projects (bundled OpenAPI + generated interfaces);
+- **builds the table relationship graph** from JPA mappings, the database's foreign keys, or — with neither —
+  the project's own DDL scripts (Flyway, Liquibase SQL, `schema.sql`), and derives payloads from it: entity
+  bodies without server-managed fields, related entities sent as references, column lengths and unique columns
+  respected;
+- **seeds test data through the application's create endpoints**, parents before children, and feeds the
+  created ids and natural keys into the load (§5 *Seeding*);
 - **learns from a browser recording** (Chrome/Edge DevTools ▸ Network ▸ Export HAR): the API calls a person
   actually made, the values they sent, and the order — replayable as a correlated journey;
 - **plans the data** of every request field: semantic kind (email, firstName, price, id …), constraints, the
@@ -20,28 +29,63 @@ Point it at a Spring Boot project; it produces a runnable Grafana k6 suite for t
   collection endpoints, and checks user-supplied ids against the database;
 - **generates** per-API request builders, per-DTO data providers, load modes and a runtime that chooses the data
   source per field and request;
-- **runs** the suite through the k6 binary.
+- **runs** the suite through the k6 binary, reads its reports and gates regressions against a baseline;
+- **observes**: every suite carries a Prometheus + Grafana stack whose dashboard shows k6 per API next to the
+  application's Micrometer metrics, with each run annotated;
+- **integrates** (ADR-0024): a public Java API, a Maven plugin, Gradle tasks, a JUnit 5 extension, an MCP server
+  and a Claude Code plugin (skills + agent) — all thin layers over the API.
 
-Not owned: running k6 itself, result storage/dashboards (k6 outputs: `--out`), and anything inside the host
-at runtime (the module is never on a host's classpath).
+Not owned: running k6 itself, long-term result storage, and anything inside the host at runtime (the modules are
+never on a host's runtime classpath; the JUnit extension is test scope only).
 
 ## 2. Context
 ```
-  project dir ──► SpringSourceScanner ─┐          ┌──► DataPlan (FieldPlan per field: kind, pool)
-  OpenAPI doc ──► OpenApiReader ───────┼► Catalog ┤
-  HAR file    ──► HarReader ───────────┤  Merger  │
+  project dir ──► SpringSourceScanner ─┐          ┌──► DataPlan (FieldPlan per field: kind, pool, facts)
+   (controllers, FunctionalRouteScanner,         │          │        ▲ TableIndex (JPA entities + tables)
+    DataRestScanner, bundled OpenAPI) │          │        │   tables: DatabaseSampler metadata (live DB)
+  OpenAPI doc ──► OpenApiReader ───────┼► Catalog ┤        │        or SqlSchemaReader (DDL scripts)
+  HAR file    ──► HarReader ───────────┤  Merger  ├──► SeedPlan (create endpoints in relationship order)
   /actuator   ──► ActuatorMappings ────┘          └──► RealDataCollector ◄── DatabaseSampler (JDBC, read-only)
                                                           │               ◄── ApiHarvester (GET collections)
   user values (json/csv/--value/--interactive) ──────────┤
   HAR observations ──► RecordedTraffic (recorded values, journey) ──┤
                                                           ▼
-                                          K6SuiteGenerator ──► suite/ (k6 project) ──► K6Runner ──► k6
+                       K6SuiteGenerator + GrafanaStack ──► suite/ (k6 project, grafana/) ──► LoadTestRunner ──► k6
+                                                                                    │      │ remote write
+                                                                     reports/*.json ┘      ▼
+                                              LoadTestReport ─► ReportComparison    Prometheus ◄─ app /actuator/prometheus
+                                                                                         ▼
+                                                                                      Grafana (dashboard, annotations)
+
+  api.LoadTestGenerator / LoadTestRunner ◄── CLI · Maven plugin · Gradle script (JavaExec) · JUnit @K6LoadTest
+                                         ◄── MCP server (stdio) ◄── Claude Code plugin: skills + load-test-engineer
 ```
 
 ## 3. Public contracts
-- CLI `scripts/loadtest.sh <discover|generate|run|modes>` (`cli.LoadTestCli`); options in §8.
+- **Java API** (`com.springaimcpservercommon.loadtest.api`, `@NullMarked`): `LoadTestGenerator.builder()…build()`
+  → `discover()` (`DiscoveryResult`: catalog, plan, seed, settings, recordings) / `generate()`
+  (`GenerationResult`); `LoadTestRunner.suite(dir).mode(…).env(…).grafana(url).grafanaAnnotations(url, token)
+  .timeout(…).run()` → `RunResult(exitCode, output, report, testId)`; `LoadTestReport.read/latest/reports`;
+  `ReportComparison.compare(baseline, current, Rules)` (defaults: p95 +20 % ignoring < 10 ms, failed +1 pp,
+  ≥ 10 requests).
+- **CLI** `scripts/loadtest.sh <discover|generate|run|report|compare|init-gradle|modes>` (`cli.LoadTestCli`);
+  exit codes: 0 ok, 1 failure / failed thresholds (`report`), 2 usage, 3 regression, otherwise k6's (99 =
+  thresholds failed). Options in §8.
 - Orchestration: `scripts/perf-test.sh` runs generate + run against any live service and profiles its JVM with JFR
   during the load ([tools/perf-test.md](../tools/perf-test.md)); it only calls this CLI, adding no contract here.
+- **Maven plugin** (prefix `loadtest`): `discover`, `generate`, `run` (fails on failed thresholds; with
+  `baseline`, on a regression; `skipIfK6Missing`), `compare` (`updateBaseline`); every parameter also
+  `-Dloadtest.<name>`. Requires Maven on JDK 25.
+- **Gradle** `gradle/loadtest.gradle` (`loadtest init-gradle`): `loadtestDiscover|Generate|Run|Compare` as
+  `JavaExec` on a Java 25 toolchain; `loadtest { version, javaVersion, outDir, generateArgs, mode, dataMode, env,
+  k6, classpath }`; `-Ploadtest.mode|dataMode|api|baseUrl|baseline|grafana`.
+- **JUnit 5** `@K6LoadTest(project, outDir, include, exclude, database, baseUrl, env, requireK6)` + `K6Suite`
+  parameter (`run`, `runner`, `assertPassed`, `assertNoRegression`, `withEnv`); target from `baseUrl`, the
+  `loadtest.baseUrl` system property, or `http://localhost:<@LocalServerPort/@K6Target field><context path>`.
+- **MCP** (stdio, `scripts/loadtest-mcp.sh [--root dir]`): `loadtest_discover`, `loadtest_generate`,
+  `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`; text summary + structured content.
+- **Agent plugin** `claude-plugins/spring-loadtest` (marketplace `.claude-plugin/marketplace.json`): skills
+  `loadtest-generate`, `loadtest-analyze`, `loadtest-capacity`; agent `load-test-engineer`; the MCP server.
 - Generated suite layout (stable; documented in the suite README):
 
 | Path | Owner | Regenerated |
@@ -55,7 +99,11 @@ at runtime (the module is never on a host's classpath).
 | `data/real.json` | generator | pools re-sampled; pools not re-sampled this time are kept |
 | `data/plan.json`, `README.md`, `run.sh` | generator | yes |
 | `data/journey.json` | generator | replaced when generated with `--har`, otherwise kept |
+| `data/seed.json` | generator | yes — seeding steps (`SeedPlan.toJson()`) |
 | `hooks.js` | team | never (created once) |
+| `grafana/docker-compose.yml`, `prometheus.yml`, `provisioning/**` | team | never (created once) |
+| `grafana/dashboards/k6-load-test.json` | generator | yes — built by `tools/grafana-dashboard.py` |
+| `reports/<mode>-<timestamp>.{json,md}`, `reports/comparison-<mode>.md` | runs | written per run / comparison |
 
 - Field keys (one scheme for plan, JS and user data; `data.FieldKeys`): `<apiId>.path|query|header.<name>`,
   `<apiId>.body[.<prop>…]` for inline bodies, `<SchemaName>.<prop>[.<prop>…]` for DTO properties.
@@ -65,9 +113,12 @@ at runtime (the module is never on a host's classpath).
   summary, tags, params, body, resource, sources)`, sealed `Schema` = `ScalarSchema | ArraySchema |
   ObjectSchema | RefSchema`, `Constraints(minLength, maxLength, minimum, maximum, pattern, temporal)`,
   `EntityTable(entity, schema, table, idField, idColumn, fieldColumns, fieldReferences, joinColumns,
-  sensitiveFields)`.
-- `data`: `FieldKind` (55 kinds), `FieldPlan(key, name, owner, kind, pool, sensitive)`, `PoolRef(schema, table,
-  column)` (key `[schema.]table.column`), `UserData(fields, payloads, bindings)`.
+  sensitiveFields, columnLengths, uniqueFields, idGenerated)`.
+- `data`: `FieldKind` (55 kinds), `FieldPlan(key, name, owner, kind, pool, sensitive, maxLength, unique)`,
+  `PoolRef(schema, table, column)` (key `[schema.]table.column`), `UserData(fields, payloads, bindings)`,
+  `DbTable(schema, name, columns, primaryKey, foreignKeys, columnSizes, uniqueColumns)` (from JDBC metadata or
+  DDL), `SeedPlan(steps)` with `Step(api, table, pool, idField, idFromRequest, dependsOn, deleteApi, captures,
+  deletePool)`.
 - `data/user.json`: `{"fields": {key: [values]}, "payloads": {apiId: [bodies]}, "bindings": {key: "table.column"}}`;
   a field key may be the full key, `<apiId|Schema>.<field>` or the bare field name. CSV: header = keys.
 
@@ -86,6 +137,42 @@ Jackson (`@JsonProperty`, `@JsonIgnore`, READ_ONLY, `@JsonNaming`, global SNAKE_
 (example, allowableValues, required). (5) Merge by `METHOD + path with anonymised variables`; filters
 (Ant patterns, `METHOD pattern`, or an id) and default excludes.
 
+**Spring endpoint styles.** Controllers are recognised through composed stereotypes (an annotation meta-annotated
+with `@RestController`/`@Controller`, whose own `@RequestMapping` contributes a base path; a class's direct
+mapping wins). Handler methods are collected through `extends`/`implements` with type-variable binding, so
+`class CompanyController extends AbstractCrudController<Company, Long>` yields `POST /companies` with a
+`Company` body and a `Long` id; abstract bases are not endpoints themselves. `@HttpExchange`/`@GetExchange…`
+interfaces count only when a controller implements them (alone they are HTTP clients). `FunctionalRouteScanner`
+reads methods returning `RouterFunction` (`route().GET(…)`, `.path(prefix, b -> …)`, `nest(path(…), …)`) —
+handlers are opaque, so write bodies are free-form. `DataRestScanner` (only when the build declares Spring Data
+REST) turns every exported repository into list/create/get/put/patch/delete under
+`spring.data.rest.base-path` with the default (uncapitalised plural) or `@RepositoryRestResource(path)` path;
+bodies are `<Entity>Resource` schemas where associations are URI links. `${placeholder:default}` in mappings
+resolve against the project's configuration. `server.servlet.context-path` becomes the base path (a bundled
+OpenAPI server URL is rebased onto it). With `spring.jackson.deserialization.unwrap-root-value`, bodies are
+wrapped as `{"<@JsonRootName or class>": …}`. API-first projects: OpenAPI documents bundled under
+`src/main/resources` or a top-level `api/`/`openapi/`/`spec/`/`contracts/` directory are read automatically
+(`--no-bundled-openapi` to skip), and interfaces generated into `target/generated-sources`/`build/generated`
+are scanned.
+
+**Relationships and payloads.** A JPA entity used as a request body becomes a schema without the server-managed
+fields (`@GeneratedValue` id, `@Version`, `@CreatedDate`/`@LastModifiedDate`/`@CreationTimestamp`…,
+`@OneToMany`/`@ManyToMany` collections, `@JsonBackReference`); a `@ManyToOne`/`@OneToOne` field becomes a
+`<Target>Ref {id}` reference; `@Column(nullable = false)`/`optional = false` make a property required;
+`@Column(length)` (default 255 for strings; none for `@Lob`/`columnDefinition`) becomes `maxLength`,
+`precision`/`scale` a maximum. `TableIndex.reference` follows the graph: `ownerId` in `CreateDealRequest` →
+`Deal.owner` is a `@ManyToOne AppUser` → `users.id`, even though no table is called `owner`; without JPA the
+foreign key of the matching column decides (`author_id → users.id`). `TableIndex.facts` carries column length
+(stricter of JPA and database) and uniqueness into each `FieldPlan`; the runtime truncates to `maxLength` and
+suffixes unique values per VU iteration. Tables come from the live database's metadata (authoritative: an
+entity it lacks is ignored) or, without a reachable database, from `SqlSchemaReader`: the project's Flyway
+migrations (version order; undo scripts skipped), Liquibase formatted-SQL changelogs and `schema*.sql` are
+replayed — `CREATE TABLE` (inline/table-level PK, `REFERENCES`/`FOREIGN KEY`, `UNIQUE`, `varchar(n)`),
+`ALTER TABLE ADD/DROP/RENAME/ALTER … TYPE/MODIFY/CHANGE`, `CREATE UNIQUE INDEX`, `DROP TABLE`, across
+PostgreSQL/MySQL/SQL Server/H2 syntax; where the DDL declares no constraint, `x_id` is inferred to reference
+the single-column PK of table `x`/`xs`. DDL tables only add facts (non-authoritative index): an entity missing
+from them is still used.
+
 **Browser recordings (HAR).** `HarReader` keeps API calls only (`_resourceType` fetch/xhr, or JSON
 request/response for exporters without types), drops documents/scripts/styles/images/fonts, CORS preflights,
 non-HTTP schemes and non-JSON bodies, and keeps the most-called host (`--har-host` to choose). URLs become
@@ -102,8 +189,10 @@ a step that an earlier response returned becomes `{"$from": step, "at": "content
 "recorded": v}` — the latest response first, up to three earlier ones as fallbacks, the recorded value last.
 
 **Data plan.** Kind = format → enum → name heuristics → type. Real-data binding (`RealDataBinder`), cautious:
-explicit bindings first; then identifiers (`{id}` → PK of the collection before it, `customerId` → PK of
-`customer(s)`), natural keys (`productSku` → `product.sku` when `sku` is Product's `@Id`), query filters of
+explicit bindings first; then identifiers (`{id}` → PK of the collection before it, a reference field → the
+relationship it maps (above), `customerId` → PK of `customer(s)`), natural keys (`productSku` → `product.sku`
+when `sku` is Product's `@Id`), other path parameters (`/articles/{slug}` → `articles.slug`; with no such
+table, the one table where the column is unique: `/profiles/{username}` → `users.username`), query filters of
 the resource (`GET /customers?email=` → `customers.email`); never a sensitive field; other body fields stay
 generated (no unique-constraint collisions on creates). Tables resolve through JPA entities and/or JDBC
 metadata (`TableIndex`; when the database is known, it decides what exists).
@@ -113,6 +202,29 @@ metadata (`TableIndex`; when the database is known, it decides what exists).
 endpoints of the same table (array, page wrappers `content/items/data/results/…`, HAL `_embedded`) and those
 values are checked in the database when one is configured; user values of bound fields are checked
 (`WHERE col IN (…)`, chunks of 500, values typed by column type) and, with `--drop-unverified`, filtered.
+
+**Seeding.** `SeedPlan` maps every `POST` with a body to the table it creates rows in (its resource entity, the
+collection segment, or the body DTO's entity; the plainest endpoint per table wins: fewest path parameters,
+not Data REST) and orders the tables parents first (Kahn; a cycle is broken with a log line). A table depends
+on the tables its request fields reference *and* on its own relationships (JPA references, foreign keys):
+the author of an article usually comes from the logged-in user, not the payload, yet must exist first. Each
+step records where the new row's id comes from (the response body — searched in wrappers such as
+`{"data": {"id"}}` —, the `Location` header, or the request for client-assigned keys), the other columns
+requests address rows by (`captures`: `articles.slug ← slug`, read from the response, else the request), and a
+single-parameter `DELETE` addressing the row by id or a captured key. In k6 `setup()`, `seed()` creates
+`seed.perTable` rows per table (`SEED_PER_TABLE`), sending every optional field so the rows are complete, with
+each child's references drawn from the parents just created; the result (pool → values) is handed to every VU,
+whose real-data fields prefer it over sampled values, followed by ids that the VU's own creates returned. With
+`seed.cleanup`/`SEED_CLEANUP=true`, `teardown()` deletes seeded rows children first (404 counts as gone); when a
+table's rows cannot all be deleted, its parents are kept (they are still referenced). Seeding is on by default,
+off with `SEED=false`, `READ_ONLY=true` or `safety.readOnly`; requests are tagged `seed_<api>`/`cleanup_<api>`.
+Writes go through the application (validation, events, auditing apply), never straight into the database.
+
+**REST resources without tables.** When the table index cannot resolve a resource (no JPA entity, no DDL, no
+database table — Spring Data MongoDB, a facade over other services), `DataPlan.restResources` treats a collection
+`POST /x` (with a body) plus an item route `/x/{var}` as a resource with pool `x.<var>`: path variables under
+`/x` bind to it and `SeedPlan` seeds it like a table (key from the response, or from the request when the body
+carries it). Such pools are never sampled from a database.
 
 **Run time (k6).** `field(ctx, spec)` chooses the source by `DATA_MODE`: `auto` user > real > dummy;
 `dummy`; `random` (constraint-driven, regex-generated strings; 4xx counted as expected); `real` real > user >
@@ -142,6 +254,13 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 | Unparseable source file | javac still yields a tree | best effort; missing types become free-form | add OpenAPI |
 | Unknown `MODE`/`API` | suite init | k6 exits non-zero with the list of valid values | — |
 | Production-looking target | `safety.blockedHostPattern` | suite refuses to start | `ALLOW_PROD=true` if intended |
+| Seed create refused | status not 2xx | `seed: <table> n/N (k failed)`; that table has fewer/no seeded rows, fields fall back to sampled/dummy data | fix the payload in `hooks.js`/`user.json`, or `apis.<id>.enabled=false` |
+| Relationship cycle | Kahn finds no ready table | logged; the cycle is seeded with whatever parent ids exist | `--bind`, or seed one side via `user.json` |
+| DDL statement not understood | regex miss | skipped silently (tolerant reader) | give `--db-url` for real metadata |
+| k6 missing | `LoadTestRunner.findK6` | CLI/Maven fail with a message (`skipIfK6Missing`); JUnit aborts the test unless `requireK6`; MCP returns an error result | install k6 or set `K6_BIN` |
+| Run hangs | `LoadTestRunner.timeout` | k6 killed, exit 124 (MCP caps runs at 1 h) | lower `DURATION_SCALE`, check the target |
+| Grafana/Prometheus down | annotation POST fails / remote-write errors | annotation skipped with a warning; k6 logs output errors, the run continues | `docker compose … up -d` |
+| Regression against the baseline | `ReportComparison` | CLI exit 3, Maven/Gradle build fails, JUnit assertion | fix or accept and move the baseline (`updateBaseline`) |
 
 ## 7. Security
 - Never runs inside a host; read-only JDBC connection; identifiers from configuration are matched against JDBC
@@ -159,23 +278,39 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
   accounts) when that is not acceptable. Prefer Chrome's default "Export HAR (sanitized)".
 - Dummy e-mail/web domains are RFC 2606 reserved (`example.com/.org/.net`); card numbers are public test numbers.
 - DELETE disabled by default; `READ_ONLY=true` / `safety.readOnly` restrict a run to GET/HEAD.
+- MCP server: every path argument is resolved against `--root` and refused outside it (symbolic links resolved);
+  stdout carries the protocol only; generator and k6 output are returned in results, never row data beyond what
+  the suite already holds. Runs are capped at one hour. Who may be load-tested is the suite's
+  `safety.blockedHostPattern` plus the skills' rule to confirm the target with the user.
+- Grafana stack: local only — ports bound to `127.0.0.1`, anonymous admin; annotations use `GRAFANA_TOKEN` (bearer)
+  for any other Grafana. Prometheus scrapes the app's metrics endpoint only.
 
 ## 8. Configuration
 CLI (generation): `--project`, `--openapi`, `--actuator`, `--include`/`--exclude`/`--no-default-excludes`,
 `--header`, `--out`, `--base-url`, `--data-mode`, `--db-url`/`--db-user`/`--db-password`/`--db-schema`/`--no-db`
 (defaults: the project's `spring.datasource.*`), `--sample-size` (200), `--harvest`, `--user-data`, `--value`,
 `--bind`, `--interactive`, `--drop-unverified`, `--auth`/`--login-path`, `--har` (repeatable), `--har-host`,
-`--har-no-values` (with a HAR and no `--base-url`, the target defaults to the recorded origin + context path). Suite: `loadtest.config.json`
-(`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `thresholds`, `defaults.p95Ms`,
+`--har-no-values` (with a HAR and no `--base-url`, the target defaults to the recorded origin + context path),
+`--no-bundled-openapi`. Launcher: `LOADTEST_CLASSPATH` (extra jars), JDBC drivers for MySQL, MariaDB, SQL Server,
+Oracle, H2, SQLite and DB2 found in `~/.m2` (`MAVEN_REPO_LOCAL`) or the Gradle cache (`GRADLE_USER_HOME`)
+— `LOADTEST_DRIVER_SEARCH=0` turns that off. Suite: `loadtest.config.json`
+(`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `seed.{enabled, perTable, cleanup}`, `thresholds`, `defaults.p95Ms`,
 `defaults.maxErrorRate`, `perApi`, `journey.{pauseScale, maxPauseMs}`, `modes`, `apis.<id>.{enabled, weight, expectedStatuses, p95Ms, maxErrorRate}`)
 and env (`MODE`, `DATA_MODE`, `BASE_URL`, `API`, `VUS`, `RATE`, `DURATION_SCALE`, `PER_API`, `READ_ONLY`,
-`ALLOW_PROD`, `PREVIEW_COUNT`).
+`ALLOW_PROD`, `PREVIEW_COUNT`, `SEED`, `SEED_PER_TABLE`, `SEED_CLEANUP`; Grafana: `GRAFANA=1` in `run.sh`,
+`K6_PROMETHEUS_RW_SERVER_URL`, `K6_PROMETHEUS_RW_TREND_STATS`, `GRAFANA_URL`, `GRAFANA_TOKEN`, `TEST_ID`). CLI
+run/compare: `--grafana`, `--prometheus-url`, `--grafana-url`, `--baseline`, `--max-p95-increase`,
+`--min-p95-delta-ms`, `--max-failed-increase`, `--min-requests`.
 
 ## 9. Observability
 Every request is tagged `api=<id>` and `name=<METHOD template>` (no high-cardinality URLs). Per-API thresholds
 on `http_req_duration{api:…}` (p95) and `http_req_failed{api:…}` also surface per-API rows in the summary.
 `handleSummary` prints a per-API table and writes `reports/<mode>-<timestamp>.{json,md}`; any k6 output
-(`-- --out experimental-prometheus-rw`, InfluxDB, Grafana Cloud) works unchanged.
+(InfluxDB, Grafana Cloud) works unchanged. The suite's `grafana/` stack: k6 remote-writes to Prometheus (trend
+stats p95/p99/avg/max in seconds, labels `api`, `name`, `testid`), Prometheus scrapes the app (`job="spring-app"`,
+target derived from the base URL and `management.server.*`), and the dashboard shows k6 overview, per-API panels
+(a row repeated per `api`) and the app's HTTP-by-URI, 4xx/5xx, HikariCP, heap, GC, CPU and thread metrics, with
+`testid`/`api` variables and run annotations (`lib/grafana.js`: a region from `setup()` to `teardown()`).
 
 ## 10. Performance & capacity
 Generation is offline and linear in source size. At run time pools and user values are k6 `SharedArray`s
@@ -186,6 +321,12 @@ to exhaust); regex patterns are parsed once per VU and cached.
 Multipart and form bodies are skipped (also in recordings); recorded GraphQL calls become a single
 `POST /graphql` operation (no per-query split); correlation does not cover values returned in response
 headers (e.g. `Location`) or tokens reused in `Authorization` (configure `auth.type=login` instead); Kotlin sources are not scanned (use `--openapi`/`--actuator`);
-polymorphic DTOs (interfaces/abstract classes) become free-form objects; request chaining (create → read the
-created id) is a `hooks.js` recipe rather than generated; MySQL/SQL Server/Oracle sampling needs the driver on
-`LOADTEST_CLASSPATH` (only PostgreSQL is tested).
+polymorphic DTOs (interfaces/abstract classes) become free-form objects; create → use chaining is generated
+for seeding and for each VU's own creates, but a multi-step business flow (cart → checkout) is the HAR journey
+or a `hooks.js` recipe; non-PostgreSQL sampling relies on the driver found in the local Maven/Gradle cache or on
+`LOADTEST_CLASSPATH` (only PostgreSQL is tested); Liquibase XML/YAML/JSON changelogs are not read (SQL
+changelogs are) — give `--db-url` or JPA entities; functional-route handlers and Data REST bodies cannot be
+typed beyond the entity; composite foreign keys are not followed. Integrations (ADR-0024): the Gradle side is a
+script plugin, not a binary plugin; the Maven plugin needs Maven on JDK 25; the Claude Code plugin's MCP server
+needs `LOADTEST_HOME` until the generator is published to a Maven repository; the dashboard's server-side
+percentiles need `percentiles-histogram` enabled in the app (averages and maxima otherwise).

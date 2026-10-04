@@ -28,15 +28,51 @@ import java.util.regex.Pattern;
  * @param datasourceUrl      {@code spring.datasource.url}
  * @param datasourceUsername {@code spring.datasource.username}
  * @param datasourcePassword {@code spring.datasource.password}
+ * @param unwrapRootValue    {@code spring.jackson.deserialization.unwrap-root-value}: request bodies are wrapped in
+ *                           an object named after the class ({@code @JsonRootName})
+ * @param dataRestBasePath   {@code spring.data.rest.base-path} (Spring Data REST), or {@code null}
+ * @param properties         every flattened property of the default profile, raw (for placeholders)
  */
 public record ProjectSettings(int serverPort, @Nullable String contextPath, boolean snakeCaseJson,
                               @Nullable String datasourceUrl, @Nullable String datasourceUsername,
-                              @Nullable String datasourcePassword) {
+                              @Nullable String datasourcePassword, boolean unwrapRootValue,
+                              @Nullable String dataRestBasePath, Map<String, String> properties) {
+
+    /** Compact constructor: unmodifiable copy. */
+    public ProjectSettings {
+        properties = Map.copyOf(properties);
+    }
+
+    /**
+     * Resolves {@code ${key:default}} placeholders (as in {@code @RequestMapping("${api.base:/api}")}) against the
+     * project's properties, then the environment, then the default.
+     *
+     * @param value text with placeholders
+     * @return resolved text; unresolvable placeholders without default are left as they are
+     */
+    public String resolvePlaceholders(String value) {
+        Matcher m = PLACEHOLDER.matcher(value);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String key = m.group(1);
+            String v = properties.get(key);
+            if (v == null) {
+                v = System.getenv(key.toUpperCase(Locale.ROOT).replace('.', '_').replace('-', '_'));
+            }
+            if (v == null) {
+                v = m.group(2) != null ? m.group(2) : m.group(0);
+            }
+            m.appendReplacement(out, Matcher.quoteReplacement(v));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{([^:}]+)(?::([^}]*))?}");
 
     /** Settings of a project with no configuration file. */
-    public static final ProjectSettings DEFAULTS = new ProjectSettings(8080, null, false, null, null, null);
+    public static final ProjectSettings DEFAULTS = new ProjectSettings(8080, null, false, null, null, null, false,
+            null, Map.of());
 
     /**
      * Reads the settings of a project.
@@ -69,13 +105,19 @@ public record ProjectSettings(int serverPort, @Nullable String contextPath, bool
         String port = get.apply("server.port");
         String context = join(get.apply("server.servlet.context-path"), get.apply("spring.mvc.servlet.path"));
         String naming = get.apply("spring.jackson.property-naming-strategy");
+        String unwrap = firstOf(flat, env, "spring.jackson.deserialization.unwrap-root-value",
+                "spring.jackson.deserialization.UNWRAP_ROOT_VALUE");
+        String dataRest = firstOf(flat, env, "spring.data.rest.base-path", "spring.data.rest.basePath");
         return new ProjectSettings(
                 parsePort(port),
                 context,
                 naming != null && naming.toUpperCase(Locale.ROOT).replace("_", "").contains("SNAKECASE"),
                 get.apply("spring.datasource.url"),
                 get.apply("spring.datasource.username"),
-                get.apply("spring.datasource.password"));
+                get.apply("spring.datasource.password"),
+                "true".equalsIgnoreCase(unwrap),
+                dataRest == null || dataRest.isBlank() ? null : join(dataRest, null),
+                flat);
     }
 
     /**
@@ -85,6 +127,17 @@ public record ProjectSettings(int serverPort, @Nullable String contextPath, bool
      */
     public String localBaseUrl() {
         return "http://localhost:" + serverPort + (contextPath == null ? "" : contextPath);
+    }
+
+    private static @Nullable String firstOf(Map<String, String> flat, UnaryOperator<@Nullable String> env,
+                                            String... keys) {
+        for (String k : keys) {
+            String v = resolve(flat.get(k), env);
+            if (v != null) {
+                return v;
+            }
+        }
+        return null;
     }
 
     private static int parsePort(@Nullable String port) {

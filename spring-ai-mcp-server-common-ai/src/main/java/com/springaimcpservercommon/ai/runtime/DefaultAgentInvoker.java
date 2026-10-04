@@ -14,6 +14,12 @@ import com.springaimcpservercommon.ai.agent.ModelSelection;
 import com.springaimcpservercommon.ai.model.ModelRouter;
 import com.springaimcpservercommon.ai.model.ResolvedModel;
 import com.springaimcpservercommon.ai.safety.TurnSafety;
+import com.springaimcpservercommon.ai.agent.ChatUiSpec;
+import com.springaimcpservercommon.ai.chat.ChatUiRuntime;
+import com.springaimcpservercommon.ai.chat.ChatUiState;
+import com.springaimcpservercommon.ai.chat.Choice;
+import com.springaimcpservercommon.ai.chat.PresentChoicesTool;
+import com.springaimcpservercommon.core.hash.Sha256;
 import com.springaimcpservercommon.core.display.StructuredResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import com.springaimcpservercommon.ai.tool.ToolBridge;
@@ -105,6 +111,7 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     private final ChatMemory chatMemory;
     private final @Nullable JsonSchemaValidationPort schemaValidator;
     private final TurnSafety turnSafety;
+    private final ChatUiRuntime chatUi;
 
     /**
      * Creates the invoker.
@@ -236,6 +243,47 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                                 TurnSafety turnSafety,
                                 @Nullable KnowledgeStore knowledgeStore,
                                 int knowledgeMaxChars) {
+        this(modelRouter, toolBridge, metadataRegistry, killSwitchChecker, budgetChecker, usageSink, turnRecorder,
+                conversationRecorder, observationRegistry, chatMemory, schemaValidator, turnSafety, knowledgeStore,
+                knowledgeMaxChars, ChatUiRuntime.OFF);
+    }
+
+    /**
+     * Creates the invoker with guardrails, knowledge packs and chat-interface features.
+     *
+     * @param modelRouter          resolves the {@link ChatModel} for each turn
+     * @param toolBridge           assembles per-request tool callbacks; {@code null} if tools are unavailable
+     * @param metadataRegistry     current effective catalog snapshot
+     * @param killSwitchChecker    runtime kill-switch check
+     * @param budgetChecker        token-budget pre-check
+     * @param usageSink            token usage accounting
+     * @param turnRecorder         receives one record per finished turn (trace viewer, F-72)
+     * @param conversationRecorder receives the user message and answer of each successful turn (F-44)
+     * @param observationRegistry  Micrometer observation registry
+     * @param chatMemory           conversation history store
+     * @param schemaValidator      optional JSON Schema conformance validator (Level 2)
+     * @param turnSafety           prompt validation, PII redaction and structured display (F-76)
+     * @param knowledgeStore       the bundled knowledge packs, or {@code null} to give agents none
+     * @param knowledgeMaxChars    most characters of retrieved text added to one prompt
+     * @param chatUi               chat-interface defaults and state: step details, choices, feedback flags
+     *                             (LLD-13 §3)
+     */
+    public DefaultAgentInvoker(ModelRouter modelRouter,
+                                @Nullable ToolBridge toolBridge,
+                                MetadataRegistry metadataRegistry,
+                                InvocationGuardAdvisor.KillSwitchChecker killSwitchChecker,
+                                InvocationGuardAdvisor.BudgetChecker budgetChecker,
+                                UsageMeteringAdvisor.UsageSink usageSink,
+                                TurnRecorder turnRecorder,
+                                ConversationRecorder conversationRecorder,
+                                ObservationRegistry observationRegistry,
+                                ChatMemory chatMemory,
+                                @Nullable JsonSchemaValidationPort schemaValidator,
+                                TurnSafety turnSafety,
+                                @Nullable KnowledgeStore knowledgeStore,
+                                int knowledgeMaxChars,
+                                ChatUiRuntime chatUi) {
+        this.chatUi = Objects.requireNonNull(chatUi, "chatUi");
         this.turnSafety = Objects.requireNonNull(turnSafety, "turnSafety");
         this.knowledgeStore = knowledgeStore;
         this.knowledgeMaxChars = knowledgeMaxChars;
@@ -276,9 +324,11 @@ public final class DefaultAgentInvoker implements AgentInvoker {
             }
             ResolvedModel resolved = modelRouter.resolveModel(agent.model(), principal);
             ChatModel chatModel = resolved.model();
-            List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
-            ChatClient client = buildChatClient(agent, principal, resolved);
             String convKey = convKey(principal, agent, conversationId);
+            TurnEvents sideEvents = new TurnEvents(false);
+            List<ToolCallback> callbacks = withChatUi(agent, principal, turnId, convKey, sideEvents,
+                    buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation));
+            ChatClient client = buildChatClient(agent, principal, resolved);
             // the model and the chat memory only ever see the prompt after input redaction; validation judges the raw one
             String userText = turnSafety.prepareInput(agent, request.message());
 
@@ -294,7 +344,8 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 throw new AgentInvocationException("empty-response",
                         "Agent returned no response.", true);
             }
-            SyncChatResult result = guardSyncResult(agent, mapSyncResult(response, conversationId, turnId));
+            SyncChatResult result = withSideEvents(guardSyncResult(agent, mapSyncResult(response, conversationId, turnId)),
+                    sideEvents.collected());
             recordTurn(agent, request, principal, turnId, modelCallId, turnObservation, conversationId, startedAt, traceId, false,
                     TurnRecorder.Outcome.SUCCESS, TurnRecorder.Finish.STOP, null, null,
                     result.usage().inputTokens(), result.usage().outputTokens());
@@ -359,9 +410,12 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 }
                 ResolvedModel resolved = modelRouter.resolveModel(agent.model(), principal);
                 ChatModel chatModel = resolved.model();
-                List<ToolCallback> callbacks = buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation);
-                ChatClient client = buildChatClient(agent, principal, resolved);
                 String convKey = convKey(principal, agent, conversationId);
+                ChatUiSpec ui = chatUi.effective(agent);
+                TurnEvents sideEvents = new TurnEvents(true);
+                List<ToolCallback> callbacks = withChatUi(agent, principal, turnId, convKey, sideEvents,
+                        buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation));
+                ChatClient client = buildChatClient(agent, principal, resolved);
                 String userText = turnSafety.prepareInput(agent, request.message());
                 TurnSafety.OutputGuard outputGuard = turnSafety.outputGuard(agent);
                 StringBuilder rawAnswer = new StringBuilder();
@@ -450,14 +504,23 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                     return Flux.fromIterable(events);
                 });
 
-                StreamEvent turnStart = new StreamEvent.TurnStart(
-                        turnId, conversationId, agent.slug(), agent.revision(),
-                        StreamEvent.TurnStart.PROTOCOL);
+                List<StreamEvent> opening = new ArrayList<>(2);
+                opening.add(new StreamEvent.TurnStart(turnId, conversationId, agent.slug(), agent.revision(),
+                        StreamEvent.TurnStart.PROTOCOL, ui));
+                if (ui != null && ui.steps()) {
+                    // the input checks have passed by now, so this step is known before the model starts
+                    opening.add(new StreamEvent.Step("check", "Checked your request", "done", null));
+                }
+
+                // step, tool and component events from tool threads join the text stream as they happen; the side
+                // channel closes when the model's stream does, so usage and turn.end always come last
+                Flux<StreamEvent> live = Flux.merge(sideEvents.flux(),
+                        content.doFinally(signal -> sideEvents.complete()));
 
                 AtomicBoolean recorded = new AtomicBoolean(false);
                 return Flux.concat(
-                        Flux.just(turnStart),
-                        content.concatWith(ending)
+                        Flux.fromIterable(opening),
+                        live.concatWith(ending)
                 ).onErrorResume(e -> {
                     LOG.error("Agent {} stream error for principal {}",
                             agent.slug(), principal.principalId(), e);
@@ -638,6 +701,63 @@ public final class DefaultAgentInvoker implements AgentInvoker {
     }
 
     // ─── Tool callbacks ───────────────────────────────────────────────────────
+
+    /**
+     * The chat-interface part of a turn's tools: every tool reports its calls as step details when the agent's UI
+     * shows steps, and {@code present_choices} is added when it allows choices. Choices are streamed through the
+     * turn's side channel and recorded so their answers can be validated later.
+     */
+    private List<ToolCallback> withChatUi(AgentDefinition agent, DaiPrincipal principal, UUID turnId, String convKey,
+                                          TurnEvents sideEvents, List<ToolCallback> callbacks) {
+        ChatUiSpec ui = chatUi.effective(agent);
+        if (ui == null || (!ui.steps() && !ui.choices())) {
+            return callbacks;
+        }
+        List<ToolCallback> out = new ArrayList<>(callbacks.size() + 1);
+        AtomicInteger counter = new AtomicInteger();
+        for (ToolCallback callback : callbacks) {
+            out.add(ui.steps()
+                    ? new StepReportingToolCallback(callback, sideEvents, turnSafety.redactor(), counter)
+                    : callback);
+        }
+        if (ui.choices()) {
+            String conversationKey = Sha256.of(convKey);
+            out.add(new PresentChoicesTool(turnSafety.redactor(), choice -> {
+                String payload = choice.toPayloadJson();
+                sideEvents.emit(new StreamEvent.UiComponent(Choice.TYPE, payload, choice.componentId(), false));
+                try {
+                    chatUi.state().componentShown(new ChatUiState.ShownComponent(conversationKey,
+                            agent.workspaceId(), agent.id(), principal.principalId(), turnId, choice.componentId(),
+                            Choice.TYPE, payload));
+                } catch (RuntimeException e) {
+                    LOG.warn("Recording choice {} of turn {} failed; it is shown but its answer cannot be validated",
+                            choice.componentId(), turnId, e);
+                }
+            }));
+        }
+        return out;
+    }
+
+    /** Adds the side-channel results of a synchronous turn: tool calls and components shown by tools. */
+    private static SyncChatResult withSideEvents(SyncChatResult result, List<StreamEvent> events) {
+        if (events.isEmpty()) {
+            return result;
+        }
+        java.util.Map<String, String> toolNames = new java.util.HashMap<>();
+        List<ToolCallRecord> toolCalls = new ArrayList<>(result.toolCalls());
+        List<StreamEvent.UiComponent> components = new ArrayList<>(result.components());
+        for (StreamEvent e : events) {
+            switch (e) {
+                case StreamEvent.ToolCall call -> toolNames.put(call.callId(), call.tool());
+                case StreamEvent.ToolResult r -> toolCalls.add(new ToolCallRecord(r.callId(),
+                        toolNames.getOrDefault(r.callId(), "unknown"), r.status()));
+                case StreamEvent.UiComponent c -> components.add(c);
+                default -> { }
+            }
+        }
+        return new SyncChatResult(result.conversationId(), result.turnId(), result.message(), toolCalls,
+                result.usage(), result.display(), components);
+    }
 
     private List<ToolCallback> buildToolCallbacks(AgentDefinition agent, DaiPrincipal principal,
                                                     Authentication authentication, AgentChatRequest request,

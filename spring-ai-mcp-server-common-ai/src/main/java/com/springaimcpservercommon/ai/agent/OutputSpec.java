@@ -12,8 +12,10 @@ import java.util.Objects;
  * @param jsonSchema JSON Schema string when mode is {@link Mode#JSON_SCHEMA}; {@code null} otherwise
  * @param display    backend-controlled layout of the answer shown to users (LLD-06 §8.3); {@code null} = automatic
  *                   layout
+ * @param ui         chat-interface features of this agent's turns (LLD-13 §3); {@code null} = host defaults
  */
-public record OutputSpec(Mode mode, @Nullable String jsonSchema, @Nullable DisplayTemplate display) {
+public record OutputSpec(Mode mode, @Nullable String jsonSchema, @Nullable DisplayTemplate display,
+                         @Nullable ChatUiSpec ui) {
 
     /** Free-form text response. */
     public static final OutputSpec TEXT = new OutputSpec(Mode.TEXT, null);
@@ -44,6 +46,17 @@ public record OutputSpec(Mode mode, @Nullable String jsonSchema, @Nullable Displ
      * @param jsonSchema JSON Schema string when mode is {@link Mode#JSON_SCHEMA}; {@code null} otherwise
      */
     public OutputSpec(Mode mode, @Nullable String jsonSchema) {
-        this(mode, jsonSchema, null);
+        this(mode, jsonSchema, null, null);
+    }
+
+    /**
+     * Output specification with the host's chat-interface defaults.
+     *
+     * @param mode       output mode
+     * @param jsonSchema JSON Schema string when mode is {@link Mode#JSON_SCHEMA}; {@code null} otherwise
+     * @param display    display template; {@code null} = automatic layout
+     */
+    public OutputSpec(Mode mode, @Nullable String jsonSchema, @Nullable DisplayTemplate display) {
+        this(mode, jsonSchema, display, null);
     }
 }

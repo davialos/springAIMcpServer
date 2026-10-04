@@ -105,6 +105,7 @@ public interface AgentInvoker {
      * @param usage          token usage
      * @param display        structured, backend-controlled display of the answer (LLD-06 §8.3); {@code null} when
      *                       the structured display is off
+     * @param components     interactive components shown during the turn (e.g. {@code choice}), in order
      */
     record SyncChatResult(
             UUID conversationId,
@@ -112,7 +113,29 @@ public interface AgentInvoker {
             String message,
             List<ToolCallRecord> toolCalls,
             UsageRecord usage,
-            @Nullable StructuredResponse display) {
+            @Nullable StructuredResponse display,
+            List<StreamEvent.UiComponent> components) {
+
+        /** Copies the lists. */
+        public SyncChatResult {
+            toolCalls = List.copyOf(toolCalls);
+            components = List.copyOf(components);
+        }
+
+        /**
+         * Result without components.
+         *
+         * @param conversationId conversation id
+         * @param turnId         turn id
+         * @param message        assistant's final text response
+         * @param toolCalls      tool calls made during the turn
+         * @param usage          token usage
+         * @param display        structured display, or {@code null}
+         */
+        public SyncChatResult(UUID conversationId, UUID turnId, String message, List<ToolCallRecord> toolCalls,
+                              UsageRecord usage, @Nullable StructuredResponse display) {
+            this(conversationId, turnId, message, toolCalls, usage, display, List.of());
+        }
 
         /**
          * Result without a structured display.
@@ -125,7 +148,7 @@ public interface AgentInvoker {
          */
         public SyncChatResult(UUID conversationId, UUID turnId, String message, List<ToolCallRecord> toolCalls,
                               UsageRecord usage) {
-            this(conversationId, turnId, message, toolCalls, usage, null);
+            this(conversationId, turnId, message, toolCalls, usage, null, List.of());
         }
     }
 

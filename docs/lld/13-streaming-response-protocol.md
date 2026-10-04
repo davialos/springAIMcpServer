@@ -38,11 +38,13 @@ Authorization: Bearer … | session cookie + CSRF header
 Every event has an SSE `id: <turnId>:<seq>` (monotonic) and a JSON `data` object with `type`.
 | `event:` | `data` fields | When |
 |----------|---------------|------|
-| `turn.start` | `turnId, conversationId, agent, revision, protocol` | First event |
+| `turn.start` | `turnId, conversationId, agent, revision, protocol`, `ui?` = `{steps, feedback, copy, choices}` | First event; `ui` tells the client which chat features to offer (agent `output.ui`, else `dynamic.ai.agent.chat.ui.*`); absent = plain text client |
+| `step` | `stepId, title, status` (`running\|done\|error`), `detail?` | Progress of a non-tool step ("Checked your request"), only when `ui.steps`; same `stepId` may be sent again with a new status |
 | `text.delta` | `seq, text` | Model tokens (after server-side guardrail window, §5) |
-| `tool.call` | `callId, tool, argsPreview` (redacted) | Model requested a tool |
-| `tool.result` | `callId, status` (`ok\|empty\|truncated\|error\|not_permitted\|unavailable`), `summary` | Tool finished (payload itself is not streamed) |
-| `ui.component` | full component payload (LLD-11 §7) | Display data — always a complete JSON object, never split |
+| `tool.call` | `callId, tool, argsPreview` (PII-redacted, ≤ 300 chars) | Model requested a tool; emitted live from the tool thread when `ui.steps` (implemented, `StepReportingToolCallback`) |
+| `tool.result` | `callId, status` (`ok\|empty\|truncated\|error\|not_permitted\|unavailable\|proposed`), `summary` | Tool finished; the summary is built from the envelope's status, entity, count and displayable error only, never rows |
+| `ui.component` | `componentType, payload` (JSON string), `componentId?`, `copyable?` | Display data — always a complete JSON object, never split. `componentId` identifies interactive components within the turn; `copyable: true` asks the client for a copy button |
+| `ui.component` (`componentType: "choice"`) | `payload` = `{componentId, question, options:[{value,label,description?}], multiple, allowOther}` | Shown when the model calls the built-in `present_choices` tool (only when `ui.choices`); texts PII-redacted; recorded so the answer can be validated (`ChatUiState`). The user answers through the next chat request (`answer` field) |
 | `ui.component` (`componentType: "structured-response"`) | `payload` = the answer's display tree (LLD-06 §8.3) | Sent once, after the last `text.delta` and before `usage`/`turn.end`, when the structured display is on; PII already removed |
 | `proposal.created` / `proposal.updated` / `proposal.applied` | proposal review payload / state (LLD-11) | Write flow |
 | `usage` | `inputTokens, outputTokens, costMicros, model` | Before `turn.end` |

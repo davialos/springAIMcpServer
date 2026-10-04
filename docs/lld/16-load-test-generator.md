@@ -71,6 +71,8 @@ never on a host's runtime classpath; the JUnit extension is test scope only).
 - **CLI** `scripts/loadtest.sh <discover|generate|run|report|compare|init-gradle|modes>` (`cli.LoadTestCli`);
   exit codes: 0 ok, 1 failure / failed thresholds (`report`), 2 usage, 3 regression, otherwise k6's (99 =
   thresholds failed). Options in §8.
+- Orchestration: `scripts/perf-test.sh` runs generate + run against any live service and profiles its JVM with JFR
+  during the load ([tools/perf-test.md](../tools/perf-test.md)); it only calls this CLI, adding no contract here.
 - **Maven plugin** (prefix `loadtest`): `discover`, `generate`, `run` (fails on failed thresholds; with
   `baseline`, on a regression; `skipIfK6Missing`), `compare` (`updateBaseline`); every parameter also
   `-Dloadtest.<name>`. Requires Maven on JDK 25.

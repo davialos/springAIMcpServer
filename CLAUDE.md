@@ -85,6 +85,8 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`, `scripts/loadtest-mcp.sh`); guide `docs/integration/load-testing-guide.md`
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
+- `docs/tools/perf-test.md` — universal performance test against any running service: k6 load + JFR profile +
+  analysis in one command (`scripts/perf-test.sh`, config `scripts/perf-test.env.example`)
 - `docs/data/schema-usecase-map.md` — table → use case → business flow → feature/requirement map (behaviour; structure stays in LLD-15);
   regenerate with `scripts/schema-usecase-map/` + the `schema-usecase-mapper` agent
 - `.claude/agents/saimcp-*.md` — host-integration experts per feature (start with `saimcp-integration-lead`); keep them

@@ -549,6 +549,50 @@ class HostApplicationIT {
     }
 
     @Test
+    void theQueryExecutorOpensItsOwnReadTransactionAlsoWhenTracedAndOffTheRequestThread() throws Exception {
+        seedOrders();
+        var catalog = context.getBean(com.springaimcpservercommon.core.catalog.MetadataRegistry.class).current();
+        var order = com.springaimcpservercommon.core.catalog.CatalogElementRef.entity(Order.class.getName());
+        var query = new com.springaimcpservercommon.query.ast.QueryDefinition(java.util.UUID.randomUUID(), 1,
+                java.util.UUID.randomUUID(), order,
+                List.of(new com.springaimcpservercommon.query.ast.Projection(
+                        com.springaimcpservercommon.query.ast.AttributePath.of("id"))),
+                new com.springaimcpservercommon.query.ast.FilterNode.Comparison(
+                        com.springaimcpservercommon.query.ast.AttributePath.of("customerId"),
+                        com.springaimcpservercommon.query.ast.Operator.EQ,
+                        new com.springaimcpservercommon.query.ast.Operand.Literal("c-alice")),
+                List.of(com.springaimcpservercommon.query.ast.SortSpec.asc(
+                        com.springaimcpservercommon.query.ast.AttributePath.of("id"))),
+                com.springaimcpservercommon.query.ast.PageSpec.DEFAULT, List.of(), java.util.Set.of(),
+                catalog.policyFingerprint());
+        var caller = new com.springaimcpservercommon.core.principal.DaiPrincipal(java.util.UUID.randomUUID(),
+                com.springaimcpservercommon.core.principal.SubjectType.USER, "test", "alice", null,
+                java.util.Set.of(), java.util.Set.of(), Map.of(), Map.of(),
+                com.springaimcpservercommon.annotations.Classification.INTERNAL, null, java.util.Set.of());
+        // a host with Micrometer observation gets the traced executor; tool calls run it on a virtual thread, where no
+        // request-bound (open-in-view) entity manager or transaction exists
+        var registries = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        registries.addBean("observationRegistry", io.micrometer.observation.ObservationRegistry.create());
+        var traced = new com.springaimcpservercommon.autoconfigure.DaiQueryAutoConfiguration().queryExecutor(
+                context.getBean(jakarta.persistence.EntityManagerFactory.class),
+                context.getBean(com.springaimcpservercommon.autoconfigure.DaiProperties.class),
+                registries.getBeanProvider(io.micrometer.observation.ObservationRegistry.class));
+        for (var executor : List.of(traced,
+                context.getBean(com.springaimcpservercommon.query.execution.QueryExecutor.class))) {
+            var rows = new java.util.concurrent.atomic.AtomicReference<Object>();
+            Thread.ofVirtual().start(() -> {
+                try {
+                    rows.set(executor.execute(query, caller, Map.of(), List.of(), catalog, 10).rows());
+                } catch (RuntimeException e) {
+                    rows.set(e);
+                }
+            }).join();
+            assertThat(rows.get()).as(executor.getClass().getSimpleName()).asString().contains("o1").contains("o2")
+                    .doesNotContain("o3");
+        }
+    }
+
+    @Test
     void anAgentDescribesTheDataModelAndBuildsChecksAndRunsItsOwnReadQueriesAsTheCaller() throws Exception {
         seedOrders();
         String ws = workspaceWithTeam("orders-criteria");

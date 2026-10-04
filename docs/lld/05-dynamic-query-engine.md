@@ -148,7 +148,8 @@ call limit, the read-only scope (ADR-0014), recording and MCP exposure apply unc
 
 1. Only entities the catalog exposes (enabled, not above the caller's clearance) and allowed by the binding's
    `entities` list; only attributes that are enabled, **not sensitive** and not above the caller's clearance — for
-   select, filter *and* sort; relations only to such entities, at most `max-join-depth` hops.
+   select, filter *and* sort; relations only to such entities, at most 3 hops (`QueryValidator.DEFAULT_MAX_JOIN_DEPTH`; §9 lists it as a
+   property, but only `max-concurrency` and `timeout` are bound today).
 2. Select and sort cannot cross a to-many relation; a filter can (the query becomes `DISTINCT`).
 3. Values are JSON literals **converted to the attribute's Java type** (numbers exact, `LocalDate`/`Instant`/… ISO-8601,
    UUID, enum by name case-insensitively) or `"principal": "<attr>"` — the caller's own attribute, bound server-side;
@@ -158,7 +159,7 @@ call limit, the read-only scope (ADR-0014), recording and MCP exposure apply unc
 5. An entity's **mandatory filters** (`@AiQueryConstraints`) must be bound to a principal attribute with EQ/IN in the
    top-level `all` group; a literal never satisfies them.
 6. Limits: 30 columns, 40 comparisons, nesting 6, page size `min(binding maxRows (default 50), entity maxLimit,
-   max-page-size)` — a larger `limit` is reduced with a warning. The identifier is appended to the sort so keyset
+   global 200 = QueryValidator.DEFAULT_MAX_PAGE_SIZE)` — a larger `limit` is reduced with a warning. The identifier is appended to the sort so keyset
    pages are stable; the query id is derived from the request, so a cursor continues the same query.
 7. The compiled `QueryDefinition` then passes `QueryValidator.validateAtPublish` (with the caller as author) and
    `validateAtRuntime` (catalog fingerprint, mandatory filters, clearance) before it may run; execution uses the

@@ -178,4 +178,143 @@ class SqlSchemaReaderTest {
         assertThat(log).containsExactly("schema: 2 tables, 1 foreign keys from 3 SQL script(s) (no database needed)");
         assertThat(SqlSchemaReader.compareNatural("1_10", "1_9")).isPositive();
     }
+
+    @Test
+    void compositeForeignKeysRequiredAndGeneratedColumns() {
+        List<DbTable> tables = SqlSchemaReader.parse(List.of("""
+                create table orders (id bigserial primary key, placed_at timestamp not null default now(),
+                                     note varchar(40));
+                create table order_lines (order_id bigint not null references orders, line_no int not null,
+                                          sku varchar(20) not null, primary key (order_id, line_no));
+                create table shipment_items (id int generated always as identity primary key,
+                                             order_id bigint, line_no int, qty int not null,
+                                             foreign key (order_id, line_no) references order_lines (order_id, line_no));
+                alter table orders alter column note set not null;
+                alter table shipment_items alter column qty set default 1;
+                """));
+        DbTable items = table(tables, "shipment_items");
+        assertThat(items.compositeForeignKeys()).singleElement().satisfies(k -> {
+            assertThat(k.columns()).containsExactly("order_id", "line_no");
+            assertThat(k.target().key()).isEqualTo("order_lines.order_id,line_no");
+        });
+        assertThat(items.compositeKeyOf("LINE_NO")).hasValueSatisfying(e -> assertThat(e.getValue()).isEqualTo(1));
+        assertThat(items.generatedColumns()).containsExactlyInAnyOrder("id", "qty");
+        assertThat(items.requiredColumns()).isEmpty(); // qty got a default, id is an identity
+        DbTable orders = table(tables, "orders");
+        assertThat(orders.generatedColumns()).containsExactlyInAnyOrder("id", "placed_at");
+        assertThat(orders.requiredColumns()).containsExactly("note");
+        assertThat(table(tables, "order_lines").requiredColumns()).containsExactlyInAnyOrder("order_id", "line_no",
+                "sku");
+    }
+
+    @Test
+    void liquibaseXmlYamlAndJsonChangelogs() {
+        List<String> xml = LiquibaseChangelogReader.statementsOf("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog">
+                  <changeSet id="1" author="a">
+                    <createTable tableName="customer">
+                      <column name="id" type="BIGINT" autoIncrement="true">
+                        <constraints primaryKey="true" nullable="false"/>
+                      </column>
+                      <column name="email" type="VARCHAR(120)"><constraints unique="true" nullable="false"/></column>
+                    </createTable>
+                    <createTable tableName="purchase">
+                      <column name="id" type="BIGINT"><constraints primaryKey="true"/></column>
+                      <column name="customer_ref" type="BIGINT">
+                        <constraints nullable="false" foreignKeyName="fk_p_c" references="customer(id)"/>
+                      </column>
+                    </createTable>
+                    <rollback><dropTable tableName="purchase"/></rollback>
+                  </changeSet>
+                  <changeSet id="2" author="a">
+                    <addColumn tableName="purchase"><column name="code" type="VARCHAR(12)"/></addColumn>
+                    <createIndex tableName="purchase" indexName="ux_code" unique="true">
+                      <column name="code"/>
+                    </createIndex>
+                    <renameColumn tableName="customer" oldColumnName="email" newColumnName="mail"/>
+                    <sql>CREATE TABLE audit (id int primary key);</sql>
+                  </changeSet>
+                </databaseChangeLog>
+                """, true);
+        List<DbTable> fromXml = SqlSchemaReader.parse(List.of(String.join(";\n", xml)));
+        assertThat(fromXml).extracting(DbTable::name).containsExactly("customer", "purchase", "audit");
+        DbTable customer = table(fromXml, "customer");
+        assertThat(customer.uniqueColumns()).containsExactly("mail");
+        assertThat(customer.columnSizes()).containsEntry("mail", 120);
+        assertThat(customer.generatedColumns()).containsExactly("id");
+        DbTable purchase = table(fromXml, "purchase");
+        assertThat(fks(purchase)).containsExactly(Map.entry("customer_ref", "customer.id"));
+        assertThat(purchase.uniqueColumns()).containsExactly("code");
+        assertThat(purchase.requiredColumns()).containsExactlyInAnyOrder("id", "customer_ref");
+
+        List<String> yaml = LiquibaseChangelogReader.statementsOf("""
+                databaseChangeLog:
+                  - changeSet:
+                      id: 1
+                      author: a
+                      changes:
+                        - createTable:
+                            tableName: header
+                            columns:
+                              - column: {name: a, type: int, constraints: {primaryKey: true}}
+                              - column: {name: b, type: int, constraints: {primaryKey: true}}
+                        - createTable:
+                            tableName: detail
+                            columns:
+                              - column: {name: id, type: int, constraints: {primaryKey: true}}
+                              - column: {name: ha, type: int}
+                              - column: {name: hb, type: int}
+                        - addForeignKeyConstraint:
+                            baseTableName: detail
+                            baseColumnNames: ha, hb
+                            referencedTableName: header
+                            referencedColumnNames: a, b
+                            constraintName: fk_d_h
+                        - addNotNullConstraint: {tableName: detail, columnName: ha}
+                """, false);
+        DbTable detail = table(SqlSchemaReader.parse(List.of(String.join(";\n", yaml))), "detail");
+        assertThat(detail.compositeForeignKeys()).singleElement()
+                .satisfies(k -> assertThat(k.target().key()).isEqualTo("header.a,b"));
+        assertThat(detail.requiredColumns()).containsExactlyInAnyOrder("id", "ha");
+
+        List<String> json = LiquibaseChangelogReader.statementsOf("""
+                {"databaseChangeLog": [{"changeSet": {"id": "1", "author": "a", "changes": [
+                  {"createTable": {"tableName": "tag", "columns": [
+                    {"column": {"name": "id", "type": "int", "constraints": {"primaryKey": true}}},
+                    {"column": {"name": "label", "type": "varchar(30)"}}]}},
+                  {"dropColumn": {"tableName": "tag", "columnName": "label"}}]}}]}
+                """, false);
+        assertThat(table(SqlSchemaReader.parse(List.of(String.join(";\n", json))), "tag").columns())
+                .containsOnlyKeys("id");
+    }
+
+    @Test
+    void aProjectsLiquibaseMasterIsFollowedThroughItsIncludes(@TempDir Path dir) throws IOException {
+        Path changelog = Files.createDirectories(dir.resolve("src/main/resources/db/changelog"));
+        Files.writeString(changelog.resolve("db.changelog-master.yaml"), """
+                databaseChangeLog:
+                  - include: {file: db/changelog/001-users.xml}
+                  - include: {file: 002-posts.sql, relativeToChangelogFile: true}
+                """);
+        Files.writeString(changelog.resolve("001-users.xml"), """
+                <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog">
+                  <changeSet id="1" author="a">
+                    <createTable tableName="users">
+                      <column name="id" type="bigint"><constraints primaryKey="true"/></column>
+                    </createTable>
+                  </changeSet>
+                </databaseChangeLog>
+                """);
+        Files.writeString(changelog.resolve("002-posts.sql"), """
+                --liquibase formatted sql
+                --changeset a:2
+                create table posts (id bigint primary key, author_id bigint references users(id));
+                """);
+        List<String> log = new ArrayList<>();
+        List<DbTable> tables = new SqlSchemaReader(log::add).read(dir);
+        assertThat(tables).extracting(DbTable::name).containsExactly("users", "posts"); // include order
+        assertThat(fks(table(tables, "posts"))).containsExactly(Map.entry("author_id", "users.id"));
+        assertThat(log).singleElement().asString().contains("2 tables").contains("2 Liquibase changelog(s)");
+    }
 }

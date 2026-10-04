@@ -91,7 +91,7 @@ public record DataPlan(Map<String, FieldPlan> fields) {
                 PoolRef pool = resources.get(collectionOf(e.path(), p.name()));
                 if (f != null && f.pool() == null && !f.sensitive() && pool != null) {
                     b.fields.put(key, new FieldPlan(f.key(), f.name(), f.owner(), f.kind(), pool, false,
-                            f.maxLength(), f.unique()));
+                            f.maxLength(), f.unique(), -1));
                 }
             }
         }
@@ -177,12 +177,14 @@ public record DataPlan(Map<String, FieldPlan> fields) {
                     FieldKind kind = FieldKindClassifier.classify(name, s);
                     RealDataBinder.FieldContext ctx = new RealDataBinder.FieldContext(key, name, location, kind,
                             sensitive, resource, owner);
-                    PoolRef pool = binder.bind(ctx).orElse(null);
+                    RealDataBinder.Binding binding = binder.bindDetailed(ctx).orElse(null);
                     var facts = location == ParamLocation.PATH ? java.util.Optional.<TableIndex.ColumnFacts>empty()
                             : binder.facts(ctx);
-                    fields.putIfAbsent(key, new FieldPlan(key, name, owner, kind, pool, sensitive,
+                    fields.putIfAbsent(key, new FieldPlan(key, name, owner, kind,
+                            binding == null ? null : binding.pool(), sensitive,
                             facts.map(TableIndex.ColumnFacts::maxLength).orElse(null),
-                            facts.map(TableIndex.ColumnFacts::unique).orElse(false)));
+                            facts.map(TableIndex.ColumnFacts::unique).orElse(false),
+                            binding == null ? -1 : binding.component()));
                 }
                 case ArraySchema a -> walk(a.items(), key, name, owner, location, sensitive, resource);
                 case ObjectSchema o -> {

@@ -167,6 +167,34 @@ final class ProjectFiles {
     }
 
     /**
+     * Liquibase changelogs (XML, YAML, JSON) under {@code src/main/resources}: files whose content declares a
+     * {@code databaseChangeLog}.
+     *
+     * @param projectDir project root
+     * @return changelog files, sorted
+     */
+    static List<Path> liquibaseChangelogs(Path projectDir) {
+        List<Path> out = new ArrayList<>();
+        for (String ext : List.of(".xml", ".yaml", ".yml", ".json")) {
+            for (Path p : walk(projectDir, ext)) {
+                String s = p.toString().replace('\\', '/');
+                if (!s.contains("/src/main/resources/") || p.getFileName().toString().startsWith("application")) {
+                    continue;
+                }
+                try {
+                    if (Files.size(p) <= MAX_SPEC_BYTES && Files.readString(p).contains("databaseChangeLog")) {
+                        out.add(p);
+                    }
+                } catch (IOException | java.io.UncheckedIOException e) {
+                    // unreadable: not a changelog we can use
+                }
+            }
+        }
+        out.sort(null);
+        return out;
+    }
+
+    /**
      * OpenAPI/Swagger documents bundled with the project (API-first projects generate their controllers from
      * them): YAML/JSON files under {@code src/main/resources} or a top-level {@code api}/{@code openapi}/
      * {@code spec}/{@code contracts} directory whose content starts like an OpenAPI document.

@@ -67,6 +67,21 @@ function realValues(spec, ctx) {
   return v && v.length ? v : null;
 }
 
+/**
+ * One real value. A composite foreign key's pool holds tuples (one per parent row): the first of its fields in a
+ * request picks the tuple, the others take their component from the same tuple.
+ */
+function pickReal(spec, ctx, values) {
+  if (spec.component === undefined) return R.pick(values);
+  ctx.tuples = ctx.tuples || {};
+  let t = ctx.tuples[spec.real];
+  if (t === undefined) {
+    t = R.pick(values);
+    ctx.tuples[spec.real] = t;
+  }
+  return Array.isArray(t) ? t[spec.component] : t;
+}
+
 /** Ids created by this VU's own create requests during the run (bounded), by pool key. */
 const CREATED = {};
 const MAX_CREATED = 500;
@@ -124,7 +139,11 @@ function weighted(options) {
 export function field(ctx, spec) {
   const user = userValues(Object.assign({ api: ctx.api }, spec));
   const real = realValues(spec, ctx);
-  const source = choose(ctx, spec, user, real);
+  const tuple = spec.component !== undefined && spec.real;
+  if (tuple) ctx.tupleSources = ctx.tupleSources || {};
+  // the columns of a composite foreign key share one source and one parent row per request
+  const source = tuple && ctx.tupleSources[spec.real] ? ctx.tupleSources[spec.real] : choose(ctx, spec, user, real);
+  if (tuple) ctx.tupleSources[spec.real] = source;
   ctx.sources[spec.key] = source;
   let value;
   switch (source) {
@@ -132,7 +151,7 @@ export function field(ctx, spec) {
       value = R.pick(user);
       break;
     case 'real':
-      value = R.pick(real);
+      value = pickReal(spec, ctx, real);
       break;
     case 'random':
       value = R.scalar(spec.schema);

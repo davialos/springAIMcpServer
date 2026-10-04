@@ -36,6 +36,7 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 18 | [integration/annotation-best-practices.md](integration/annotation-best-practices.md) — `@Ai*` annotation best practices, centralized configuration, per-annotation scenarios | metadata-extraction-designer | Draft v1 |
 | — | [../scripts/db/postgresql/](../scripts/db/postgresql/) — DBA scripts: roles, database, schema, grants, verification | — | v1 |
 | — | [tools/jfr-analyzer.md](tools/jfr-analyzer.md) — JFR recording analyzer (developer tool) | — | v1 |
+| — | [../.claude/agents/](../.claude/agents/) — integration experts for host projects: `saimcp-integration-lead` (start here) routes to one expert per feature (catalog, tool execution, reviewed writes, queries, endpoints, agent runtime, MCP, security, persistence/ops), each from use case to Spring proxy/thread/transaction level | — | v1 |
 | — | [../scripts/schema-usecase-map/](../scripts/schema-usecase-map/) — evidence script behind the schema use-case map (works on any project) | — | v1 |
 | — | [adr/](adr/) — architecture decisions | lld-chief-architect | — |
 | — | [open-questions.md](open-questions.md) | all | Living |

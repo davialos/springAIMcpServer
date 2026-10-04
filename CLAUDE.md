@@ -87,6 +87,8 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/data/schema-usecase-map.md` — table → use case → business flow → feature/requirement map (behaviour; structure stays in LLD-15);
   regenerate with `scripts/schema-usecase-map/` + the `schema-usecase-mapper` agent
+- `.claude/agents/saimcp-*.md` — host-integration experts per feature (start with `saimcp-integration-lead`); keep them
+  in step with the code when a feature's wiring changes
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
 

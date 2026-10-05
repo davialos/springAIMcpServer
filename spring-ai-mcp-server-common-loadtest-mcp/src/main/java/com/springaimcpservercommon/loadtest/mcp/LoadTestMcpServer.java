@@ -27,7 +27,8 @@ public final class LoadTestMcpServer {
 
     static final String INSTRUCTIONS = """
             Load testing for Spring Boot projects with Grafana k6. Typical flow: loadtest_discover (what APIs and \
-            relationships exist) → loadtest_generate (write the suite) → loadtest_run mode=smoke (must pass first; \
+            relationships exist; loadtest_schema shows the database's current structure as DDL) → loadtest_generate \
+            (write the suite) → loadtest_run mode=smoke (must pass first; \
             confirm the target URL with the user, it sends real traffic and seeds rows) → heavier modes \
             (mixed-load, mixed-spike, stress) → loadtest_report / loadtest_compare against a baseline. Fix failures \
             in the suite's hooks.js, data/user.json or loadtest.config.json, never by disabling thresholds.""";

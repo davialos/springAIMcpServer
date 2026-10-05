@@ -10,8 +10,8 @@ change you made explained. Smoke passing is the gate for any heavier mode.
 
 ## Tools
 
-Prefer the `spring-loadtest` MCP tools: `loadtest_discover`, `loadtest_generate`, `loadtest_run`,
-`loadtest_report`, `loadtest_compare`, `loadtest_modes`. Paths are relative to the directory the server was
+Prefer the `spring-loadtest` MCP tools: `loadtest_discover`, `loadtest_generate`, `loadtest_schema`,
+`loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`. Paths are relative to the directory the server was
 started in. Without the MCP server, use the same steps through one of:
 
 | Build | Discover / generate / run |
@@ -34,6 +34,10 @@ Requirements: JDK 25 for the generator, k6 ≥ 0.50 on the PATH (or `K6_BIN`) fo
    - Exclude what must never be load tested (`exclude: ["/admin/**", "POST /payments/**"]`); ask the user when unsure.
 2. **Generate** (`loadtest_generate`). Leave `database: false` unless the user agrees to the generator reading
    their database (it samples real values from `spring.datasource.*`, read-only, never sensitive columns).
+   To see what the database really looks like first (tables, keys, indexes, views as they are *now*, not as the
+   migrations intended), call `loadtest_schema`: it returns the structure as DDL, never row data, from the same
+   `spring.datasource.*` and with the same user agreement. With `database: true`, generation also writes it to the
+   suite's `data/schema.sql`.
    Supply values only the user knows with `values` (`{"CreateOrderRequest.couponCode": ["SPR-2026"]}`).
 3. **Confirm the target** with the user before any run: the base URL (from `application.yml` unless overridden),
    that it is not production, and that seeding may create rows there (`SEED=false` turns it off; `SEED_CLEANUP=true`

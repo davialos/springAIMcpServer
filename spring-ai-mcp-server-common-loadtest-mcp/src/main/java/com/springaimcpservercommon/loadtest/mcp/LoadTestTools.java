@@ -7,12 +7,14 @@ import com.springaimcpservercommon.loadtest.api.ReportComparison;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.k6.LoadMode;
+import com.springaimcpservercommon.loadtest.schema.SchemaSnapshot;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -26,6 +28,9 @@ import java.util.function.Function;
  * against a root directory and must stay inside it.
  */
 public final class LoadTestTools {
+
+    /** Longest DDL text returned inline; longer scripts are cut (the suite's data/schema.sql has the whole). */
+    static final int MAX_DDL_CHARS = 200_000;
 
     /** Longest run a tool call may start. */
     static final Duration MAX_RUN = Duration.ofHours(1);
@@ -89,6 +94,22 @@ public final class LoadTestTools {
                                         "additionalProperties", Map.of("type", "array"))),
                                 List.of("project")),
                         annotations(false, false, true, false), this::generate),
+                tool("loadtest_schema", "Read the database's current structure as DDL",
+                        """
+                        Connects to the project's own database (spring.datasource.* from its application \
+                        properties; LOADTEST_DB_PASSWORD overrides the password) over a read-only connection and \
+                        returns its CURRENT structure as DDL: tables, columns, keys, indexes, views, sequences, \
+                        enum types, partitions. Structure only, never row data (row counts optional). Use it to \
+                        see what the database really looks like before planning load-test data, or to check that \
+                        the schema matches the entities. System schemas and the library's dynamic_ai schema are \
+                        left out.""",
+                        schema(Map.of(
+                                "project", str("Project directory, relative to the server root; its "
+                                        + "spring.datasource.* names the database"),
+                                "schema", str("Only this database schema (default: every non-system schema)"),
+                                "rowCounts", bool("Add an exact row count per table (can be slow on big tables)")),
+                                List.of("project")),
+                        annotations(true, false, true, true), this::schema),
                 tool("loadtest_run", "Run a load test with k6",
                         """
                         Runs a generated suite with k6 against its target and returns pass/fail, the per-API report \
@@ -205,6 +226,41 @@ public final class LoadTestTools {
             out.put("log", log);
             return ok("Generated " + r.apis() + " APIs into " + out.get("suite") + " (target " + r.baseUrl() + ")",
                     out);
+        });
+    }
+
+    McpSchema.CallToolResult schema(Map<String, Object> args) {
+        return guarded(() -> {
+            List<String> log = new ArrayList<>();
+            // Only the project's own datasource: a model-supplied JDBC URL could make some drivers run scripts or
+            // reach hosts the project never configured.
+            LoadTestGenerator.Builder b = LoadTestGenerator.builder().project(path(args, "project")).log(log::add);
+            if (args.get("schema") instanceof String schema && !schema.isBlank()) {
+                b.databaseSchema(schema);
+            }
+            LoadTestGenerator generator = b.build();
+            SchemaSnapshot snapshot;
+            try {
+                snapshot = generator.readSchema(Boolean.TRUE.equals(args.get("rowCounts")));
+            } catch (SQLException e) {
+                return error("database error: " + e.getMessage());
+            }
+            String ddl = generator.ddl(snapshot);
+            boolean truncated = ddl.length() > MAX_DDL_CHARS;
+            List<Map<String, Object>> tables = new ArrayList<>();
+            for (SchemaSnapshot.Table t : snapshot.tables()) {
+                tables.add(ordered("schema", t.schema(), "name", t.name(), "kind", t.kind().name(), "columns",
+                        t.columns().size(), "rows", t.rowCount()));
+            }
+            Map<String, Object> out = ordered("database", snapshot.product() + " " + snapshot.productVersion(),
+                    "schema", snapshot.schema(), "tables", tables, "sequences", snapshot.sequences().size(),
+                    "enumTypes", snapshot.enums().size(), "notes", snapshot.notes(), "truncated", truncated,
+                    "ddl", truncated ? ddl.substring(0, MAX_DDL_CHARS) : ddl);
+            out.put("log", log);
+            return ok(snapshot.count(SchemaSnapshot.Kind.TABLE, SchemaSnapshot.Kind.PARTITIONED_TABLE) + " tables, "
+                    + snapshot.count(SchemaSnapshot.Kind.VIEW, SchemaSnapshot.Kind.MATERIALIZED_VIEW) + " views, "
+                    + snapshot.sequences().size() + " sequences in " + snapshot.product()
+                    + (truncated ? " (DDL cut at " + MAX_DDL_CHARS + " characters)" : ""), out);
         });
     }
 

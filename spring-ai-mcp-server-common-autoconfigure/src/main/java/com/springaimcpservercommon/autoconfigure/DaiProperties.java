@@ -266,10 +266,44 @@ public record DaiProperties(
      *                          {@code model-timeout} error event
      * @param maxMessageChars   longest accepted user message, in characters (an agent's own
      *                          {@code maxInputChars} guardrail applies too when it is smaller)
+     * @param ui                features of the embeddable chat interface (LLD-13 §3)
      */
     public record Chat(
             @DefaultValue("20s") Duration streamIdleTimeout,
-            @DefaultValue("32000") int maxMessageChars) {
+            @DefaultValue("32000") int maxMessageChars,
+            @DefaultValue Ui ui) {
+
+        /**
+         * Chat-interface defaults for agents whose spec has no {@code output.ui} (LLD-13 §3, F-53).
+         *
+         * @param enabled              send {@code turn.start.ui} and the step/component events at all; {@code false}
+         *                             keeps the plain text stream for agents without their own {@code output.ui}
+         * @param steps                stream step details (request check, tool calls with redacted previews)
+         * @param feedback             clients offer like/dislike on answers
+         * @param copy                 clients offer copy buttons
+         * @param choices              offer the model the {@code present_choices} tool
+         * @param interactionRetention how long shown components and their answers are kept
+         * @param feedbackRetention    how long like/dislike feedback is kept
+         */
+        public record Ui(
+                @DefaultValue("true") boolean enabled,
+                @DefaultValue("true") boolean steps,
+                @DefaultValue("true") boolean feedback,
+                @DefaultValue("true") boolean copy,
+                @DefaultValue("false") boolean choices,
+                @DefaultValue("30d") Duration interactionRetention,
+                @DefaultValue("365d") Duration feedbackRetention) {
+
+            /** Validates the retention periods. */
+            public Ui {
+                if (interactionRetention.isNegative() || interactionRetention.isZero()
+                        || feedbackRetention.isNegative() || feedbackRetention.isZero()) {
+                    throw new IllegalArgumentException(
+                            "dynamic.ai.agent.chat.ui.interaction-retention and feedback-retention must be positive");
+                }
+            }
+        }
+
         /** Validates the limits. */
         public Chat {
             if (streamIdleTimeout.isNegative() || streamIdleTimeout.isZero()) {

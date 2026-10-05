@@ -62,6 +62,12 @@
             <artifactId>spring-ai-mcp-server-common-webmvc</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- Opt-in: brings Google CEL (protobuf, guava), so it is not part of the default starter (ADR-0025) -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-ruleengine</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-jdbc</artifactId>

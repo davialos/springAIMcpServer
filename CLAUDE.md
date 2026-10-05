@@ -26,6 +26,7 @@ configured at runtime from an admin control plane and governed by the host's exi
 | Spring Security | 7.1.x (managed by Boot) |
 | Spring AI | 2.0.1 (`ToolCallback`, `ToolCallingAdvisor`; `FunctionCallback` is legacy 1.x naming) |
 | MCP Java SDK | 2.0 (spec 2025-11-25, Streamable HTTP) — managed by the Spring AI BOM |
+| Google CEL (`dev.cel:cel`) | 0.14.0 — rule engine only (`cel.version` in the parent pom) |
 | PostgreSQL | 15+ for the `dynamic_ai` store (ADR-0019, LLD-15) |
 Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure`, `org.springframework.boot.hibernate.autoconfigure`,
 `org.springframework.boot.flyway.autoconfigure`, `org.springframework.boot.webmvc.autoconfigure`.
@@ -49,6 +50,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `persistence` | `…persistence` | Flyway migrations, JPA entities, stores, audit hash chain, `DaiPersistenceUnit` | core |
 | `security` | `…security` | principal mapping, authorization engine, API keys, filter chain pieces | core, persistence, spring-security |
 | `query` | `…query` | dynamic query AST → Criteria compiler/executor over **host** entities | core |
+| `ruleengine` | `…ruleengine` | opt-in CEL rule engine: parameter library (`object.attribute` typed CEL variables), rule groups + evaluation policies, multilingual messages, e-mail/push/API channels, trigger points; JDBC store over `dai_re_*` (V11), change-marker cache (ADR-0025, LLD-18). **No Spring**; not in the starter/BOM-default path (CEL pulls protobuf + Guava) | core, cel-java |
 | `ai` | `…ai` | agent runtime, tool bridge, advisors, write guard | core, spring-ai |
 | `mcp` | `…mcp` | MCP server exposure, auth glue | ai, security |
 | `webmvc` | `…webmvc` | dynamic endpoints, admin API, SSE streaming, problem details | core, security |
@@ -83,6 +85,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 
 - `docs/README.md` index · `docs/01-feature-catalog.md` · `docs/02-architecture-overview.md` · `docs/lld/*.md`
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
+- `docs/lld/18-rule-engine.md` — CEL rule engine (parameter library, policies, messages, channels, triggers); local DB + sample data: `scripts/rule-engine/` (`local-db.sh`, `sample-data.sql`); decision ADR-0025
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`, `scripts/loadtest-mcp.sh`); guide `docs/integration/load-testing-guide.md`
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/tools/perf-test.md` — universal performance test against any running service: k6 load + JFR profile +

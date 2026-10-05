@@ -286,7 +286,7 @@ final class JsEmitter {
                 import { SharedArray } from 'k6/data';
                 import * as data from './lib/data.js';
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
-                import { prepare, call, replay, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney } from './lib/http.js';
+                import { prepare, call, replay, lifecycle as walkLifecycle, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney, previewLifecycle as printLifecycle } from './lib/http.js';
                 import { summary } from './lib/report.js';
                 import * as grafana from './lib/grafana.js';
                 import * as hooks from './hooks.js';
@@ -314,6 +314,10 @@ final class JsEmitter {
                 // Recorded browser flow (generate --har): replayed by MODE=journey-<profile>.
                 const JOURNEY = new SharedArray('journey', () => JSON.parse(open('./data/journey.json')));
 
+                // Business flows generated from the code (create → read → update → status → delete per resource):
+                // MODE=lifecycle-<profile>.
+                const LIFECYCLE = new SharedArray('lifecycle', () => JSON.parse(open('./data/lifecycle.json')));
+
                 // Test data created in setup through the application's create endpoints, parents before children
                 // (entity relationships); see README "Seeding".
                 const SEED = JSON.parse(open('./data/seed.json'));
@@ -321,7 +325,7 @@ final class JsEmitter {
                 const MODULES = [
                 %s];
                 const RUNTIME = prepare(CONFIG, MODULES, SEED);
-                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length);
+                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length, LIFECYCLE.length);
 
                 export function setup() {
                   if (parseMode(__ENV.MODE).profile === 'preview') return { headers: {}, seeded: {} };
@@ -347,6 +351,14 @@ final class JsEmitter {
 
                 export function journey(auth) {
                   replay(RUNTIME, JOURNEY, auth, hooks);
+                }
+
+                export function lifecycle(auth) {
+                  walkLifecycle(RUNTIME, LIFECYCLE, auth, hooks);
+                }
+
+                export function previewLifecycle() {
+                  printLifecycle(RUNTIME, LIFECYCLE, hooks);
                 }
 
                 export function preview() {

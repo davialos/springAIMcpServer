@@ -34,9 +34,13 @@ export function dataMode() {
   return STATE.mode;
 }
 
-/** A fresh per-request context. `complete`: send every optional field too (seeding creates whole rows). */
-export function context(apiId, seeded, complete) {
-  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, seeded: seeded || {}, complete: complete === true };
+/**
+ * A fresh per-request context. `complete`: send every optional field too (seeding creates whole rows); `write`: the
+ * request changes data (POST/PUT/PATCH/DELETE), which per-VU partitioning (data.partition) keeps off other VUs' rows.
+ */
+export function context(apiId, seeded, complete, write) {
+  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, seeded: seeded || {}, complete: complete === true,
+    write: write === true };
 }
 
 function cfg() {
@@ -72,14 +76,38 @@ function realValues(spec, ctx) {
  * request picks the tuple, the others take their component from the same tuple.
  */
 function pickReal(spec, ctx, values) {
-  if (spec.component === undefined) return R.pick(values);
+  const mine = partitioned(values, ctx);
+  if (spec.component === undefined) return R.pickSkewed(mine, skew());
   ctx.tuples = ctx.tuples || {};
   let t = ctx.tuples[spec.real];
   if (t === undefined) {
-    t = R.pick(values);
+    t = R.pickSkewed(mine, skew());
     ctx.tuples[spec.real] = t;
   }
   return Array.isArray(t) ? t[spec.component] : t;
+}
+
+/** Popularity skew of real values: data.skew (uniform | zipf | hot), overridden by SKEW / SKEW_S in the environment. */
+function skew() {
+  const c = cfg().skew || {};
+  const mode = __ENV.SKEW || c.mode || 'uniform';
+  return mode === 'uniform' ? null : Object.assign({}, c, { mode, s: __ENV.SKEW_S ? parseFloat(__ENV.SKEW_S) : c.s });
+}
+
+/**
+ * Writes with data.partition.mode = "vu": every VU takes its own slice of a pool (values i with i % slots == VU's slot),
+ * so concurrent updates and deletes never fight over the same row. Reads still see the whole pool. Fewer values than
+ * slots: the slice count shrinks to the pool size (VUs then share rows, as they must).
+ */
+function partitioned(values, ctx) {
+  const p = cfg().partition || {};
+  const mode = __ENV.PARTITION || p.mode;
+  if (mode !== 'vu' || !ctx.write || !values || values.length < 2) return values;
+  const slots = Math.min(p.slots || 64, values.length);
+  const slot = ((typeof __VU === 'number' && __VU > 0 ? __VU : 1) - 1) % slots;
+  const mine = [];
+  for (let i = slot; i < values.length; i += slots) mine.push(values[i]);
+  return mine.length ? mine : values;
 }
 
 /** Ids created by this VU's own create requests during the run (bounded), by pool key. */

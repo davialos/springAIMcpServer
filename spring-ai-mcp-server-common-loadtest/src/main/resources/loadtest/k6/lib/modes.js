@@ -3,17 +3,21 @@
 //   smoke | load | stress | spike | soak | breakpoint           each API on its own (sequential scenarios)
 //   mixed-smoke | mixed-load | mixed-stress | mixed-spike | …    all APIs together, weighted traffic mix
 //   journey-smoke | journey-load | journey-spike | …            replay the recorded browser flow (data/journey.json)
+//   lifecycle-smoke | lifecycle-load | …                          walk each resource through create → read → update → status → delete (data/lifecycle.json)
 //   preview | journey-preview                                   build requests and print them, send nothing
-// Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), DURATION_SCALE (e.g. 0.1),
+// Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), ITERATIONS (per VU, smoke), DURATION_SCALE (e.g. 0.1),
 // API=getUser,createOrder (restrict APIs), PER_API=parallel (per-API scenarios at once instead of in turn).
 
 export function parseMode(raw) {
   const mode = (raw || 'smoke').toLowerCase();
   if (mode === 'preview') return { mode, profile: 'preview', mixed: false, journey: false };
   if (mode === 'journey-preview') return { mode, profile: 'preview', mixed: false, journey: true };
+  if (mode === 'lifecycle-preview') return { mode, profile: 'preview', mixed: false, journey: false, lifecycle: true };
   const mixed = mode.startsWith('mixed-');
   const journey = mode.startsWith('journey-');
-  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : mode, mixed, journey };
+  const lifecycle = mode.startsWith('lifecycle-');
+  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : lifecycle ? mode.slice(10) : mode, mixed,
+    journey, lifecycle };
 }
 
 const UNITS = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 };
@@ -54,7 +58,7 @@ function scenario(profile, exec, startTime, multiplier) {
   switch (profile.executor) {
     case 'per-vu-iterations':
       s.vus = Math.max(1, Math.round(base));
-      s.iterations = (profile.iterations || 1) * (multiplier || 1);
+      s.iterations = envNumber('ITERATIONS', profile.iterations || 1) * (multiplier || 1); // per VU
       s.maxDuration = scaled(profile.maxDuration || '10m');
       break;
     case 'constant-vus':
@@ -115,15 +119,15 @@ function thresholds(config, profile, runtime, mixed) {
 }
 
 /** k6 options for the selected mode. */
-export function buildOptions(config, runtime, journeySteps) {
-  const { mode, profile: profileName, mixed, journey } = parseMode(__ENV.MODE);
+export function buildOptions(config, runtime, journeySteps, lifecycleFlows) {
+  const { mode, profile: profileName, mixed, journey, lifecycle } = parseMode(__ENV.MODE);
   const common = {
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
     insecureSkipTLSVerify: config.http && config.http.insecureSkipTLSVerify === true,
     userAgent: `k6-loadtest/${config.project || 'suite'}`,
   };
   if (profileName === 'preview') {
-    const exec = journey ? 'previewJourney' : 'preview';
+    const exec = lifecycle ? 'previewLifecycle' : journey ? 'previewJourney' : 'preview';
     return Object.assign(common, { scenarios: { preview: { executor: 'per-vu-iterations', vus: 1, iterations: 1, exec } } });
   }
   const profile = (config.modes || {})[profileName];
@@ -133,7 +137,10 @@ export function buildOptions(config, runtime, journeySteps) {
   }
   if (!runtime.apis.length) throw new Error('No API is enabled (check loadtest.config.json → apis, API and READ_ONLY)');
   const scenarios = {};
-  if (journey) {
+  if (lifecycle) {
+    if (!lifecycleFlows) throw new Error(`MODE=${mode}: data/lifecycle.json has no flow — the project needs a create endpoint plus a read, update or delete endpoint of the same resource`);
+    scenarios[`lifecycle_${profileName}`] = scenario(profile, 'lifecycle', null, 1);
+  } else if (journey) {
     if (!journeySteps) throw new Error(`MODE=${mode}: data/journey.json is empty — generate with --har <recording.har>`);
     scenarios[`journey_${profileName}`] = scenario(profile, 'journey', null, 1);
   } else if (mixed) {

@@ -4,6 +4,7 @@ import com.springaimcpservercommon.loadtest.data.ApiHarvester;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.DatabaseSampler;
 import com.springaimcpservercommon.loadtest.data.DbTable;
+import com.springaimcpservercommon.loadtest.data.LifecyclePlan;
 import com.springaimcpservercommon.loadtest.data.PoolRef;
 import com.springaimcpservercommon.loadtest.data.RealDataBinder;
 import com.springaimcpservercommon.loadtest.data.RealDataCollector;
@@ -104,6 +105,15 @@ public final class LoadTestGenerator {
         /** Compact constructor: defensive copy. */
         public DiscoveryResult {
             recordings = List.copyOf(recordings);
+        }
+
+        /**
+         * The business flows the code implies (create → read → update → status → delete per resource).
+         *
+         * @return the flows; empty when no resource has more than a create endpoint
+         */
+        public LifecyclePlan lifecycle() {
+            return LifecyclePlan.build(catalog, plan, seed);
         }
 
         /**

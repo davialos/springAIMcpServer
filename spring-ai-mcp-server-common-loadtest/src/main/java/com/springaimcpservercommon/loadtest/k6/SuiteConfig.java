@@ -65,6 +65,10 @@ final class SuiteConfig {
         data.put("optionalFieldRate", 0.7);
         data.put("maxArrayItems", 3);
         data.put("maxDepth", 4);
+        // real values: uniform | zipf (rank r has weight 1/r^s) | hot (hotFraction of rows take hotShare of requests);
+        // SKEW / SKEW_S override. partition "vu": a VU's writes use its own slice of each pool (PARTITION=vu).
+        data.putObject("skew").put("mode", "uniform").put("s", 1.1).put("hotFraction", 0.05).put("hotShare", 0.8);
+        data.putObject("partition").put("mode", "none").put("slots", 64);
         data.putArray("acceptClientErrorsIn").add("random");
         data.putArray("clientErrorStatuses").add(400).add(404).add(409).add(422);
 
@@ -80,6 +84,7 @@ final class SuiteConfig {
         root.putObject("perApi").put("schedule", "sequential").put("gap", "5s");
         root.putObject("journey").put("pauseScale", 1.0).put("maxPauseMs", 5000);
         root.putObject("seed").put("enabled", true).put("perTable", 5).put("cleanup", false);
+        root.putObject("lifecycle").put("deleteOwnRows", true);
 
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {

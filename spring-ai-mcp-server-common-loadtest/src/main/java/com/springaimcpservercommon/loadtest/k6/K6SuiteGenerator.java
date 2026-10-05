@@ -2,6 +2,7 @@ package com.springaimcpservercommon.loadtest.k6;
 
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
+import com.springaimcpservercommon.loadtest.data.LifecyclePlan;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
@@ -37,6 +38,7 @@ import java.util.stream.Stream;
  * data/plan.json         every field: kind and real-data binding
  * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
+ * data/lifecycle.json    per-resource business flows from the code, MODE=lifecycle-&lt;profile&gt;
  * hooks.js               user hooks (created once, never overwritten)
  * grafana/               Prometheus + Grafana stack and dashboard (written by GrafanaStack)
  * README.md              how to run; API and field tables
@@ -157,8 +159,12 @@ public final class K6SuiteGenerator {
                 writeJson(journeyFile, Documents.json().createArrayNode());
             }
 
+            LifecyclePlan lifecycle = seed == null ? new LifecyclePlan(List.of())
+                    : LifecyclePlan.build(catalog, plan, seed);
+            writeJson(out.resolve("data/lifecycle.json"), lifecycle.toJson());
+
             Files.writeString(out.resolve("README.md"),
-                    SuiteReadme.render(catalog, plan, realPools, user, config, seed));
+                    SuiteReadme.render(catalog, plan, realPools, user, config, seed, lifecycle));
             Files.writeString(out.resolve("run.sh"), runScript());
             out.resolve("run.sh").toFile().setExecutable(true);
             return new Result(out, catalog.endpoints().size(), plan.fields().size(), realPools.size());
@@ -257,6 +263,8 @@ public final class K6SuiteGenerator {
                 #   API=getUser ./run.sh stress dummy  one API, stress profile, dummy data
                 #   ./run.sh preview random            print generated requests, send nothing
                 #   ./run.sh journey-load              replay the recorded browser flow (generate --har) under load
+                #   ./run.sh lifecycle-load            walk every resource through create → read → update → status → delete
+                #   SKEW=zipf ./run.sh mixed-load      hot rows take most requests (SKEW=hot, SKEW_S); PARTITION=vu: own rows per VU
                 # Env (k6 reads it directly): BASE_URL, VUS, RATE, DURATION_SCALE, API, PER_API, READ_ONLY,
                 #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT, SEED, SEED_PER_TABLE,
                 #   SEED_CLEANUP

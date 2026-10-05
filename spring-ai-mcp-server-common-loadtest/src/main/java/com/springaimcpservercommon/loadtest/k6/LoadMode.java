@@ -55,7 +55,7 @@ public enum LoadMode {
     }
 
     /**
-     * Every {@code MODE} value the suite accepts: each profile, its {@code mixed-} and {@code journey-} forms,
+     * Every {@code MODE} value the suite accepts: each profile, its {@code mixed-}, {@code journey-} and {@code lifecycle-} forms,
      * {@code preview} and {@code journey-preview}.
      *
      * @return mode names
@@ -71,8 +71,12 @@ public enum LoadMode {
         for (LoadMode m : values()) {
             out.add("journey-" + m.id());
         }
+        for (LoadMode m : values()) {
+            out.add("lifecycle-" + m.id());
+        }
         out.add("preview");
         out.add("journey-preview");
+        out.add("lifecycle-preview");
         return out;
     }
 

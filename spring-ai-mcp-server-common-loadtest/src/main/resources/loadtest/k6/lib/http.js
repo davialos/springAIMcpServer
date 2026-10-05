@@ -63,7 +63,7 @@ export function prepare(config, modules, seedSteps) {
   if (only) {
     for (const id of only) if (!byId[id]) throw new Error(`API=${id}: no such API (see loadtest.config.json → apis)`);
   }
-  return { apis, byId, baseUrl: url, config, dataMode };
+  return { apis, byId, baseUrl: url, config, dataMode, readOnly };
 }
 
 function resolveEnv(value) {
@@ -133,7 +133,7 @@ function fillPath(template, params) {
  * every optional field (seeding).
  */
 export function buildRequest(api, hooks, seeded, complete) {
-  const ctx = data.context(api.id, seeded, complete);
+  const ctx = data.context(api.id, seeded, complete, api.method !== 'GET' && api.method !== 'HEAD');
   let req = api.mod.build(ctx);
   const payload = data.userPayload(ctx);
   if (payload !== undefined) req.body = payload;
@@ -205,7 +205,12 @@ function resolveRefs(value, results) {
   if (value && typeof value === 'object') {
     if (value.$from !== undefined) {
       for (const source of [value].concat(value.alt || [])) {
-        const v = getPath(results[source.$from], source.at);
+        // "$location": the last segment of the step's Location header (a create answering 201 without a body)
+        let v = source.at === '$location' ? (results.locations || [])[source.$from]
+          : getPath(results[source.$from], source.at);
+        if (v === undefined && (value.deep === true || source.deep === true) && source.at !== '$location') {
+          v = findKey(results[source.$from], source.at, 0); // wrapped responses
+        }
         if (v !== undefined && v !== null && typeof v !== 'object') return v;
       }
       return value.recorded;
@@ -226,7 +231,7 @@ function onlyRefs(values, results) {
 }
 
 function stepRequest(step, api, runtime, results, seeded) {
-  const ctx = data.context(api.id, seeded);
+  const ctx = data.context(api.id, seeded, step.complete === true, api.method !== 'GET' && api.method !== 'HEAD');
   const req = api.mod.build(ctx);
   if (runtime.dataMode === 'auto' || runtime.dataMode === 'user') {
     req.path = Object.assign({}, req.path, resolveRefs(step.path, results));
@@ -242,6 +247,11 @@ function stepRequest(step, api, runtime, results, seeded) {
   } else {
     Object.assign(req.path, onlyRefs(step.path, results)); // created ids still flow from step to step
   }
+  // lifecycle steps pin chosen fields (a status transition) whatever the data mode generated
+  for (const [p, v] of Object.entries(step.set || {})) {
+    if (req.body === undefined || req.body === null || typeof req.body !== 'object') req.body = {};
+    setPath(req.body, p, resolveRefs(v, results));
+  }
   return { req, ctx };
 }
 
@@ -253,10 +263,14 @@ export function replay(runtime, steps, auth, hooks) {
   const maxPause = cfg.maxPauseMs !== undefined ? cfg.maxPauseMs : 5000;
   const scale = cfg.pauseScale !== undefined ? cfg.pauseScale : 1;
   const results = [];
+  results.locations = [];
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const api = runtime.byId[step.api];
-    if (!api || !allowed[step.api]) {
+    // a lifecycle flow may delete the row it created itself even though DELETE is off for shared data
+    const ownRow = step.ownRow === true && runtime.readOnly !== true
+      && (runtime.config.lifecycle || {}).deleteOwnRows !== false;
+    if (!api || !(allowed[step.api] || ownRow)) {
       results.push(undefined);
       continue;
     }
@@ -271,7 +285,38 @@ export function replay(runtime, steps, auth, hooks) {
     } catch (e) {
       json = undefined;
     }
-    results.push(json);
+    const location = res.headers.Location || res.headers.location;
+    if (location) {
+      let id = decodeURIComponent(location.replace(/\/+$/, '').split('/').pop());
+      if (/^\d+$/.test(id) && id.length < 16) id = parseInt(id, 10);
+      results.locations[i] = id;
+    }
+    // a step that failed leaves nothing for later steps to correlate with: they fall back to recorded values
+    results.push(res.status >= 200 && res.status < 300 ? json : undefined);
+    if (step.stopOnFailure === true && !(res.status >= 200 && res.status < 300)) break;
+  }
+}
+
+/**
+ * MODE=lifecycle-<profile>: each iteration walks one resource through its life cycle (data/lifecycle.json, generated
+ * from the code): create → read → update → status transitions → delete. Flows are taken in turn, so every resource
+ * gets the same share of iterations; LIFECYCLE=<name,…> narrows them.
+ */
+export function lifecycle(runtime, flows, auth, hooks) {
+  const wanted = __ENV.LIFECYCLE ? __ENV.LIFECYCLE.split(',').map((x) => x.trim()) : null;
+  const usable = flows.filter((f) => !wanted || wanted.indexOf(f.name) >= 0);
+  if (!usable.length) return;
+  const flow = usable[(typeof __ITER === 'number' ? __ITER : 0) % usable.length];
+  replay(runtime, flow.steps, auth, hooks);
+}
+
+/** MODE=lifecycle-preview: prints the steps of every flow (LIFECYCLE=<name> narrows). Sends nothing. */
+export function previewLifecycle(runtime, flows, hooks) {
+  const wanted = __ENV.LIFECYCLE ? __ENV.LIFECYCLE.split(',').map((x) => x.trim()) : null;
+  for (const flow of flows) {
+    if (wanted && wanted.indexOf(flow.name) < 0) continue;
+    console.log(JSON.stringify({ flow: flow.name, resource: flow.resource, steps: flow.steps.length }));
+    previewJourney(runtime, flow.steps, hooks);
   }
 }
 

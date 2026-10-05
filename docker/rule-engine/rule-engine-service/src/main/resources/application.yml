@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: rule-engine-service
+  datasource:
+    url: ${RULES_DB_URL:jdbc:postgresql://localhost:5432/dai_store}
+    username: ${RULES_DB_USER:dai_app}
+    password: ${RULES_DB_PASSWORD:dai_app_secret}
+    hikari:
+      schema: dynamic_ai
+      maximum-pool-size: 12
+      connection-timeout: 5000
+  flyway:
+    # the library's own migrations, applied as the schema owner (the runtime user only needs DML)
+    url: ${RULES_DB_URL:jdbc:postgresql://localhost:5432/dai_store}
+    user: ${RULES_MIGRATOR_USER:dai_migrator}
+    password: ${RULES_MIGRATOR_PASSWORD:dai_migrator_secret}
+    enabled: ${RULES_MIGRATE:true}
+    locations: classpath:db/dynamic-ai/migration
+    schemas: dynamic_ai
+    default-schema: dynamic_ai
+    table: dai_schema_history
+    create-schemas: true
+    placeholder-replacement: false
+    validate-migration-naming: true
+    baseline-on-migrate: false
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: ${SERVER_PORT:8092}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+ecosystem:
+  rules:
+    # must equal the auth service's key; >= 32 bytes. Local-stack default only: compose passes it from .env.
+    jwt-secret: ${JWT_SECRET:local-dev-only-secret-change-me-0123456789abcdef}
+    # DEV | TEST | STAGE | PROD: decides which API environments communication channels may call (LLD-12, LLD-18 §6)
+    environment-tier: ${DAI_ENV_TIER:dev}
+    poll-interval: PT2S
+    max-tenants: 200
+    default-language: en
+    record-evaluations: true
+    max-facts: 200
+    max-body-bytes: 262144

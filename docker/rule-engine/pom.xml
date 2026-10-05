@@ -25,7 +25,7 @@
     <modules>
         <module>contract</module>
         <module>auth-service</module>
-        <!--M<module>rule-engine-service</module>M-->
+        <module>rule-engine-service</module>
     </modules>
 
     <properties>

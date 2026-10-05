@@ -158,4 +158,56 @@ class LoadTestMojosTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void schemaGoalFailsClearlyWithoutADatabase() throws IOException {
+        SchemaMojo m = new SchemaMojo();
+        m.project = project().toFile(); // application.properties has no spring.datasource.url
+        m.outFile = dir.resolve("schema.sql").toFile();
+
+        assertThatThrownBy(m::execute).isInstanceOf(MojoFailureException.class)
+                .hasMessageContaining("no database configured");
+        assertThat(dir.resolve("schema.sql")).doesNotExist();
+    }
+
+    @Test
+    void schemaGoalWritesTheDdlOfTheConfiguredDatabase() throws Exception {
+        String url = System.getenv("LOADTEST_IT_JDBC_URL");
+        assumeThat(url).as("LOADTEST_IT_JDBC_URL (a PostgreSQL to read)").isNotNull();
+        String user = System.getenv().getOrDefault("LOADTEST_IT_USER", "");
+        String password = System.getenv().getOrDefault("LOADTEST_IT_PASSWORD", "");
+        try (var c = java.sql.DriverManager.getConnection(url, user, password); var st = c.createStatement()) {
+            st.execute("DROP SCHEMA IF EXISTS mojo_schema_it CASCADE");
+            st.execute("CREATE SCHEMA mojo_schema_it");
+            st.execute("CREATE TABLE mojo_schema_it.pets (id bigserial PRIMARY KEY, name text NOT NULL)");
+        }
+        try {
+            SchemaMojo m = new SchemaMojo();
+            m.dbUrl = url;
+            m.dbUser = user;
+            m.dbPassword = password;
+            m.dbSchema = "mojo_schema_it";
+            m.outFile = dir.resolve("out/schema.sql").toFile();
+
+            m.execute();
+
+            assertThat(Files.readString(dir.resolve("out/schema.sql")))
+                    .contains("CREATE TABLE mojo_schema_it.pets (").contains("PRIMARY KEY (id)");
+        } finally {
+            try (var c = java.sql.DriverManager.getConnection(url, user, password); var st = c.createStatement()) {
+                st.execute("DROP SCHEMA IF EXISTS mojo_schema_it CASCADE");
+            }
+        }
+    }
+
+    @Test
+    void schemaGoalCanBeSkipped() throws Exception {
+        SchemaMojo m = new SchemaMojo();
+        m.skip = true;
+        m.outFile = dir.resolve("schema.sql").toFile();
+
+        m.execute();
+
+        assertThat(dir.resolve("schema.sql")).doesNotExist();
+    }
 }

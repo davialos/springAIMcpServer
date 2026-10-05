@@ -394,6 +394,26 @@ public final class DatabaseSampler implements AutoCloseable {
         };
     }
 
+    /** The underlying connection, for the explicit write tools of this package (bulk load, snapshots). */
+    Connection connection() {
+        return connection;
+    }
+
+    /** The database product name, lower case. */
+    String product() {
+        return product;
+    }
+
+    /** Quotes an identifier with the driver's quote string. */
+    String quoted(String identifier) {
+        return q(identifier);
+    }
+
+    /** The table's qualified, quoted name. */
+    String qualifiedName(DbTable t) {
+        return from(t);
+    }
+
     @Override
     public void close() throws SQLException {
         connection.close();

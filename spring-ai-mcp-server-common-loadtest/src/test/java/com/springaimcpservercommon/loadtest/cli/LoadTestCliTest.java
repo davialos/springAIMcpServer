@@ -155,4 +155,17 @@ class LoadTestCliTest {
                 "--max-p95-increase", "500")).isZero();
         assertThat(run("", "compare", "--suite", dir.toString())).isEqualTo(2); // --baseline missing
     }
+
+    @Test
+    void bulkLoadNeedsExplicitConsentAndTables() {
+        assertThat(run("", "bulk-load", "--db-url", "jdbc:postgresql://localhost:1/none")).isEqualTo(2);
+        assertThat(err()).contains("--rows table=count is required");
+        assertThat(run("", "bulk-load", "--db-url", "jdbc:postgresql://localhost:1/none", "--rows", "orders=1000"))
+                .isEqualTo(2);
+        // without --yes it only says what it would do: no connection is attempted
+        assertThat(out()).contains("Would insert into jdbc:postgresql://localhost:1/none").contains("--yes");
+        assertThat(run("", "bulk-load", "--rows", "orders")).isEqualTo(2);
+        assertThat(run("", "db-snapshot", "--action", "save")).isEqualTo(2); // no database given
+        assertThat(err()).contains("--db-url is required");
+    }
 }

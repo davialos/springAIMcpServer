@@ -4,11 +4,14 @@ import com.springaimcpservercommon.loadtest.api.LoadTestGenerator;
 import com.springaimcpservercommon.loadtest.api.LoadTestReport;
 import com.springaimcpservercommon.loadtest.api.LoadTestRunner;
 import com.springaimcpservercommon.loadtest.api.ReportComparison;
+import com.springaimcpservercommon.loadtest.data.BulkLoader;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
+import com.springaimcpservercommon.loadtest.data.DatabaseSnapshot;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
 import com.springaimcpservercommon.loadtest.data.RecordedTraffic;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
+import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
 import com.springaimcpservercommon.loadtest.k6.LoadMode;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
@@ -16,6 +19,7 @@ import com.springaimcpservercommon.loadtest.model.ArraySchema;
 import com.springaimcpservercommon.loadtest.model.ObjectSchema;
 import com.springaimcpservercommon.loadtest.model.RefSchema;
 import com.springaimcpservercommon.loadtest.model.Schema;
+import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -26,6 +30,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -51,7 +56,7 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force");
+            "grafana", "force", "yes", "allow-prod");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -102,6 +107,8 @@ public final class LoadTestCli {
                 case "report" -> report(a);
                 case "compare" -> compare(a);
                 case "init-gradle" -> initGradle(a);
+                case "bulk-load" -> bulkLoad(a);
+                case "db-snapshot" -> dbSnapshot(a);
                 case "modes" -> modes();
                 case "help", "--help", "-h" -> {
                     usage();
@@ -346,6 +353,15 @@ public final class LoadTestCli {
             runner.k6(a.get("k6"));
         }
         a.passThrough().forEach(runner::k6Arg);
+        if (a.get("restore-snapshot") != null) { // comparable runs start from the same data
+            Jdbc j = jdbc(a);
+            try (var snapshots = DatabaseSnapshot.connect(j.url(), j.user(),
+                    j.password(), a.get("db-schema"), this::log)) {
+                snapshots.allowProduction(a.flag("allow-prod")).restore(a.get("restore-snapshot"));
+            } catch (SQLException e) {
+                throw new IllegalStateException("restoring snapshot failed: " + e.getMessage(), e);
+            }
+        }
         LoadTestRunner.RunResult r = runner.run();
         if (!a.all("baseline").isEmpty() && r.report().isPresent()) {
             ReportComparison c = ReportComparison.compare(LoadTestReport.read(Path.of(a.get("baseline"))),
@@ -388,6 +404,81 @@ public final class LoadTestCli {
         ReportComparison c = ReportComparison.compare(baseline, current, rules(a));
         out.println(c.toMarkdown());
         return c.passed() ? 0 : 3;
+    }
+
+    /** JDBC settings: --db-url/--db-user/--db-password, else the project's spring.datasource.*. */
+    private record Jdbc(String url, @Nullable String user,
+                        @Nullable String password) {
+    }
+
+    private static Jdbc jdbc(CliArgs a) {
+        ProjectSettings settings = a.get("project") == null
+                ? ProjectSettings.DEFAULTS
+                : ProjectSettings.read(Path.of(a.get("project")));
+        String url = a.get("db-url", settings.datasourceUrl() == null ? "" : settings.datasourceUrl());
+        if (url.isBlank()) {
+            throw new IllegalArgumentException("--db-url is required (or --project with spring.datasource.url)");
+        }
+        String password = a.get("db-password", System.getenv().getOrDefault("LOADTEST_DB_PASSWORD",
+                settings.datasourcePassword() == null ? "" : settings.datasourcePassword()));
+        return new Jdbc(url, a.get("db-user", settings.datasourceUsername()), password);
+    }
+
+    /** Inserts realistic data volume into a test database: explicit tables and counts, --yes required. */
+    private int bulkLoad(CliArgs a) {
+        if (a.all("rows").isEmpty()) {
+            throw new IllegalArgumentException("--rows table=count is required (repeatable)");
+        }
+        Map<String, Long> rows = new LinkedHashMap<>();
+        for (String r : a.all("rows")) {
+            int eq = r.indexOf('=');
+            if (eq <= 0) {
+                throw new IllegalArgumentException("--rows expects table=count: " + r);
+            }
+            rows.put(r.substring(0, eq), Long.parseLong(r.substring(eq + 1).replace("_", "")));
+        }
+        Jdbc j = jdbc(a);
+        String shown = j.url().replaceAll("password=[^&;]*", "password=***");
+        if (!a.flag("yes")) {
+            out.println("Would insert into " + shown + ": " + rows);
+            out.println("This WRITES to the database. Repeat with --yes on a test database.");
+            return 2;
+        }
+        try (BulkLoader loader =
+                     BulkLoader.connect(j.url(), j.user(), j.password(),
+                             a.get("db-schema"), this::log)) {
+            loader.batchSize(a.integer("batch", 1000)).seed(a.integer("seed", 42)).allowProduction(a.flag("allow-prod"));
+            var result = loader.load(rows);
+            out.println("Inserted " + result.inserted() + " in " + result.took().toSeconds() + " s");
+            return 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("bulk load failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** save | restore | list | drop a PostgreSQL snapshot of the application tables. */
+    private int dbSnapshot(CliArgs a) {
+        String action = a.get("action", a.passThrough().isEmpty() ? "list" : a.passThrough().getFirst());
+        Jdbc j = jdbc(a);
+        try (DatabaseSnapshot snapshots =
+                     DatabaseSnapshot.connect(j.url(), j.user(), j.password(),
+                             a.get("db-schema"), this::log)) {
+            snapshots.allowProduction(a.flag("allow-prod"));
+            String name = a.get("name", "baseline");
+            switch (action) {
+                case "save" -> out.println("Saved " + snapshots.save(name) + " tables as snapshot " + name);
+                case "restore" -> out.println("Restored " + snapshots.restore(name) + " tables from snapshot " + name);
+                case "drop" -> {
+                    snapshots.drop(name);
+                    out.println("Dropped snapshot " + name);
+                }
+                case "list" -> snapshots.list().forEach(out::println);
+                default -> throw new IllegalArgumentException("db-snapshot --action save|restore|list|drop");
+            }
+            return 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("snapshot " + action + " failed: " + e.getMessage(), e);
+        }
     }
 
     /** Writes {@code <project>/gradle/loadtest.gradle} (the Gradle tasks) unless it exists. */
@@ -463,6 +554,9 @@ public final class LoadTestCli {
                   report     print the newest report of a suite (exit 1 when thresholds failed)
                   compare    compare a report with a baseline report (exit 3 on regression)
                   init-gradle  write gradle/loadtest.gradle (loadtestGenerate/Run/Compare tasks) into --project
+                  bulk-load  insert data volume into a TEST database: --rows table=count … --yes [--batch 1000]
+                             [--seed 42] (parents first, foreign/unique keys kept; --db-url or --project)
+                  db-snapshot --action save|restore|list|drop [--name baseline]   (PostgreSQL test databases)
                   modes      list load modes and data modes
 
                 Discovery (discover, generate)
@@ -500,6 +594,7 @@ public final class LoadTestCli {
                   [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack (grafana/)
                   [--grafana-url url]                  annotate the run there (default http://localhost:3000)
                   [--baseline report.json]             also compare with a baseline (exit 3 on regression)
+                  [--restore-snapshot name --db-url …] restore a db-snapshot first (comparable runs)
                   [-- extra k6 args]
 
                 Report / compare

@@ -101,7 +101,7 @@ public record SeedPlan(List<Step> steps) {
         Map<String, ApiEndpoint> chosen = new LinkedHashMap<>();
         Map<String, TableIndex.TableRef> tables = new LinkedHashMap<>();
         for (ApiEndpoint e : catalog.endpoints()) {
-            if (e.method() != HttpMethod.POST || e.body() == null) {
+            if (e.method() != HttpMethod.POST || e.body() == null || e.isGraphQl()) {
                 continue;
             }
             Optional<TableIndex.TableRef> table = target(e, index, resources);

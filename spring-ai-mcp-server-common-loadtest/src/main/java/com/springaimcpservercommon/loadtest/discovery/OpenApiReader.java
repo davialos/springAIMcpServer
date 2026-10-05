@@ -126,6 +126,7 @@ public final class OpenApiReader {
             }
         }
         Schema body = null;
+        String bodyType = null;
         JsonNode rb = deref(op.path("requestBody"));
         if (!rb.isMissingNode()) {
             JsonNode content = rb.path("content");
@@ -136,8 +137,21 @@ public final class OpenApiReader {
                     break;
                 }
             }
+            if (json == null) {
+                for (var c : content.properties()) {
+                    if (c.getKey().startsWith("multipart/form-data")) {
+                        json = c.getValue();
+                        bodyType = "multipart";
+                        break;
+                    } else if (c.getKey().startsWith("application/x-www-form-urlencoded")) {
+                        json = c.getValue();
+                        bodyType = "form";
+                        break;
+                    }
+                }
+            }
             if (json == null && !content.isEmpty()) {
-                log.accept("openapi: skipped " + method + " " + path + " (request body is not JSON: "
+                log.accept("openapi: skipped " + method + " " + path + " (request body is not JSON, form or multipart: "
                         + String.join(", ", content.propertyNames()) + ")");
                 return null;
             }
@@ -149,7 +163,7 @@ public final class OpenApiReader {
         op.path("tags").forEach(t -> tags.add(t.asString()));
         String summary = op.path("summary").isString() ? op.path("summary").asString() : null;
         return new ApiEndpoint(id, method, path, summary, tags, new ArrayList<>(params.values()), body, null,
-                Set.of("openapi"), responseSchema(op));
+                Set.of("openapi"), responseSchema(op), null, body == null ? null : bodyType);
     }
 
     // ── response validation schemas ────────────────────────────────────────────────────────────────────

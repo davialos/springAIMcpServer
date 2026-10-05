@@ -309,8 +309,10 @@ public final class SpringSourceScanner {
             if (bases.isEmpty()) {
                 bases = List.of("");
             }
+            boolean formEncoded = a.toString().contains("FORM_URLENCODED")
+                    || a.toString().contains("x-www-form-urlencoded");
             Handler handler = ctx.mapper().withBindings(d.bindings(),
-                    () -> handler(m, trees, ctx.mapper(), controllerName));
+                    () -> handler(m, trees, ctx.mapper(), controllerName, formEncoded));
             if (handler == null) {
                 continue;
             }
@@ -319,7 +321,8 @@ public final class SpringSourceScanner {
                     .orElse(operationId(m.getName().toString(), controllerName));
             String summary = SourceTrees.annotation(m.getModifiers(), "Operation")
                     .flatMap(op -> trees.string(op, "summary")).orElse(null);
-            JsonNode response = ctx.responses().map(m.getReturnType(), d.bindings());
+            boolean sse = isSse(m, a);
+            JsonNode response = sse ? null : ctx.responses().map(m.getReturnType(), d.bindings());
             Access access = SecurityScanner.fromAnnotations(trees, m.getModifiers(), ct.getModifiers());
             for (String base : bases) {
                 for (String path : paths) {
@@ -328,8 +331,10 @@ public final class SpringSourceScanner {
                                 ctx.settings().resolvePlaceholders(path));
                         List<ApiParam> params = withPathConstraints(full, handler.params());
                         Schema body = method.hasBody() ? wrapRoot(handler.body(), ctx) : null;
-                        out.add(new ApiEndpoint(id, method, stripRegex(full), summary, List.of(controllerName),
-                                params, body, resource, Set.of("source"), response, access));
+                        String bodyType = method.hasBody() && body != null ? handler.bodyType() : null;
+                        out.add(new ApiEndpoint(id, method, stripRegex(full), summary,
+                                sse ? List.of(controllerName, "sse") : List.of(controllerName),
+                                params, body, resource, Set.of("source"), response, access, bodyType));
                     }
                 }
             }
@@ -365,22 +370,30 @@ public final class SpringSourceScanner {
         return method + (many ? DataRestScanner.plural(subject) : subject);
     }
 
-    private record Handler(List<ApiParam> params, @Nullable Schema body) {
+    private record Handler(List<ApiParam> params, @Nullable Schema body, @Nullable String bodyType) {
     }
 
-    private @Nullable Handler handler(MethodTree m, SourceTrees trees, TypeMapper mapper, String controller) {
+    private @Nullable Handler handler(MethodTree m, SourceTrees trees, TypeMapper mapper, String controller,
+                                      boolean formEncoded) {
         List<ApiParam> params = new ArrayList<>();
         Schema body = null;
+        Map<String, Property> parts = new LinkedHashMap<>(); // multipart/form fields
+        boolean multipart = false;
         for (VariableTree p : m.getParameters()) {
             ModifiersTree mods = p.getModifiers();
             List<? extends AnnotationTree> anns = mods.getAnnotations();
             String type = TypeMapper.simpleName(p.getType());
             String javaName = p.getName().toString();
-            if (type.equals("MultipartFile") || type.equals("MultipartFile[]") || type.equals("Part")
-                    || SourceTrees.has(mods, "RequestPart")) {
-                log.accept("source: skipped multipart operation " + controller + "." + m.getName()
-                        + " (k6 multipart bodies are not generated)");
-                return null;
+            if (isFilePart(p.getType()) || SourceTrees.has(mods, "RequestPart")) {
+                // multipart/form-data: a file is a binary field, any other part is a field (a DTO: a JSON part)
+                multipart = true;
+                String name = SourceTrees.annotation(mods, "RequestPart", "RequestParam")
+                        .flatMap(a -> trees.string(a, "value", "name")).filter(v -> !v.isBlank()).orElse(javaName);
+                boolean required = SourceTrees.annotation(mods, "RequestPart", "RequestParam")
+                        .flatMap(a -> trees.string(a, "required")).map(v -> !v.equals("false")).orElse(true);
+                parts.put(name, new Property(isFilePart(p.getType()) ? fileSchema(p.getType())
+                        : mapper.map(p.getType(), anns), required, false, null));
+                continue;
             }
             if (FRAMEWORK_TYPES.contains(type) || anns.stream()
                     .anyMatch(a -> CONTEXT_ANNOTATIONS.contains(SourceTrees.simpleName(a)))) {
@@ -433,7 +446,50 @@ public final class SpringSourceScanner {
                 }
             }
         }
-        return new Handler(params, body);
+        if (multipart) {
+            // other @RequestParam values stay query parameters: Spring binds them from the query string as well
+            return new Handler(params, new ObjectSchema(parts, false), "multipart");
+        }
+        if (formEncoded) {
+            // application/x-www-form-urlencoded: request parameters and a @ModelAttribute's fields are the body
+            Map<String, Property> fields = new LinkedHashMap<>();
+            List<ApiParam> rest = new ArrayList<>();
+            for (ApiParam q : params) {
+                if (q.in() == ParamLocation.QUERY) {
+                    fields.put(q.name(), new Property(q.schema(), q.required(), false, null));
+                } else {
+                    rest.add(q);
+                }
+            }
+            return new Handler(rest, fields.isEmpty() ? body : new ObjectSchema(fields, false),
+                    fields.isEmpty() && body == null ? null : "form");
+        }
+        return new Handler(params, body, null);
+    }
+
+    private static boolean isFilePart(Tree type) {
+        String t = TypeMapper.simpleName(type);
+        if (type instanceof ParameterizedTypeTree p && !p.getTypeArguments().isEmpty()) {
+            return isFilePart(p.getTypeArguments().getFirst());
+        }
+        return t.equals("MultipartFile") || t.equals("MultipartFile[]") || t.equals("Part") || t.equals("Part[]")
+                || t.equals("FilePart") || t.equals("FilePart[]");
+    }
+
+    private static Schema fileSchema(Tree type) {
+        ScalarSchema file = ScalarSchema.of(ScalarType.STRING, "binary");
+        String t = TypeMapper.simpleName(type);
+        return t.endsWith("[]") || type instanceof ParameterizedTypeTree ? new ArraySchema(file, null, null) : file;
+    }
+
+    /** A handler that streams Server-Sent Events: SseEmitter, Flux&lt;ServerSentEvent&gt; or produces text/event-stream. */
+    private static boolean isSse(MethodTree m, AnnotationTree mapping) {
+        Tree type = m.getReturnType();
+        String name = type == null ? "" : TypeMapper.simpleName(type);
+        boolean flux = type instanceof ParameterizedTypeTree p && !p.getTypeArguments().isEmpty()
+                && TypeMapper.simpleName(p.getTypeArguments().getFirst()).equals("ServerSentEvent");
+        String text = mapping.toString();
+        return name.equals("SseEmitter") || flux || text.contains("EVENT_STREAM") || text.contains("text/event-stream");
     }
 
     private static boolean mapsTo(String type) {

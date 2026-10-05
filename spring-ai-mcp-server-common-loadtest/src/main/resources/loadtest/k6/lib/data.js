@@ -28,6 +28,7 @@ export function init(state) {
   if (MODES.indexOf(mode) < 0) throw new Error(`DATA_MODE must be one of ${MODES.join(', ')} (got ${mode})`);
   STATE = Object.assign({}, state, { mode });
   D.setDictionaries(state.dictionaries || {});
+  D.setFileSize(((state.config.data || {}).files || {}).sizeKb);
 }
 
 export function dataMode() {

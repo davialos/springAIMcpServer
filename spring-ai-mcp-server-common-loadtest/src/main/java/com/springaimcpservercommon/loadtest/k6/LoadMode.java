@@ -74,6 +74,9 @@ public enum LoadMode {
         for (LoadMode m : values()) {
             out.add("lifecycle-" + m.id());
         }
+        for (LoadMode m : values()) {
+            out.add("channels-" + m.id());
+        }
         out.add("preview");
         out.add("journey-preview");
         out.add("lifecycle-preview");

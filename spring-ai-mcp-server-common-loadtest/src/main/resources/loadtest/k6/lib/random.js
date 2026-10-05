@@ -316,6 +316,7 @@ function randomString(schema) {
     case 'uri': return `https://example.com/${alnum(8).toLowerCase()}`;
     case 'ipv4': return `${int(1, 223)}.${int(0, 255)}.${int(0, 255)}.${int(1, 254)}`;
     case 'byte': return encodeBase64(alnum(int(4, 24)));
+    case 'binary': return { $file: { name: `upload-${alnum(6).toLowerCase()}.txt`, contentType: 'text/plain', data: alnum(int(64, 512)) } };
     default:
       break;
   }

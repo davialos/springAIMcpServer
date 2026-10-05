@@ -109,7 +109,7 @@ public record DataPlan(Map<String, FieldPlan> fields) {
     static Map<String, PoolRef> restResources(ApiCatalog catalog) {
         Map<String, PoolRef> out = new LinkedHashMap<>();
         for (ApiEndpoint post : catalog.endpoints()) {
-            if (post.method() != HttpMethod.POST || post.body() == null || post.path().endsWith("}")) {
+            if (post.method() != HttpMethod.POST || post.body() == null || post.path().endsWith("}") || post.isGraphQl()) {
                 continue;
             }
             String collection = post.path().replaceAll("/+$", "");

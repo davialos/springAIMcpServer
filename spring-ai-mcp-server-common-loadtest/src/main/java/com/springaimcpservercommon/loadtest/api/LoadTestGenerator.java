@@ -14,7 +14,9 @@ import com.springaimcpservercommon.loadtest.data.TableIndex;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.ActuatorMappingsReader;
 import com.springaimcpservercommon.loadtest.discovery.CatalogMerger;
+import com.springaimcpservercommon.loadtest.discovery.ChannelScanner;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.GraphQlSchemaReader;
 import com.springaimcpservercommon.loadtest.discovery.HarCapture;
 import com.springaimcpservercommon.loadtest.discovery.HarReader;
 import com.springaimcpservercommon.loadtest.discovery.OpenApiReader;
@@ -26,6 +28,7 @@ import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
 import com.springaimcpservercommon.loadtest.k6.GrafanaStack;
 import com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
+import com.springaimcpservercommon.loadtest.model.Channel;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.node.ArrayNode;
 
@@ -100,14 +103,16 @@ public final class LoadTestGenerator {
      * @param basePath    servlet context path of the target, if known
      * @param discovered  number of APIs before include/exclude filters
      * @param security    the project's Spring Security setup (authentication style, request matchers, roles)
+     * @param channels    WebSockets, STOMP endpoints, SSE streams and Kafka topics (run by {@code channels-<profile>})
      */
     public record DiscoveryResult(ApiCatalog catalog, DataPlan plan, SeedPlan seed, ProjectSettings settings,
                                   @Nullable Path project, List<HarCapture> recordings, @Nullable String basePath,
-                                  int discovered, SecurityModel security) {
+                                  int discovered, SecurityModel security, List<Channel> channels) {
 
         /** Compact constructor: defensive copy. */
         public DiscoveryResult {
             recordings = List.copyOf(recordings);
+            channels = List.copyOf(channels);
         }
 
         /**
@@ -177,6 +182,10 @@ public final class LoadTestGenerator {
         }
         if (projectDir != null) {
             catalogs.add(new SpringSourceScanner(this::log).scan(projectDir));
+            ApiCatalog graphQl = new GraphQlSchemaReader(this::log).read(projectDir, settings);
+            if (graphQl != null) {
+                catalogs.add(graphQl);
+            }
         }
         String basePath = basePath(settings, catalogs);
         List<HarCapture> recordings = new ArrayList<>();
@@ -210,8 +219,9 @@ public final class LoadTestGenerator {
         TableIndex index = scriptIndex(filtered, projectDir);
         DataPlan plan = DataPlan.build(filtered, new RealDataBinder(index, Map.of()));
         SeedPlan seed = SeedPlan.build(filtered, plan, index, this::log);
+        List<Channel> channels = new ChannelScanner(this::log).scan(projectDir, settings, filtered.endpoints());
         return new DiscoveryResult(filtered, plan, seed, settings, projectDir, recordings, basePath,
-                merged.endpoints().size(), security);
+                merged.endpoints().size(), security, channels);
     }
 
     /**
@@ -325,7 +335,7 @@ public final class LoadTestGenerator {
             } : s.authType;
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
                     journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, authType, s.loginPath,
-                            d.security()));
+                            d.security(), d.channels()));
             GrafanaStack.write(r.outDir(), catalog.project(),
                     GrafanaStack.scrape(baseUrl, d.settings().properties()));
             return new GenerationResult(r.outDir(), baseUrl, r.apis(), r.fields(), r.pools(), seed,

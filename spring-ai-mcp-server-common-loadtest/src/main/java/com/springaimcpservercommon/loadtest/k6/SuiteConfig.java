@@ -3,6 +3,7 @@ package com.springaimcpservercommon.loadtest.k6;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
 import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
 import com.springaimcpservercommon.loadtest.model.Access;
+import com.springaimcpservercommon.loadtest.model.Channel;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import com.springaimcpservercommon.loadtest.model.HttpMethod;
@@ -36,12 +37,13 @@ final class SuiteConfig {
      * @param authType none, bearer, basic, apiKey or login
      * @param loginPath login endpoint path for {@code login} auth
      * @param security  the project's Spring Security setup, or {@code null}
+     * @param channels  WebSockets, STOMP endpoints, SSE streams and Kafka topics
      */
     record Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath,
-                    @Nullable SecurityModel security) {
+                    @Nullable SecurityModel security, List<Channel> channels) {
 
         Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
-            this(baseUrl, dataMode, authType, loginPath, null);
+            this(baseUrl, dataMode, authType, loginPath, null, List.of());
         }
     }
 
@@ -126,6 +128,25 @@ final class SuiteConfig {
         validation.put("responses", "check").put("sample", 0.25).put("maxViolations", 0);
         validation.putObject("readAfterWrite").put("enabled", true).put("maxMismatches", 0);
 
+        // channels (WebSocket, STOMP, SSE, Kafka): run by MODE=channels-<profile>; hold = how long a connection stays
+        // open, messages/intervalMs = what is sent, expectReply = fail when nothing comes back, message = the payload
+        ObjectNode channels = root.putObject("channels");
+        for (Channel c : s.channels()) {
+            ObjectNode n = channels.putObject(c.id());
+            n.put("enabled", true);
+            n.put("kind", c.kind().name().toLowerCase(java.util.Locale.ROOT));
+            n.put("hold", c.kind() == Channel.Kind.SSE ? "5s" : "3s");
+            if (c.kind() != Channel.Kind.SSE) {
+                n.put("messages", 3).put("intervalMs", 200);
+                n.put("expectReply", c.kind() == Channel.Kind.STOMP && !c.subscribe().isEmpty());
+                if (c.sample() != null) {
+                    n.set("message", c.sample());
+                }
+            } else {
+                n.put("minEvents", 1);
+            }
+        }
+
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {
             modes.set(m.id(), m.defaultProfile());
@@ -135,9 +156,13 @@ final class SuiteConfig {
             ObjectNode a = apis.putObject(e.id());
             a.put("method", e.method().name());
             a.put("path", e.path());
-            a.put("enabled", e.method() != HttpMethod.DELETE && e.method() != HttpMethod.OPTIONS
+            boolean destructive = e.method() == HttpMethod.DELETE || e.isGraphQl() && e.id().matches("(?i)gql_(delete|remove|purge|clear|drop).*");
+            a.put("enabled", !destructive && e.method() != HttpMethod.OPTIONS
                     && (e.access() == null || e.access().kind() != Access.Kind.DENIED));
-            a.put("weight", weight(e.method()));
+            a.put("weight", e.isGraphQl() ? (e.tags().contains("graphql:query") ? 6 : destructive ? 0 : 2) : weight(e.method()));
+            if (e.tags().contains("sse")) {
+                a.put("enabled", false); // a stream that never ends would hang the per-API load: see "channels"
+            }
             if (e.access() != null && e.access().kind() == Access.Kind.PUBLIC) {
                 a.put("auth", "none"); // permitAll: no credentials
             } else if (e.access() != null && e.access().role() != null) {

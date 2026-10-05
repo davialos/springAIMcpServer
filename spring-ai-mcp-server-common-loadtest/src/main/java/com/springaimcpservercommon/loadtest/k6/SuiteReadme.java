@@ -87,6 +87,28 @@ final class SuiteReadme {
                 .append("exponent). `PARTITION=vu` (or `data.partition.mode`) gives every VU its own slice of each ")
                 .append("pool for writes, so concurrent updates and deletes do not fight over rows.\n\n");
 
+        long uploads = catalog.endpoints().stream().filter(e -> "multipart".equals(e.bodyType())).count();
+        long forms = catalog.endpoints().stream().filter(e -> "form".equals(e.bodyType())).count();
+        long graphQl = catalog.endpoints().stream().filter(e -> e.isGraphQl()).count();
+        md.append("## Beyond JSON over HTTP\n\n")
+                .append("- **Uploads and forms**: ").append(uploads).append(" multipart/form-data and ").append(forms)
+                .append(" urlencoded endpoints; a file field is sent as a generated file of `data.files.sizeKb` KB ")
+                .append("(type from the field name: `avatar` → png, `report` → pdf, `data` → csv).\n")
+                .append("- **GraphQL**: ").append(graphQl).append(" operations from the `.graphqls` schema, each a POST ")
+                .append("with a generated query document and variables; a 200 with an `errors` member fails the ")
+                .append("check; queries are allowed under `READ_ONLY`, mutations named `delete*`/`remove*` are off.\n");
+        int channelCount = config.path("channels").size();
+        if (channelCount > 0) {
+            md.append("- **Channels** (WebSocket, STOMP, SSE, Kafka): `./run.sh channels-smoke` exercises ")
+                    .append(channelCount).append(" of them (`data/channels.json`; `loadtest.config.json → channels` ")
+                    .append("holds `hold`, `messages`, `intervalMs`, `expectReply`, `message`; `CHANNEL=<id,…>` ")
+                    .append("narrows). SSE endpoints are left out of the per-API load because a stream never ends. ")
+                    .append("Kafka topics are produced to by `kafka.js`, which needs a k6 built with ")
+                    .append("[xk6-kafka](https://github.com/mostafa/xk6-kafka) (`xk6 build --with ")
+                    .append("github.com/mostafa/xk6-kafka`) — not run by the standard k6.\n");
+        }
+        md.append("\n");
+
         long restricted = catalog.endpoints().stream().filter(e -> e.access() != null).count();
         md.append("## Authentication\n\n")
                 .append("`auth.type` is `").append(config.path("auth").path("type").asString("none")).append("` ")

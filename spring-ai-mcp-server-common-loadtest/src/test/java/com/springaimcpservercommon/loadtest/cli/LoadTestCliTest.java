@@ -50,13 +50,13 @@ class LoadTestCliTest {
         Files.writeString(values, "{\"payloads\": {\"createOrder\": [{\"customerId\": 1, \"lines\": [{\"productSku\": \"SKU-1\"}]}]}}");
         Path suite = dir.resolve("suite");
         // Interactive: skip every API except getProduct, answer its single field.
-        String answers = "n\n".repeat(8) + "y\nSKU-7, SKU-8\n";
+        String answers = "n\n".repeat(9) + "y\nSKU-7, SKU-8\n";
         int code = run(answers, "generate", "--project", Fixtures.sampleShop().toString(), "--out", suite.toString(),
                 "--no-db", "--user-data", values.toString(), "--value", "email=qa@example.com,qa2@example.com",
                 "--bind", "*.deliveryNotes=orders.status", "--interactive", "--data-mode", "dummy",
                 "--include", "/api/v1/**", "--exclude", "DELETE /**");
         assertThat(code).as(err()).isZero();
-        assertThat(out()).contains("Generated k6 suite").contains("9 APIs");
+        assertThat(out()).contains("Generated k6 suite").contains("10 APIs");
 
         JsonNode user = Documents.parse(Files.readString(suite.resolve("data/user.json")));
         assertThat(user.path("fields").path("email").toString()).contains("qa@example.com", "qa2@example.com");

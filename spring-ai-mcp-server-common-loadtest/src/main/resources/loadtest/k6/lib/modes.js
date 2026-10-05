@@ -4,6 +4,7 @@
 //   mixed-smoke | mixed-load | mixed-stress | mixed-spike | …    all APIs together, weighted traffic mix
 //   journey-smoke | journey-load | journey-spike | …            replay the recorded browser flow (data/journey.json)
 //   lifecycle-smoke | lifecycle-load | …                          walk each resource through create → read → update → status → delete (data/lifecycle.json)
+//   channels-smoke | channels-load | …                           WebSocket, STOMP and SSE endpoints (data/channels.json)
 //   preview | journey-preview                                   build requests and print them, send nothing
 // Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), ITERATIONS (per VU, smoke), DURATION_SCALE (e.g. 0.1),
 // API=getUser,createOrder (restrict APIs), PER_API=parallel (per-API scenarios at once instead of in turn).
@@ -16,8 +17,9 @@ export function parseMode(raw) {
   const mixed = mode.startsWith('mixed-');
   const journey = mode.startsWith('journey-');
   const lifecycle = mode.startsWith('lifecycle-');
-  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : lifecycle ? mode.slice(10) : mode, mixed,
-    journey, lifecycle };
+  const channels = mode.startsWith('channels-');
+  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : lifecycle ? mode.slice(10) : channels ? mode.slice(9) : mode, mixed,
+    journey, lifecycle, channels };
 }
 
 const UNITS = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 };
@@ -122,8 +124,8 @@ function thresholds(config, profile, runtime, mixed) {
 }
 
 /** k6 options for the selected mode. */
-export function buildOptions(config, runtime, journeySteps, lifecycleFlows) {
-  const { mode, profile: profileName, mixed, journey, lifecycle } = parseMode(__ENV.MODE);
+export function buildOptions(config, runtime, journeySteps, lifecycleFlows, channelList) {
+  const { mode, profile: profileName, mixed, journey, lifecycle, channels } = parseMode(__ENV.MODE);
   const common = {
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
     insecureSkipTLSVerify: config.http && config.http.insecureSkipTLSVerify === true,
@@ -137,6 +139,11 @@ export function buildOptions(config, runtime, journeySteps, lifecycleFlows) {
   if (!profile) {
     const known = Object.keys(config.modes || {});
     throw new Error(`MODE=${mode}: unknown profile "${profileName}". Use one of ${known.join(', ')} (or mixed-<profile>, preview)`);
+  }
+  if (channels) {
+    if (!channelList) throw new Error(`MODE=${mode}: data/channels.json is empty — the project has no WebSocket, STOMP, SSE or Kafka endpoint`);
+    return Object.assign(common, { scenarios: { [`channels_${profileName}`]: scenario(profile, 'channels', null, 1) },
+      thresholds: { checks: ['rate>0.95'] } });
   }
   if (!runtime.apis.length) throw new Error('No API is enabled (check loadtest.config.json → apis, API and READ_ONLY)');
   const scenarios = {};

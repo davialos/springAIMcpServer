@@ -220,6 +220,25 @@ final class ProjectFiles {
         return out.stream().sorted().toList();
     }
 
+    /**
+     * GraphQL schema files ({@code .graphqls}, {@code .graphql}, {@code .gql}) under {@code src/main/resources}
+     * (Spring GraphQL's default {@code classpath:graphql/**} location included).
+     *
+     * @param projectDir project root
+     * @return schema files, sorted
+     */
+    static List<Path> graphQlSchemas(Path projectDir) {
+        List<Path> out = new ArrayList<>();
+        for (String ext : List.of(".graphqls", ".graphql", ".gql")) {
+            for (Path p : walk(projectDir, ext)) {
+                if (p.toString().replace('\\', '/').contains("/src/main/resources/")) {
+                    out.add(p);
+                }
+            }
+        }
+        return out.stream().sorted().toList();
+    }
+
     private static boolean looksLikeOpenApi(Path p) {
         try {
             if (Files.size(p) > MAX_SPEC_BYTES) {

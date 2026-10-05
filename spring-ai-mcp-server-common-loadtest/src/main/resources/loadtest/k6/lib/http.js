@@ -49,6 +49,9 @@ export function prepare(config, modules, seedSteps, responseSchemas) {
       expected,
       callback: http.expectedStatuses(...expected),
       creates: creates[meta.id], // the table this API inserts into, if it is a create endpoint
+      graphql: meta.graphql === true,
+      safe: meta.safe === true, // a read although it is a POST (GraphQL query)
+      bodyType: meta.bodyType, // undefined = JSON; form | multipart
       authRole: c.auth, // a role, or "none" for a public endpoint (see lib/auth.js)
       responseSchema: (responseSchemas || {})[meta.id], // what a successful response looks like, if known
       mod,
@@ -59,7 +62,7 @@ export function prepare(config, modules, seedSteps, responseSchemas) {
     } else if (c.enabled === false) {
       continue;
     }
-    if (readOnly && api.method !== 'GET' && api.method !== 'HEAD') continue;
+    if (readOnly && api.method !== 'GET' && api.method !== 'HEAD' && !api.safe) continue;
     if (mixed && api.weight <= 0) continue;
     apis.push(api);
   }
@@ -135,12 +138,34 @@ export function call(api, runtime, auth, hooks) {
   return res;
 }
 
+function hasFile(value) {
+  return value && typeof value === 'object' && Object.values(value).some((v) => v && typeof v === 'object' && (v.$file || (Array.isArray(v) && v.some((x) => x && x.$file))));
+}
+
+/**
+ * The request body: JSON text, or for APIs that take forms an object k6 encodes itself — multipart/form-data when a
+ * field is a file (`{$file}` marker from lib/dummy.js) or the API is a multipart one, else urlencoded.
+ */
+function encodeBody(api, body) {
+  if (api.bodyType !== 'multipart' && api.bodyType !== 'form' && !hasFile(body)) return JSON.stringify(body);
+  const multipart = api.bodyType === 'multipart' || hasFile(body);
+  const form = {};
+  for (const [name, v] of Object.entries(body || {})) {
+    if (v === undefined || v === null) continue;
+    if (v.$file) form[name] = http.file(v.$file.data, v.$file.name, v.$file.contentType);
+    else if (Array.isArray(v) && v.some((x) => x && x.$file)) form[name] = http.file(v[0].$file.data, v[0].$file.name, v[0].$file.contentType);
+    else if (typeof v === 'object') form[name] = multipart ? http.file(JSON.stringify(v), `${name}.json`, 'application/json') : JSON.stringify(v);
+    else form[name] = multipart ? String(v) : v;
+  }
+  return form;
+}
+
 /** Sends a built request: URL, auth and JSON body, tags, expected-status check, afterResponse hook. */
 export function send(api, req, ctx, runtime, auth, hooks, phase) {
   const config = runtime.config;
   const url = runtime.baseUrl + fillPath(api.path, req.path) + queryString(req.query);
   let body = null;
-  if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') body = JSON.stringify(req.body);
+  if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') body = encodeBody(api, req.body);
   const params = {
     tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : { api: api.id, name: api.name },
     responseCallback: api.callback,
@@ -152,7 +177,7 @@ export function send(api, req, ctx, runtime, auth, hooks, phase) {
     const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, session.headers || {},
       authn.csrfHeaders(session, runtime.baseUrl, api.method));
     for (const [k, v] of Object.entries(req.headers || {})) if (v !== undefined) headers[k] = String(v);
-    if (body !== null) headers['Content-Type'] = 'application/json';
+    if (typeof body === 'string') headers['Content-Type'] = 'application/json'; // forms and uploads: k6 sets theirs
     params.headers = headers;
     if (session.jar) params.jar = session.jar;
     // the first 401 is answered by a new login, not a failure; only a 401 after that is
@@ -166,8 +191,22 @@ export function send(api, req, ctx, runtime, auth, hooks, phase) {
   const tags = phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id };
   check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, tags);
   checkResponse(api, res, runtime, tags);
+  if (api.graphql && res.status === 200) checkGraphQl(api, res, tags);
   if (hooks && typeof hooks.afterResponse === 'function') hooks.afterResponse(api.id, res, req, ctx);
   return res;
+}
+
+/** GraphQL answers 200 with an "errors" member when an operation fails: that is a failed request. */
+function checkGraphQl(api, res, tags) {
+  let errors;
+  try {
+    errors = res.json().errors;
+  } catch (e) {
+    errors = [{ message: 'the response is not JSON' }];
+  }
+  const ok = !(Array.isArray(errors) && errors.length > 0);
+  check(res, { 'no GraphQL errors': () => ok }, tags);
+  if (!ok) console.warn(`GraphQL ${api.id} returned errors: ${JSON.stringify(errors).slice(0, 200)}`);
 }
 
 const loggedViolations = {};

@@ -876,3 +876,11 @@ per-deployment decision), OQ-31 (retention defaults and who runs partition maint
 as "built-in job, advisory-locked, any node"; still open whether a deploying team may disable the built-in job
 entirely and run 100% DBA-driven maintenance — resolved: `store.maintenance.enabled=false` turns the runner off;
 the DBA then owns partitions, retention and the sweeps).
+
+## Rule-engine tables (V11)
+
+Migration `V11__rule_engine.sql` adds the `dai_re_*` tables of the CEL rule engine (parameter library, bundles, rules,
+rule groups, channels, trigger points, evaluation log, change markers). They have no JPA entities; the `ruleengine`
+module reads and writes them with plain JDBC, so Hibernate schema validation is unaffected. Their columns, constraints
+and meaning are documented in [LLD-18 §2](18-rule-engine.md) (ADR-0025); `tenant_id`/`organization_id` are opaque host
+ids without foreign keys (ADR-0005).

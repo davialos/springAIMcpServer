@@ -1,6 +1,8 @@
 package com.springaimcpservercommon.loadtest.k6;
 
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
+import com.springaimcpservercommon.loadtest.model.Access;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import com.springaimcpservercommon.loadtest.model.HttpMethod;
@@ -33,8 +35,14 @@ final class SuiteConfig {
      * @param dataMode default data mode
      * @param authType none, bearer, basic, apiKey or login
      * @param loginPath login endpoint path for {@code login} auth
+     * @param security  the project's Spring Security setup, or {@code null}
      */
-    record Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+    record Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath,
+                    @Nullable SecurityModel security) {
+
+        Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+            this(baseUrl, dataMode, authType, loginPath, null);
+        }
     }
 
     static ObjectNode defaults(ApiCatalog catalog, Settings s) {
@@ -57,6 +65,32 @@ final class SuiteConfig {
         login.put("path", s.loginPath() != null ? s.loginPath() : "/api/auth/login");
         login.putObject("body").put("username", "${AUTH_USER}").put("password", "${AUTH_PASSWORD}");
         login.put("tokenPath", "token");
+        // Spring Security styles that need a session per caller (see README "Authentication"):
+        // form: login page + CSRF; oauth2: token endpoint (client credentials or password grant, e.g. Keycloak).
+        // users: one identity per role (${ROLE_USER}/${ROLE_PASSWORD}/${ROLE_TOKEN} from the environment; ${VU} in a
+        // user name gives every VU its own login); refresh.afterSeconds renews tokens; a 401 logs in again once.
+        // Endpoints without a role use AUTH_USER/AUTH_PASSWORD/AUTH_TOKEN (or auth.defaultRole, if you set one).
+        SecurityModel sec = s.security();
+        ObjectNode form = auth.putObject("form");
+        form.put("loginPath", sec != null && sec.loginPage() != null ? sec.loginPage() : "/login");
+        form.put("usernameField", "username").put("passwordField", "password");
+        form.put("csrf", sec == null || sec.csrf());
+        form.put("csrfPage", "/");
+        ObjectNode oauth2 = auth.putObject("oauth2");
+        oauth2.put("tokenUrl", "${OAUTH_TOKEN_URL}").put("grant", "client_credentials");
+        oauth2.put("clientId", "${OAUTH_CLIENT_ID}").put("clientSecret", "${OAUTH_CLIENT_SECRET}");
+        oauth2.put("scope", "").put("clientAuth", "basic");
+        auth.putObject("refresh").put("afterSeconds", 0);
+        auth.put("retryOn401", true);
+        auth.put("perVu", false);
+        List<String> roles = sec == null ? List.of() : sec.roles(catalog.endpoints());
+        ObjectNode users = auth.putObject("users");
+        for (String role : roles) {
+            String env = role.toUpperCase(java.util.Locale.ROOT).replaceAll("[^A-Z0-9]", "_");
+            users.putObject(role).put("username", "${" + env + "_USER}").put("password", "${" + env + "_PASSWORD}")
+                    .put("token", "${" + env + "_TOKEN}").put("clientId", "${" + env + "_CLIENT_ID}")
+                    .put("clientSecret", "${" + env + "_CLIENT_SECRET}");
+        }
 
         ObjectNode data = root.putObject("data");
         data.put("mode", s.dataMode());
@@ -101,8 +135,14 @@ final class SuiteConfig {
             ObjectNode a = apis.putObject(e.id());
             a.put("method", e.method().name());
             a.put("path", e.path());
-            a.put("enabled", e.method() != HttpMethod.DELETE && e.method() != HttpMethod.OPTIONS);
+            a.put("enabled", e.method() != HttpMethod.DELETE && e.method() != HttpMethod.OPTIONS
+                    && (e.access() == null || e.access().kind() != Access.Kind.DENIED));
             a.put("weight", weight(e.method()));
+            if (e.access() != null && e.access().kind() == Access.Kind.PUBLIC) {
+                a.put("auth", "none"); // permitAll: no credentials
+            } else if (e.access() != null && e.access().role() != null) {
+                a.put("auth", e.access().role()); // the identity of the role the endpoint needs
+            }
             ArrayNode statuses = a.putArray("expectedStatuses");
             expected(e.method()).forEach(statuses::add);
         }

@@ -7,6 +7,7 @@ import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
 import com.springaimcpservercommon.loadtest.discovery.ResponseSchemas;
+import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import org.jspecify.annotations.Nullable;
@@ -50,7 +51,7 @@ public final class K6SuiteGenerator {
 
     private static final List<String> RUNTIME_FILES = List.of(
             "lib/data.js", "lib/dummy.js", "lib/random.js", "lib/modes.js", "lib/http.js", "lib/report.js",
-            "lib/grafana.js", "lib/validate.js", "lib/dictionaries.json");
+            "lib/grafana.js", "lib/validate.js", "lib/auth.js", "lib/dictionaries.json");
 
     /**
      * Generation options.
@@ -58,10 +59,25 @@ public final class K6SuiteGenerator {
      * @param outDir    suite directory
      * @param baseUrl   target base URL (with context path)
      * @param dataMode  default data mode
-     * @param authType  none, bearer, basic, apiKey or login
+     * @param authType  none, bearer, basic, apiKey, login, form or oauth2
      * @param loginPath login path for {@code login} auth, or {@code null}
+     * @param security  the project's Spring Security setup (roles, CSRF, login page), or {@code null}
      */
-    public record Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+    public record Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath,
+                          @Nullable SecurityModel security) {
+
+        /**
+         * Options without a security model.
+         *
+         * @param outDir    suite directory
+         * @param baseUrl   target base URL
+         * @param dataMode  default data mode
+         * @param authType  authentication type
+         * @param loginPath login path, or {@code null}
+         */
+        public Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+            this(outDir, baseUrl, dataMode, authType, loginPath, null);
+        }
     }
 
     /**
@@ -143,7 +159,7 @@ public final class K6SuiteGenerator {
             Path configFile = out.resolve("loadtest.config.json");
             ObjectNode config = SuiteConfig.merge(
                     SuiteConfig.defaults(catalog, new SuiteConfig.Settings(o.baseUrl(), o.dataMode(), o.authType(),
-                            o.loginPath())),
+                            o.loginPath(), o.security())),
                     readIfExists(configFile));
             writeJson(configFile, config);
 

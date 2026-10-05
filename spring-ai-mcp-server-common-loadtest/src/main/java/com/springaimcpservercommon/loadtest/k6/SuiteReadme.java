@@ -87,6 +87,27 @@ final class SuiteReadme {
                 .append("exponent). `PARTITION=vu` (or `data.partition.mode`) gives every VU its own slice of each ")
                 .append("pool for writes, so concurrent updates and deletes do not fight over rows.\n\n");
 
+        long restricted = catalog.endpoints().stream().filter(e -> e.access() != null).count();
+        md.append("## Authentication\n\n")
+                .append("`auth.type` is `").append(config.path("auth").path("type").asString("none")).append("` ")
+                .append("(detected from the project's Spring Security setup; `none | bearer | basic | apiKey | login | ")
+                .append("form | oauth2`). Secrets only come from the environment: `AUTH_USER`/`AUTH_PASSWORD`, ")
+                .append("`AUTH_TOKEN`, `API_KEY`, `OAUTH_TOKEN_URL`/`OAUTH_CLIENT_ID`/`OAUTH_CLIENT_SECRET`.\n\n")
+                .append("- **Roles**: ").append(restricted).append(" APIs have access rules read from `@PreAuthorize`/")
+                .append("`@Secured`/`@RolesAllowed` and the `SecurityFilterChain` matchers. An API that needs a role ")
+                .append("is called as that role (`apis.<id>.auth`), a `permitAll` API without credentials (`\"none\"`). ")
+                .append("`auth.users.<ROLE>` holds one identity per role (`<ROLE>_USER`/`_PASSWORD`/`_TOKEN`, ")
+                .append("`_CLIENT_ID`/`_CLIENT_SECRET` for OAuth2); other APIs use the `AUTH_*` identity.\n")
+                .append("- **Per-VU identities**: `${VU}` in a user name (`\"username\": \"load-${VU}\"`) or ")
+                .append("`auth.perVu: true` makes every VU log in as itself instead of sharing one token.\n")
+                .append("- **Form login** (`auth.type: form`): GET the login page for the CSRF token, POST the form, keep ")
+                .append("the session cookie per VU and send `X-XSRF-TOKEN` (cookie) or the scraped token on writes ")
+                .append("(`auth.form`).\n")
+                .append("- **OAuth2 / Keycloak** (`auth.type: oauth2`): client-credentials (or password) grant against ")
+                .append("`auth.oauth2.tokenUrl`; the token is renewed at 90% of `expires_in` (or `auth.refresh.afterSeconds`).\n")
+                .append("- A **401** is answered by one new login and a retry (`auth.retryOn401`), so expired or revoked ")
+                .append("tokens do not fail the run.\n\n");
+
         long checked = catalog.endpoints().stream().filter(e -> !ResponseSchemas.isEmpty(e.responseSchema())).count();
         md.append("## Response validation and read-after-write\n\n")
                 .append(checked).append(" of ").append(catalog.endpoints().size()).append(" APIs have a known response ")

@@ -27,16 +27,37 @@ import java.util.Set;
  *                 {@code properties}, {@code required}, {@code items}, {@code enum}; {@code {}} = anything) for response
  *                 validation, or {@code null} when it is unknown or not JSON. Separate from {@code body}: responses keep
  *                 ids, read-only fields and nested objects that request schemas leave out.
+ * @param access   who may call it according to the project's Spring Security setup, or {@code null} when unknown
  */
 public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
                           List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
-                          Set<String> sources, @Nullable JsonNode responseSchema) {
+                          Set<String> sources, @Nullable JsonNode responseSchema, @Nullable Access access) {
 
     /** Compact constructor: defensive copies. */
     public ApiEndpoint {
         tags = List.copyOf(tags);
         params = List.copyOf(params);
         sources = Set.copyOf(new LinkedHashSet<>(sources));
+    }
+
+    /**
+     * An endpoint whose access is unknown.
+     *
+     * @param id       identifier
+     * @param method   HTTP method
+     * @param path     URI template
+     * @param summary  description
+     * @param tags     tags
+     * @param params   parameters
+     * @param body     request body schema
+     * @param resource entity the endpoint operates on
+     * @param sources  discovery sources
+     * @param responseSchema response schema, or {@code null}
+     */
+    public ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
+                       List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
+                       Set<String> sources, @Nullable JsonNode responseSchema) {
+        this(id, method, path, summary, tags, params, body, resource, sources, responseSchema, null);
     }
 
     /**
@@ -55,7 +76,18 @@ public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable S
     public ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
                        List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
                        Set<String> sources) {
-        this(id, method, path, summary, tags, params, body, resource, sources, null);
+        this(id, method, path, summary, tags, params, body, resource, sources, null, null);
+    }
+
+    /**
+     * Copy with the access rule.
+     *
+     * @param newAccess who may call it, or {@code null}
+     * @return the endpoint
+     */
+    public ApiEndpoint withAccess(@Nullable Access newAccess) {
+        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, responseSchema,
+                newAccess);
     }
 
     /**
@@ -65,7 +97,7 @@ public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable S
      * @return the endpoint
      */
     public ApiEndpoint withResponse(@Nullable JsonNode response) {
-        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, response);
+        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, response, access);
     }
 
     /**
@@ -122,6 +154,6 @@ public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable S
      * @return the copy
      */
     public ApiEndpoint withId(String newId) {
-        return new ApiEndpoint(newId, method, path, summary, tags, params, body, resource, sources, responseSchema);
+        return new ApiEndpoint(newId, method, path, summary, tags, params, body, resource, sources, responseSchema, access);
     }
 }

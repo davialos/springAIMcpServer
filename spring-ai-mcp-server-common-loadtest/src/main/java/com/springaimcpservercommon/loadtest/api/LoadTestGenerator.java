@@ -19,6 +19,8 @@ import com.springaimcpservercommon.loadtest.discovery.HarCapture;
 import com.springaimcpservercommon.loadtest.discovery.HarReader;
 import com.springaimcpservercommon.loadtest.discovery.OpenApiReader;
 import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
+import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
+import com.springaimcpservercommon.loadtest.discovery.SecurityScanner;
 import com.springaimcpservercommon.loadtest.discovery.SpringSourceScanner;
 import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
 import com.springaimcpservercommon.loadtest.k6.GrafanaStack;
@@ -97,10 +99,11 @@ public final class LoadTestGenerator {
      * @param recordings  browser recordings read ({@code --har})
      * @param basePath    servlet context path of the target, if known
      * @param discovered  number of APIs before include/exclude filters
+     * @param security    the project's Spring Security setup (authentication style, request matchers, roles)
      */
     public record DiscoveryResult(ApiCatalog catalog, DataPlan plan, SeedPlan seed, ProjectSettings settings,
                                   @Nullable Path project, List<HarCapture> recordings, @Nullable String basePath,
-                                  int discovered) {
+                                  int discovered, SecurityModel security) {
 
         /** Compact constructor: defensive copy. */
         public DiscoveryResult {
@@ -194,6 +197,10 @@ public final class LoadTestGenerator {
             throw new IllegalArgumentException("give at least one of project, openApi, har, actuator");
         }
         ApiCatalog merged = CatalogMerger.merge(catalogs);
+        SecurityModel security = projectDir == null ? SecurityModel.none()
+                : new SecurityScanner(this::log).scan(projectDir, settings);
+        merged = new ApiCatalog(merged.project(), merged.basePath(), security.annotate(merged.endpoints()),
+                merged.schemas(), merged.entities());
         List<String> excludes = new ArrayList<>(s.exclude);
         if (s.defaultExcludes) {
             excludes.addAll(CatalogMerger.DEFAULT_EXCLUDES);
@@ -204,7 +211,7 @@ public final class LoadTestGenerator {
         DataPlan plan = DataPlan.build(filtered, new RealDataBinder(index, Map.of()));
         SeedPlan seed = SeedPlan.build(filtered, plan, index, this::log);
         return new DiscoveryResult(filtered, plan, seed, settings, projectDir, recordings, basePath,
-                merged.endpoints().size());
+                merged.endpoints().size(), security);
     }
 
     /**
@@ -310,9 +317,15 @@ public final class LoadTestGenerator {
             ApiHarvester harvester = s.harvest ? new ApiHarvester(baseUrl, s.headers, this::log) : null;
             RealDataCollector.Result real = new RealDataCollector(this::log, seed.pools()).collect(catalog, plan,
                     index, db, harvester, user, s.sampleSize, s.dropUnverified);
+            String authType = s.authType.equals("auto") ? switch (d.security().style()) {
+                case BASIC -> "basic";
+                case FORM -> "form";
+                case BEARER -> "bearer";
+                case NONE -> "none";
+            } : s.authType;
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
-                    journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, s.authType,
-                            s.loginPath));
+                    journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, authType, s.loginPath,
+                            d.security()));
             GrafanaStack.write(r.outDir(), catalog.project(),
                     GrafanaStack.scrape(baseUrl, d.settings().properties()));
             return new GenerationResult(r.outDir(), baseUrl, r.apis(), r.fields(), r.pools(), seed,
@@ -399,7 +412,7 @@ public final class LoadTestGenerator {
         private final Map<String, List<Object>> values = new LinkedHashMap<>();
         private final Map<String, String> bindings = new LinkedHashMap<>();
         private boolean dropUnverified;
-        private String authType = "none";
+        private String authType = "auto";
         private @Nullable String loginPath;
         private @Nullable UserDataPrompt prompt;
         private Consumer<String> log = line -> { };

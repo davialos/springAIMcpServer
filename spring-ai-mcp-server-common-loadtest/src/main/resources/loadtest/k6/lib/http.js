@@ -1,10 +1,10 @@
 // Request execution: URL/query/headers/body assembly, auth, status checks, think time and safety rails.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import encoding from 'k6/encoding';
 import * as data from './data.js';
 import { parseMode } from './modes.js';
 import * as validate from './validate.js';
+import * as authn from './auth.js';
 
 const DEFAULT_EXPECTED = { GET: [200], HEAD: [200], POST: [200, 201, 202], PUT: [200, 201, 204], PATCH: [200, 204], DELETE: [200, 202, 204], OPTIONS: [200, 204] };
 
@@ -49,6 +49,7 @@ export function prepare(config, modules, seedSteps, responseSchemas) {
       expected,
       callback: http.expectedStatuses(...expected),
       creates: creates[meta.id], // the table this API inserts into, if it is a create endpoint
+      authRole: c.auth, // a role, or "none" for a public endpoint (see lib/auth.js)
       responseSchema: (responseSchemas || {})[meta.id], // what a successful response looks like, if known
       mod,
     };
@@ -83,53 +84,14 @@ function validationSettings(config) {
   };
 }
 
-function resolveEnv(value) {
-  if (typeof value === 'string') return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_, k) => __ENV[k] || '');
-  if (Array.isArray(value)) return value.map(resolveEnv);
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = resolveEnv(v);
-    return out;
-  }
-  return value;
-}
-
 function at(obj, path) {
   return String(path || '').split('.').filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
 
 /** Runs once before the load (k6 setup): obtains credentials. Secrets come from the environment only. */
 export function setupAuth(config) {
-  const auth = config.auth || { type: 'none' };
-  switch (auth.type) {
-    case 'bearer':
-      if (!__ENV.AUTH_TOKEN) throw new Error('auth.type=bearer needs AUTH_TOKEN');
-      return { headers: { [auth.header || 'Authorization']: `Bearer ${__ENV.AUTH_TOKEN}` } };
-    case 'basic': {
-      const user = __ENV.AUTH_USER || '';
-      const pass = __ENV.AUTH_PASSWORD || '';
-      return { headers: { Authorization: `Basic ${encoding.b64encode(`${user}:${pass}`)}` } };
-    }
-    case 'apiKey':
-      if (!__ENV.API_KEY) throw new Error('auth.type=apiKey needs API_KEY');
-      return { headers: { [auth.apiKeyHeader || 'X-API-Key']: __ENV.API_KEY } };
-    case 'login': {
-      const login = auth.login || {};
-      const url = baseUrl(config) + (login.path || '/login');
-      const res = http.request(login.method || 'POST', url, JSON.stringify(resolveEnv(login.body || {})), {
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        tags: { api: 'auth_login', name: `${login.method || 'POST'} ${login.path || '/login'}` },
-      });
-      if (res.status < 200 || res.status >= 300) throw new Error(`login failed: HTTP ${res.status}`);
-      const token = at(res.json(), login.tokenPath || 'token');
-      if (!token) throw new Error(`login response has no ${login.tokenPath || 'token'}`);
-      return { headers: { [auth.header || 'Authorization']: `${login.scheme === undefined ? 'Bearer ' : login.scheme}${token}` } };
-    }
-    default:
-      return { headers: {} };
-  }
+  return authn.setup(config, baseUrl(config));
 }
-
 
 function queryString(query) {
   const parts = [];
@@ -177,19 +139,30 @@ export function call(api, runtime, auth, hooks) {
 export function send(api, req, ctx, runtime, auth, hooks, phase) {
   const config = runtime.config;
   const url = runtime.baseUrl + fillPath(api.path, req.path) + queryString(req.query);
-  const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, (auth && auth.headers) || {});
-  for (const [k, v] of Object.entries(req.headers || {})) if (v !== undefined) headers[k] = String(v);
   let body = null;
-  if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') {
-    headers['Content-Type'] = 'application/json';
-    body = JSON.stringify(req.body);
-  }
-  const res = http.request(api.method, url, body, {
-    headers,
+  if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') body = JSON.stringify(req.body);
+  const params = {
     tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : { api: api.id, name: api.name },
     responseCallback: api.callback,
     timeout: (config.http && config.http.timeout) || '30s',
-  });
+  };
+  let res;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const session = authn.sessionFor(runtime, api, auth); // the identity of the API's role; logs in when due
+    const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, session.headers || {},
+      authn.csrfHeaders(session, runtime.baseUrl, api.method));
+    for (const [k, v] of Object.entries(req.headers || {})) if (v !== undefined) headers[k] = String(v);
+    if (body !== null) headers['Content-Type'] = 'application/json';
+    params.headers = headers;
+    if (session.jar) params.jar = session.jar;
+    // the first 401 is answered by a new login, not a failure; only a 401 after that is
+    params.responseCallback = attempt === 0 && authn.canRenew(runtime, api)
+      ? http.expectedStatuses(...api.expected, 401) : api.callback;
+    res = http.request(api.method, url, body, params);
+    // an expired or revoked token: log in again and send the request once more
+    if (res.status === 401 && attempt === 0 && authn.renew(runtime, api)) continue;
+    break;
+  }
   const tags = phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id };
   check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, tags);
   checkResponse(api, res, runtime, tags);

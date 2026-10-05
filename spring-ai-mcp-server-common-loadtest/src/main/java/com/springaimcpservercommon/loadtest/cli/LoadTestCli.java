@@ -197,7 +197,7 @@ public final class LoadTestCli {
             b.bind(bind.substring(0, eq), bind.substring(eq + 1));
         }
         b.dropUnverified(a.flag("drop-unverified"));
-        b.auth(a.get("auth", "none"), a.get("login-path"));
+        b.auth(a.get("auth", "auto"), a.get("login-path"));
         if (a.flag("interactive")) {
             b.prompt(this::interactive);
         }
@@ -586,7 +586,8 @@ public final class LoadTestCli {
                   --bind key=table.column   force a field to draw real values from a column (repeatable)
                   --interactive             prompt for user values, API by API
                   --drop-unverified         drop user values of id/FK fields that are not in the database
-                  --auth <type>             none | bearer | basic | apiKey | login   (--login-path /api/auth/login)
+                  --auth <type>             auto (from Spring Security) | none | bearer | basic | apiKey | login | form | oauth2
+                                    (--login-path /api/auth/login)
 
                 Run
                   --suite <dir> --mode <mode> [--data-mode <mode>] [--api id1,id2] [--vus n] [--rate n]

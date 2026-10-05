@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.loadtest.discovery;
 
+import com.springaimcpservercommon.loadtest.model.Access;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import com.springaimcpservercommon.loadtest.model.ApiParam;
@@ -319,6 +320,7 @@ public final class SpringSourceScanner {
             String summary = SourceTrees.annotation(m.getModifiers(), "Operation")
                     .flatMap(op -> trees.string(op, "summary")).orElse(null);
             JsonNode response = ctx.responses().map(m.getReturnType(), d.bindings());
+            Access access = SecurityScanner.fromAnnotations(trees, m.getModifiers(), ct.getModifiers());
             for (String base : bases) {
                 for (String path : paths) {
                     for (HttpMethod method : methods) {
@@ -327,7 +329,7 @@ public final class SpringSourceScanner {
                         List<ApiParam> params = withPathConstraints(full, handler.params());
                         Schema body = method.hasBody() ? wrapRoot(handler.body(), ctx) : null;
                         out.add(new ApiEndpoint(id, method, stripRegex(full), summary, List.of(controllerName),
-                                params, body, resource, Set.of("source"), response));
+                                params, body, resource, Set.of("source"), response, access));
                     }
                 }
             }

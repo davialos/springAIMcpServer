@@ -87,6 +87,22 @@ final class SuiteReadme {
                 .append("exponent). `PARTITION=vu` (or `data.partition.mode`) gives every VU its own slice of each ")
                 .append("pool for writes, so concurrent updates and deletes do not fight over rows.\n\n");
 
+        md.append("## Production-shaped load\n\n")
+                .append("- **Traffic import**: `loadtest traffic --suite . --access-log access.log` (common/combined or ")
+                .append("JSON lines) or `--metrics http://app/actuator/prometheus --period 7d` (Micrometer ")
+                .append("`http_server_requests`) sets every API's `weight` to its production share (APIs production never ")
+                .append("calls get 0), the `production` profile's rate and peak from the observed arrival rate, and keeps ")
+                .append("session transitions in `data/traffic.json`. `--apply-slo` also turns observed p95 and server error ")
+                .append("rates into thresholds. Run `./run.sh mixed-production` (open model: observed mix and rate) or ")
+                .append("`./run.sh session-load` (sessions follow the observed endpoint-to-endpoint transitions).\n")
+                .append("- **Open model**: `MODEL=open` (or `model: open`) runs `load`/`stress`/`soak`… as arrival rates ")
+                .append("(`RATE` = requests/s at multiplier 1) — users arrive on schedule however slow the service gets; a ")
+                .append("`dropped_iterations` threshold fails the run when the generator cannot keep up (`allowDropped` for ")
+                .append("stress/spike/breakpoint).\n")
+                .append("- **Warm-up**: `load`, `stress`, `soak` and `production` start with a warm-up (`warmup.duration`, ")
+                .append("`WARMUP=60s|off`) whose requests are tagged `warmup_<api>` and left out of thresholds and reports, ")
+                .append("so JIT compilation, cold caches and empty connection pools do not fail the run.\n\n");
+
         long uploads = catalog.endpoints().stream().filter(e -> "multipart".equals(e.bodyType())).count();
         long forms = catalog.endpoints().stream().filter(e -> "form".equals(e.bodyType())).count();
         long graphQl = catalog.endpoints().stream().filter(e -> e.isGraphQl()).count();

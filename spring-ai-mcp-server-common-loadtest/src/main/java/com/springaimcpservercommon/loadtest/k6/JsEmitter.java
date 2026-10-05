@@ -293,7 +293,7 @@ final class JsEmitter {
                 import { SharedArray } from 'k6/data';
                 import * as data from './lib/data.js';
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
-                import { prepare, call, replay, lifecycle as walkLifecycle, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney, previewLifecycle as printLifecycle } from './lib/http.js';
+                import { prepare, call, warmupCall, session as walkSession, replay, lifecycle as walkLifecycle, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney, previewLifecycle as printLifecycle } from './lib/http.js';
                 import { runChannels } from './lib/channels.js';
                 import { summary } from './lib/report.js';
                 import * as grafana from './lib/grafana.js';
@@ -326,6 +326,10 @@ final class JsEmitter {
                 // MODE=lifecycle-<profile>.
                 const LIFECYCLE = new SharedArray('lifecycle', () => JSON.parse(open('./data/lifecycle.json')));
 
+                // Production traffic model (loadtest traffic): endpoint mix, arrival rate, session transitions.
+                const TRAFFIC = JSON.parse(open('./data/traffic.json'));
+                const SESSIONS = TRAFFIC.transitions && Object.keys(TRAFFIC.transitions).length;
+
                 // WebSocket, STOMP and SSE endpoints (MODE=channels-<profile>).
                 const CHANNELS = new SharedArray('channels', () => JSON.parse(open('./data/channels.json')));
 
@@ -339,7 +343,7 @@ final class JsEmitter {
                 const MODULES = [
                 %s];
                 const RUNTIME = prepare(CONFIG, MODULES, SEED, RESPONSE_SCHEMAS);
-                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length, LIFECYCLE.length, CHANNELS.length);
+                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length, LIFECYCLE.length, CHANNELS.length, SESSIONS);
 
                 export function setup() {
                   if (parseMode(__ENV.MODE).profile === 'preview') return { headers: {}, seeded: {} };
@@ -369,6 +373,14 @@ final class JsEmitter {
 
                 export function lifecycle(auth) {
                   walkLifecycle(RUNTIME, LIFECYCLE, auth, hooks);
+                }
+
+                export function warmup(auth) {
+                  warmupCall(RUNTIME, auth, hooks, pickWeighted);
+                }
+
+                export function session(auth) {
+                  walkSession(RUNTIME, TRAFFIC, auth, hooks);
                 }
 
                 export async function channels(auth) {

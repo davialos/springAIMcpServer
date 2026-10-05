@@ -43,6 +43,7 @@ import java.util.stream.Stream;
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * data/lifecycle.json    per-resource business flows from the code, MODE=lifecycle-&lt;profile&gt;
  * data/response-schemas.json  what a successful response of each API looks like (validated under load)
+ * data/traffic.json      production traffic model (endpoint mix, rate, session transitions); written by `loadtest traffic`
  * hooks.js               user hooks (created once, never overwritten)
  * grafana/               Prometheus + Grafana stack and dashboard (written by GrafanaStack)
  * README.md              how to run; API and field tables
@@ -204,6 +205,9 @@ public final class K6SuiteGenerator {
             writeJson(out.resolve("data/lifecycle.json"), lifecycle.toJson());
             writeJson(out.resolve("data/response-schemas.json"), responseSchemas(catalog));
             writeJson(out.resolve("data/channels.json"), channelsJson(o.channels()));
+            if (!Files.exists(out.resolve("data/traffic.json"))) {
+                writeJson(out.resolve("data/traffic.json"), Documents.json().createObjectNode()); // see `loadtest traffic`
+            }
             if (o.channels().stream().anyMatch(c -> c.kind() == Channel.Kind.KAFKA)) {
                 Files.writeString(out.resolve("kafka.js"), KafkaScript.render(o.channels()));
             }

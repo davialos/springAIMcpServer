@@ -37,6 +37,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.springaimcpservercommon.loadtest.traffic.Route;
+import com.springaimcpservercommon.loadtest.traffic.TrafficImporter;
+import com.springaimcpservercommon.loadtest.traffic.TrafficModel;
+import com.springaimcpservercommon.loadtest.traffic.TrafficReader;
+import com.springaimcpservercommon.loadtest.discovery.Documents;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.Set;
 
 /**
@@ -56,7 +63,7 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force", "yes", "allow-prod");
+            "grafana", "force", "yes", "allow-prod", "apply-slo");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -107,6 +114,7 @@ public final class LoadTestCli {
                 case "report" -> report(a);
                 case "compare" -> compare(a);
                 case "init-gradle" -> initGradle(a);
+                case "traffic" -> traffic(a);
                 case "bulk-load" -> bulkLoad(a);
                 case "db-snapshot" -> dbSnapshot(a);
                 case "modes" -> modes();
@@ -336,7 +344,8 @@ public final class LoadTestCli {
             runner.dataMode(a.get("data-mode"));
         }
         Map<String, String> mapping = Map.of("api", "API", "vus", "VUS", "rate", "RATE", "duration-scale",
-                "DURATION_SCALE", "base-url", "BASE_URL", "per-api", "PER_API", "preview-count", "PREVIEW_COUNT");
+                "DURATION_SCALE", "base-url", "BASE_URL", "per-api", "PER_API", "preview-count", "PREVIEW_COUNT", "model", "MODEL",
+                "warmup", "WARMUP");
         mapping.forEach((opt, envName) -> {
             if (a.get(opt) != null) {
                 runner.env(envName, a.get(opt));
@@ -404,6 +413,68 @@ public final class LoadTestCli {
         ReportComparison c = ReportComparison.compare(baseline, current, rules(a));
         out.println(c.toMarkdown());
         return c.passed() ? 0 : 3;
+    }
+
+    /** Imports production traffic (Prometheus metrics, access logs) into a suite: endpoint mix, rate, sessions. */
+    private int traffic(CliArgs a) {
+        try {
+            return importTraffic(a);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private int importTraffic(CliArgs a) throws IOException {
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        List<Route> routes = TrafficImporter.routes(suite);
+        String basePath = a.get("base-path");
+        if (basePath == null) {
+            String url = Documents.parse(Files.readString(suite.resolve("loadtest.config.json"))).path("baseUrl")
+                    .asString("");
+            String p = url.replaceFirst("^[a-z]+://[^/]*", "");
+            basePath = p.isEmpty() || p.equals("/") ? null : p;
+        }
+        TrafficModel model = null;
+        String source = null;
+        if (a.get("metrics") != null) {
+            source = a.get("metrics");
+            model = TrafficReader.fromPrometheus(Documents.text(source, headers(a)), routes,
+                    seconds(a.get("period", "0s")));
+        } else if (a.get("access-log") != null) {
+            source = a.get("access-log");
+            try (var lines = Files.lines(Path.of(source))) {
+                model = TrafficReader.fromAccessLog((Iterable<String>) lines::iterator, routes, basePath,
+                        a.get("log-time-unit", "auto"));
+            }
+        } else {
+            throw new IllegalArgumentException("--metrics <url|file> (Prometheus) or --access-log <file> is required");
+        }
+        if (model.totalRequests() == 0) {
+            throw new IllegalArgumentException("no request matched the suite's APIs: check --base-path (" + basePath
+                    + ") and that the source holds http_server_requests / access log lines");
+        }
+        TrafficImporter.apply(suite, model, source, new TrafficImporter.Options(a.flag("apply-slo"),
+                Double.parseDouble(a.get("slo-headroom", "1.5")),
+                a.get("rate") == null ? null : Double.valueOf(a.get("rate"))), out::println);
+        out.println("Run it: ./run.sh mixed-production   (open model, observed mix and rate)"
+                + (model.sessions() > 0 ? "   or   ./run.sh session-load   (observed sessions)" : ""));
+        return 0;
+    }
+
+    private static double seconds(String duration) {
+        double total = 0;
+        Matcher m = Pattern.compile("(\\d+(?:\\.\\d+)?)(ms|s|m|h|d)").matcher(duration);
+        while (m.find()) {
+            double v = Double.parseDouble(m.group(1));
+            total += switch (m.group(2)) {
+                case "ms" -> v / 1000;
+                case "s" -> v;
+                case "m" -> v * 60;
+                case "h" -> v * 3600;
+                default -> v * 86400;
+            };
+        }
+        return total;
     }
 
     /** JDBC settings: --db-url/--db-user/--db-password, else the project's spring.datasource.*. */
@@ -589,9 +660,19 @@ public final class LoadTestCli {
                   --auth <type>             auto (from Spring Security) | none | bearer | basic | apiKey | login | form | oauth2
                                     (--login-path /api/auth/login)
 
+                Production traffic
+                  traffic --suite <dir> --metrics <url|file> [--period 7d]   Prometheus http_server_requests (the
+                                            /actuator/prometheus text, or the JSON of /api/v1/query); --period = what
+                                            the counters cover, to derive a rate
+                  traffic --suite <dir> --access-log <file> [--base-path /shop] [--log-time-unit auto|ms|s]
+                                            common/combined or JSON-lines access log: mix, rate, peak, sessions
+                  [--apply-slo [--slo-headroom 1.5]]  turn observed p95/error rate into thresholds; [--rate n] overrides
+                                            the observed rate. Then: ./run.sh mixed-production | session-load
+
                 Run
                   --suite <dir> --mode <mode> [--data-mode <mode>] [--api id1,id2] [--vus n] [--rate n]
                   [--duration-scale 0.1] [--base-url url] [--per-api parallel] [--read-only] [--k6 path]
+                  [--model open] [--warmup 60s|off]   arrival-rate (open) model; warm-up phase left out of the verdict
                   [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack (grafana/)
                   [--grafana-url url]                  annotate the run there (default http://localhost:3000)
                   [--baseline report.json]             also compare with a baseline (exit 3 on regression)

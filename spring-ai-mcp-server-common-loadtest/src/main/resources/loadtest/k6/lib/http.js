@@ -2,7 +2,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import * as data from './data.js';
-import { parseMode } from './modes.js';
+import { parseMode, warmupFor } from './modes.js';
 import * as validate from './validate.js';
 import * as authn from './auth.js';
 
@@ -69,7 +69,9 @@ export function prepare(config, modules, seedSteps, responseSchemas) {
   if (only) {
     for (const id of only) if (!byId[id]) throw new Error(`API=${id}: no such API (see loadtest.config.json → apis)`);
   }
-  return { apis, byId, baseUrl: url, config, dataMode, readOnly, validation: validationSettings(config) };
+  const parsed = parseMode(__ENV.MODE);
+  const warmup = parsed.profile === 'preview' ? null : warmupFor(config, parsed.profile);
+  return { apis, byId, baseUrl: url, config, dataMode, readOnly, validation: validationSettings(config), warmup };
 }
 
 /** config.validation, with the VALIDATE_RESPONSES / VALIDATE_SAMPLE overrides: how responses and reads are checked. */
@@ -124,9 +126,9 @@ export function buildRequest(api, hooks, seeded, complete) {
 }
 
 /** Builds, sends and checks one request, then pauses for the configured think time. */
-export function call(api, runtime, auth, hooks) {
+export function call(api, runtime, auth, hooks, phase) {
   const { req, ctx } = buildRequest(api, hooks, auth && auth.seeded);
-  const res = send(api, req, ctx, runtime, auth, hooks);
+  const res = send(api, req, ctx, runtime, auth, hooks, phase);
   if (api.creates && res.status >= 200 && res.status < 300) {
     // later requests of this VU can use the new row, by id and by its other keys (slug, username …)
     data.remember(api.creates.pool, createdId(api.creates, res, req));
@@ -166,8 +168,10 @@ export function send(api, req, ctx, runtime, auth, hooks, phase) {
   const url = runtime.baseUrl + fillPath(api.path, req.path) + queryString(req.query);
   let body = null;
   if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') body = encodeBody(api, req.body);
+  // with a warm-up phase, measured requests carry phase:measure so the run-wide thresholds can leave the warm-up out
+  const measured = runtime.warmup ? { api: api.id, name: api.name, phase: 'measure' } : { api: api.id, name: api.name };
   const params = {
-    tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : { api: api.id, name: api.name },
+    tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : measured,
     responseCallback: api.callback,
     timeout: (config.http && config.http.timeout) || '30s',
   };
@@ -389,6 +393,41 @@ export function lifecycle(runtime, flows, auth, hooks) {
   if (!usable.length) return;
   const flow = usable[(typeof __ITER === 'number' ? __ITER : 0) % usable.length];
   replay(runtime, flow.steps, auth, hooks, { readAfterWrite: true });
+}
+
+/**
+ * One warm-up iteration: a weighted pick of the enabled APIs, tagged apart (api warmup_<id>, phase warmup) so
+ * thresholds and reports ignore it. `warmup.readOnly` limits it to reads.
+ */
+export function warmupCall(runtime, auth, hooks, pick) {
+  const apis = runtime.warmup && runtime.warmup.readOnly ? runtime.apis.filter((a) => a.method === 'GET' || a.safe) : runtime.apis;
+  if (!apis.length) return;
+  call(pick(apis), runtime, auth, hooks, 'warmup');
+}
+
+/**
+ * MODE=session-<profile>: one session as seen in production — start at an entry endpoint, follow the observed
+ * endpoint-to-endpoint transitions until the session ended or `maxSteps` — from data/traffic.json (loadtest traffic).
+ */
+export function session(runtime, traffic, auth, hooks) {
+  const pick = (probabilities) => {
+    let r = Math.random();
+    let last;
+    for (const [id, p] of Object.entries(probabilities || {})) {
+      last = id;
+      r -= p;
+      if (r < 0) return id;
+    }
+    return last;
+  };
+  const enabled = {};
+  for (const a of runtime.apis) enabled[a.id] = a;
+  const maxSteps = (traffic.sessions && traffic.sessions.maxSteps) || 30;
+  let current = pick(traffic.entry);
+  for (let steps = 0; current && current !== '$end' && steps < maxSteps; steps++) {
+    if (enabled[current]) call(enabled[current], runtime, auth, hooks);
+    current = pick((traffic.transitions || {})[current]);
+  }
 }
 
 /** MODE=lifecycle-preview: prints the steps of every flow (LIFECYCLE=<name> narrows). Sends nothing. */

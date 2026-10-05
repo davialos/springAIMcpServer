@@ -147,6 +147,11 @@ final class SuiteConfig {
             }
         }
 
+        // model: closed (VUs, the default) | open (arrival rate: MODEL=open, RATE = requests/s at multiplier 1).
+        // warmup: { duration, fraction, readOnly } runs before measuring (per profile, or here for all; WARMUP=off).
+        root.put("model", "closed");
+        root.putObject("warmup").put("duration", "0s").put("fraction", 0.3).put("readOnly", false);
+
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {
             modes.set(m.id(), m.defaultProfile());

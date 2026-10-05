@@ -64,26 +64,27 @@ never on a host's runtime classpath; the JUnit extension is test scope only).
 ## 3. Public contracts
 - **Java API** (`com.springaimcpservercommon.loadtest.api`, `@NullMarked`): `LoadTestGenerator.builder()…build()`
   → `discover()` (`DiscoveryResult`: catalog, plan, seed, settings, recordings) / `generate()`
-  (`GenerationResult`); `LoadTestRunner.suite(dir).mode(…).env(…).grafana(url).grafanaAnnotations(url, token)
+  (`GenerationResult`) / `readSchema(rowCounts)` (`schema.SchemaSnapshot` of the configured database) + `ddl(snapshot)`; `LoadTestRunner.suite(dir).mode(…).env(…).grafana(url).grafanaAnnotations(url, token)
   .timeout(…).run()` → `RunResult(exitCode, output, report, testId)`; `LoadTestReport.read/latest/reports`;
   `ReportComparison.compare(baseline, current, Rules)` (defaults: p95 +20 % ignoring < 10 ms, failed +1 pp,
   ≥ 10 requests).
-- **CLI** `scripts/loadtest.sh <discover|generate|run|report|compare|init-gradle|modes>` (`cli.LoadTestCli`);
+- **CLI** `scripts/loadtest.sh <discover|generate|schema|run|report|compare|init-gradle|modes>` (`cli.LoadTestCli`);
   exit codes: 0 ok, 1 failure / failed thresholds (`report`), 2 usage, 3 regression, otherwise k6's (99 =
   thresholds failed). Options in §8.
 - Orchestration: `scripts/perf-test.sh` runs generate + run against any live service and profiles its JVM with JFR
   during the load ([tools/perf-test.md](../tools/perf-test.md)); it only calls this CLI, adding no contract here.
-- **Maven plugin** (prefix `loadtest`): `discover`, `generate`, `run` (fails on failed thresholds; with
+- **Maven plugin** (prefix `loadtest`): `discover`, `generate`, `schema` (DDL of the database to a file), `run` (fails on failed thresholds; with
   `baseline`, on a regression; `skipIfK6Missing`), `compare` (`updateBaseline`); every parameter also
   `-Dloadtest.<name>`. Requires Maven on JDK 25.
-- **Gradle** `gradle/loadtest.gradle` (`loadtest init-gradle`): `loadtestDiscover|Generate|Run|Compare` as
+- **Gradle** `gradle/loadtest.gradle` (`loadtest init-gradle`): `loadtestDiscover|Generate|Schema|Run|Compare` as
   `JavaExec` on a Java 25 toolchain; `loadtest { version, javaVersion, outDir, generateArgs, mode, dataMode, env,
   k6, classpath }`; `-Ploadtest.mode|dataMode|api|baseUrl|baseline|grafana`.
 - **JUnit 5** `@K6LoadTest(project, outDir, include, exclude, database, baseUrl, env, requireK6)` + `K6Suite`
   parameter (`run`, `runner`, `assertPassed`, `assertNoRegression`, `withEnv`); target from `baseUrl`, the
   `loadtest.baseUrl` system property, or `http://localhost:<@LocalServerPort/@K6Target field><context path>`.
 - **MCP** (stdio, `scripts/loadtest-mcp.sh [--root dir]`): `loadtest_discover`, `loadtest_generate`,
-  `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`; text summary + structured content.
+  `loadtest_schema`, `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`; text summary + structured
+  content.
 - **Agent plugin** `claude-plugins/spring-loadtest` (marketplace `.claude-plugin/marketplace.json`): skills
   `loadtest-generate`, `loadtest-analyze`, `loadtest-capacity`; agent `load-test-engineer`; the MCP server.
 - Generated suite layout (stable; documented in the suite README):
@@ -100,6 +101,7 @@ never on a host's runtime classpath; the JUnit extension is test scope only).
 | `data/plan.json`, `README.md`, `run.sh` | generator | yes |
 | `data/journey.json` | generator | replaced when generated with `--har`, otherwise kept |
 | `data/seed.json` | generator | yes — seeding steps (`SeedPlan.toJson()`) |
+| `data/schema.sql` | generator | yes — DDL of the database structure the data was planned against; only when a database was reached (`--no-schema-snapshot` skips it) |
 | `hooks.js` | team | never (created once) |
 | `grafana/docker-compose.yml`, `prometheus.yml`, `provisioning/**` | team | never (created once) |
 | `grafana/dashboards/k6-load-test.json` | generator | yes — built by `tools/grafana-dashboard.py` |
@@ -244,10 +246,33 @@ degrades; `PER_API=parallel` overlaps them); `mixed-<profile>` runs one scenario
 by weight (GET 6, POST 2, PUT/PATCH 1, DELETE 0 by default). `preview` builds and prints requests without
 sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 
+**Database structure (DDL).** `LoadTestGenerator.readSchema(rowCounts)` reads the *live* structure of the configured
+database — the one `--db-url` / the project's `spring.datasource.*` names, optionally narrowed by `--db-schema` — and
+`DdlWriter` renders it as a script that rebuilds the structure on an empty database. `schema.SchemaReader` switches
+the connection to read-only, bounds every statement (30 s) and restores the connection's mode afterwards. On
+PostgreSQL 12+ it queries the catalogs and lets the server format the definitions (`pg_get_constraintdef`,
+`pg_get_indexdef`, `pg_get_viewdef`, `format_type`) after setting `search_path` to `pg_catalog`, so every reference is
+schema-qualified and the script replays under any `search_path`. It captures schemas, extensions, enum types,
+sequences (and their `OWNED BY`), tables with identity / generated / default columns, primary-key, unique, check,
+exclusion and foreign-key constraints, indexes, partitioned tables and their partitions, views and materialized
+views, table and column comments. Any other database goes through JDBC metadata (tables, views, columns, keys,
+indexes); the snapshot's `notes` say what that cannot see and the header of the DDL repeats them. System schemas,
+the library's `dynamic_ai` schema, extension-owned objects and migration history tables are left out. Statement
+order makes the script replay: schemas, extensions, enums, sequences, tables (parents before partitions), views
+(dependencies first, from `pg_depend`), indexes, foreign keys (after every table, so cycles replay), sequence
+ownership, comments. Partitioned-parent indexes are emitted without `ONLY` so they cascade to partitions. Surfaces:
+CLI `schema` (stdout, or `--out`), Maven `loadtest:schema`, Gradle `loadtestSchema`, MCP `loadtest_schema`, and
+`generate`, which writes `data/schema.sql` next to the data it planned (a failure there is logged, never fails the
+generation). Row data is never read; `--row-counts` adds an exact `count(*)` per table as a `-- rows: N` comment.
+
 ## 6. Failure modes & resilience
 | Failure | Detection | Behavior | Recovery |
 |---|---|---|---|
 | Database unreachable / bad credentials | `SQLException` on connect | logged; real data from database disabled; generation continues | fix `--db-*`, regenerate |
+| `schema` cannot connect / is denied | `SQLException` | CLI exit 1 with `database error: …` (no password in it); Maven `MojoExecutionException`; MCP error result; `generate` logs `schema snapshot skipped` and continues | fix `--db-*`, grant read on the catalogs |
+| No database configured for `schema` | `readSchema` | `IllegalStateException` → CLI exit 1, Maven `MojoFailureException`, MCP error result | `--db-url` or `spring.datasource.url` |
+| Unknown `--db-schema` | no matching schema | empty snapshot with a note; DDL has only the header | check the name |
+| Huge schema through MCP | DDL > 200 000 characters | result flagged `truncated`, text cut | use the CLI or `data/schema.sql` |
 | Column missing / sampling error | metadata check / `SQLException` | pool skipped with a log line; fields fall back to user/dummy | `--bind` to the right column |
 | Slow table | statement timeout 30 s, max rows | that pool is skipped | `--sample-size`, `--bind` a smaller column |
 | Harvest endpoint fails | HTTP status / timeout 15 s | logged; pool stays empty | start the app, `--header` for auth |
@@ -265,6 +290,12 @@ sending. Scale with `VUS`, `RATE`, `DURATION_SCALE`; narrow with `API=a,b`.
 ## 7. Security
 - Never runs inside a host; read-only JDBC connection; identifiers from configuration are matched against JDBC
   metadata and quoted; values are always bound parameters.
+- Schema snapshots read structure only (catalog queries, no table data; `count(*)` only on request) over the same
+  read-only connection. Names, types and comments from the database are quoted / doubled / flattened to one line
+  before they reach the DDL, so they cannot add a statement to the script. `data/schema.sql` and `schema` output
+  reveal table and column names: treat them like the schema itself. The MCP `loadtest_schema` takes no JDBC URL: it
+  uses only the project's own `spring.datasource.*`, because a model-supplied URL could make some drivers run
+  scripts or reach hosts the project never configured.
 - Sensitive fields (name rule in `model.Names`, `@AiEntityProperty`/`@AiContext` CONFIDENTIAL/RESTRICTED,
   OpenAPI `format: password`) are never bound to real data unless explicitly bound — real values are copied
   into `data/real.json`, so treat suites with real data like test fixtures from that database.
@@ -291,7 +322,8 @@ CLI (generation): `--project`, `--openapi`, `--actuator`, `--include`/`--exclude
 (defaults: the project's `spring.datasource.*`), `--sample-size` (200), `--harvest`, `--user-data`, `--value`,
 `--bind`, `--interactive`, `--drop-unverified`, `--auth`/`--login-path`, `--har` (repeatable), `--har-host`,
 `--har-no-values` (with a HAR and no `--base-url`, the target defaults to the recorded origin + context path),
-`--no-bundled-openapi`. Launcher: `LOADTEST_CLASSPATH` (extra jars), JDBC drivers for MySQL, MariaDB, SQL Server,
+`--no-bundled-openapi`, `--no-schema-snapshot`. `schema`: `--db-url`/`--project`, `--db-user`/`--db-password`/`--db-schema`,
+`--row-counts`, `--out`. Launcher: `LOADTEST_CLASSPATH` (extra jars), JDBC drivers for MySQL, MariaDB, SQL Server,
 Oracle, H2, SQLite and DB2 found in `~/.m2` (`MAVEN_REPO_LOCAL`) or the Gradle cache (`GRADLE_USER_HOME`)
 — `LOADTEST_DRIVER_SEARCH=0` turns that off. Suite: `loadtest.config.json`
 (`baseUrl`, `headers`, `http.timeout`, `thinkTime`, `auth`, `data.*`, `safety.*`, `seed.{enabled, perTable, cleanup}`, `thresholds`, `defaults.p95Ms`,
@@ -318,6 +350,11 @@ Generation is offline and linear in source size. At run time pools and user valu
 to exhaust); regex patterns are parsed once per VU and cached.
 
 ## 11. Limits / follow-ups
+Schema snapshots: structure only — functions, triggers, row-level-security policies, grants, ownership, foreign
+tables, sequence current values and identity-sequence options are not captured; partition-local constraints and
+custom index names on partitions are recreated by the parent's definitions; replaying needs the extensions
+installed on the target; PostgreSQL below 12 and every other database are read through JDBC metadata (no check
+constraints, view queries, enum types or sequences) and only PostgreSQL is tested.
 Multipart and form bodies are skipped (also in recordings); recorded GraphQL calls become a single
 `POST /graphql` operation (no per-query split); correlation does not cover values returned in response
 headers (e.g. `Location`) or tokens reused in `Authorization` (configure `auth.type=login` instead); Kotlin sources are not scanned (use `--openapi`/`--actuator`);

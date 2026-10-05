@@ -5,11 +5,12 @@
   "type": "module",
   "description": "Rule-engine console: login over protobuf, rule engine setup, rule group authoring, admin logs (ADR-0026)",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "proto": "pbjs -t static-module -w es6 -o src/proto/gen/session.js ../contract/src/main/protobuf/springaimcp/ruleengine/v1/session.proto && pbts -o src/proto/gen/session.d.ts src/proto/gen/session.js",
+    "dev": "npm run proto && vite",
+    "build": "npm run proto && tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --strictPort",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "test": "npm run proto && vitest run",
+    "typecheck": "npm run proto && tsc --noEmit",
     "e2e": "playwright test"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "jsdom": "^27.4.0",
+    "protobufjs-cli": "^2.7.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
     "vitest": "^5.0.3"

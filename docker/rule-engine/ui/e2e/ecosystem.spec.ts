@@ -12,6 +12,9 @@ const RULE = `e2e-age-${run}`;
 const GROUP = `e2e-group-${run}`;
 const GROUP_NAME = `E2E loan screening ${run}`;
 const SHOTS = process.env.E2E_SCREENSHOTS;
+// the seeded dev passwords (docker/rule-engine/.env.example); dev.sh e2e passes the stack's actual values
+const ADMIN_PW = process.env.E2E_ADMIN_PASSWORD ?? 'admin123';
+const USER_PW = process.env.E2E_USER_PASSWORD ?? 'user123';
 
 async function shot(page: Page, name: string) {
   if (SHOTS) {
@@ -52,7 +55,7 @@ test('the login page lists the local users and rejects a wrong password without 
 test('an administrator signs in over protobuf and lands in their tenant and organization', async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel('Username').fill('admin');
-  await page.getByLabel('Password').fill('admin123');
+  await page.getByLabel('Password').fill(ADMIN_PW);
   const requested = page.waitForRequest('**/auth/login');
   const answered = page.waitForResponse('**/auth/login');
   await page.getByRole('button', { name: 'Sign in' }).click();
@@ -76,7 +79,7 @@ test('an administrator signs in over protobuf and lands in their tenant and orga
 });
 
 test('the setup pages show the library, the rules and the groups of the tenant', async ({ page }) => {
-  await signIn(page, 'admin', 'admin123');
+  await signIn(page, 'admin', ADMIN_PW);
   await sidebar(page).getByRole('link', { name: 'Parameter library' }).click();
   await expect(page.getByText('customer.creditScore')).toBeVisible();
   await expect(page.getByRole('row', { name: /customer\.age/ })).toContainText('INT');
@@ -97,7 +100,7 @@ test('the setup pages show the library, the rules and the groups of the tenant',
 });
 
 test('a rule is checked against the parameter library when it is saved', async ({ page }) => {
-  await signIn(page, 'admin', 'admin123');
+  await signIn(page, 'admin', ADMIN_PW);
   await page.goto('/rules/new');
   await page.getByLabel('Code').fill(RULE);
   await page.getByLabel('Name', { exact: true }).fill('E2E minimum age 21');
@@ -118,7 +121,7 @@ test('a rule is checked against the parameter library when it is saved', async (
 });
 
 test('a rule group is created from rules, a policy and a trigger, then tested', async ({ page }) => {
-  await signIn(page, 'admin', 'admin123');
+  await signIn(page, 'admin', ADMIN_PW);
   await page.goto('/groups/new');
   await page.getByLabel('Code').fill(GROUP);
   await page.getByLabel('Name', { exact: true }).fill(GROUP_NAME);
@@ -159,7 +162,7 @@ test('a rule group is created from rules, a policy and a trigger, then tested', 
 });
 
 test('the administrator finds the evaluations, the changes and the chat in the logs', async ({ page }) => {
-  await signIn(page, 'admin', 'admin123');
+  await signIn(page, 'admin', ADMIN_PW);
   await sidebar(page).getByRole('link', { name: 'Logs & dashboard' }).click();
   await expect(page.getByRole('heading', { name: 'Logs & dashboard' })).toBeVisible();
   await expect(page.getByLabel('Key numbers')).toContainText('Evaluations');
@@ -192,7 +195,7 @@ test('the administrator finds the evaluations, the changes and the chat in the l
 });
 
 test('a plain user can author but never sees the logs, and the API refuses them too', async ({ page }) => {
-  await signIn(page, 'user', 'user123');
+  await signIn(page, 'user', USER_PW);
   await expect(page.getByText('Uma User')).toBeVisible();
   await expect(page.getByRole('link', { name: /Logs/ })).toHaveCount(0); // neither sidebar nor overview offers it
   await expect(page.getByRole('link', { name: 'New rule group' }).first()).toBeVisible();
@@ -209,7 +212,7 @@ test('a plain user can author but never sees the logs, and the API refuses them 
 });
 
 test('an organization user sees the tenant-wide rules, and the first organization sees their own', async ({ page }) => {
-  await signIn(page, 'corp.user', 'user123');
+  await signIn(page, 'corp.user', USER_PW);
   await expect(page.getByText('Acme Bank · Corporate')).toBeVisible();
   await sidebar(page).getByRole('link', { name: 'Rules', exact: true }).click();
   await expect(page.getByRole('row', { name: /Customer is an adult/ })).toBeVisible(); // tenant-wide
@@ -217,7 +220,7 @@ test('an organization user sees the tenant-wide rules, and the first organizatio
 });
 
 test('another tenant sees nothing of Acme', async ({ page }) => {
-  await signIn(page, 'globex.admin', 'admin123');
+  await signIn(page, 'globex.admin', ADMIN_PW);
   await expect(page.getByText('Globex Corporation · all organizations')).toBeVisible();
   await sidebar(page).getByRole('link', { name: 'Rule groups' }).click();
   await expect(page.getByText('No rule group yet.')).toBeVisible();
@@ -228,7 +231,7 @@ test('another tenant sees nothing of Acme', async ({ page }) => {
 });
 
 test('signing out ends the session', async ({ page }) => {
-  await signIn(page, 'user', 'user123');
+  await signIn(page, 'user', USER_PW);
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login$/);
   expect(await page.evaluate(() => window.sessionStorage.getItem('re.session'))).toBeNull();

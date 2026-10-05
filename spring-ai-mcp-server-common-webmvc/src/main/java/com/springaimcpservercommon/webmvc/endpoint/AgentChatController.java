@@ -742,6 +742,12 @@ public class AgentChatController {
         if (result.display() != null) {
             m.put("display", result.display().tree());
         }
+        // interactive components shown during the turn (e.g. choice), same shape as the stream's ui.component
+        if (!result.components().isEmpty()) {
+            m.put("components", result.components().stream()
+                    .map(c -> com.springaimcpservercommon.core.display.AnswerContent.parseJson(c.toJson()))
+                    .toList());
+        }
 
         return CanonicalJson.write(m);
     }

@@ -38,6 +38,9 @@ import com.springaimcpservercommon.webmvc.endpoint.GenericDynamicHandler;
 import com.springaimcpservercommon.persistence.identity.WorkspaceStore;
 import com.springaimcpservercommon.persistence.proposal.ChangeProposalStore;
 import com.springaimcpservercommon.persistence.memory.ChatMemoryStore;
+import com.springaimcpservercommon.persistence.chat.ChatUiStore;
+import com.springaimcpservercommon.ai.chat.ChatUiState;
+import com.springaimcpservercommon.ai.agent.ChatUiSpec;
 import com.springaimcpservercommon.persistence.telemetry.TelemetryStore;
 import com.springaimcpservercommon.persistence.usage.BudgetStore;
 import com.springaimcpservercommon.persistence.usage.PriceStore;
@@ -458,8 +461,38 @@ public class DaiPersistenceAutoConfiguration {
     @ConditionalOnMissingBean(ConversationRetentionJob.class)
     @ConditionalOnBean(TelemetryStore.class)
     ConversationRetentionJob conversationRetentionJob(TelemetryStore store,
-            org.springframework.beans.factory.ObjectProvider<ChatMemoryStore> memoryStore, DaiProperties props) {
-        return new ConversationRetentionJob(store, memoryStore.getIfAvailable(), props.conversations().purgeInterval());
+            org.springframework.beans.factory.ObjectProvider<ChatMemoryStore> memoryStore,
+            org.springframework.beans.factory.ObjectProvider<ChatUiStore> chatUiStore, DaiProperties props) {
+        return new ConversationRetentionJob(store, memoryStore.getIfAvailable(), chatUiStore.getIfAvailable(),
+                props.conversations().purgeInterval());
+    }
+
+    /**
+     * Store of interactive chat state: shown components, answers, feedback (V14, LLD-13 §3).
+     *
+     * @param store the framework's persistence unit
+     * @return the store
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatUiStore.class)
+    @ConditionalOnBean(DaiStore.class)
+    public ChatUiStore chatUiStore(DaiStore store) {
+        return new ChatUiStore(store, java.time.Clock.systemUTC());
+    }
+
+    /**
+     * Store-backed {@link ChatUiState}: answered choices and feedback survive reloads on every replica (ADR-0021).
+     *
+     * @param store the chat UI store
+     * @param props framework properties (retention)
+     * @return the state
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatUiState.class)
+    @ConditionalOnBean(ChatUiStore.class)
+    public ChatUiState storeChatUiState(ChatUiStore store, DaiProperties props) {
+        DaiProperties.Chat.Ui ui = props.chat().ui();
+        return new StoreChatUiState(store, ui.interactionRetention(), ui.feedbackRetention());
     }
 
     // ─── Security ports over the store (see StoreSecurityPorts) ────────────────
@@ -1307,7 +1340,17 @@ public class DaiPersistenceAutoConfiguration {
         // an invalid display template fails the agent's load (DisplayTemplateException lists every problem)
         var display = o.display != null && !o.display.isNull()
                 ? new com.springaimcpservercommon.core.display.DisplayTemplateParser().parse(o.display) : null;
-        return new OutputSpec(mode, o.jsonSchema, display);
+        return new OutputSpec(mode, o.jsonSchema, display, toChatUiSpec(o.ui));
+    }
+
+    /** Agent-level chat-interface features (LLD-13 §3); omitted flags take {@link ChatUiSpec#DEFAULT}. */
+    private static @Nullable ChatUiSpec toChatUiSpec(@Nullable ChatUiJson ui) {
+        if (ui == null) {
+            return null;
+        }
+        ChatUiSpec d = ChatUiSpec.DEFAULT;
+        return new ChatUiSpec(ui.steps != null ? ui.steps : d.steps(), ui.feedback != null ? ui.feedback : d.feedback(),
+                ui.copy != null ? ui.copy : d.copy(), ui.choices != null ? ui.choices : d.choices());
     }
 
     private static Set<CatalogElementRef> toReferences(@Nullable List<RefJson> refs) {
@@ -1408,6 +1451,14 @@ public class DaiPersistenceAutoConfiguration {
         public @Nullable String mode;
         public @Nullable String jsonSchema;
         public tools.jackson.databind.@Nullable JsonNode display;
+        public @Nullable ChatUiJson ui;
+    }
+
+    static final class ChatUiJson {
+        public @Nullable Boolean steps;
+        public @Nullable Boolean feedback;
+        public @Nullable Boolean copy;
+        public @Nullable Boolean choices;
     }
 
     static final class RefJson {

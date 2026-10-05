@@ -23,6 +23,9 @@ import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
 import com.springaimcpservercommon.loadtest.k6.GrafanaStack;
 import com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
+import com.springaimcpservercommon.loadtest.schema.DdlWriter;
+import com.springaimcpservercommon.loadtest.schema.SchemaReader;
+import com.springaimcpservercommon.loadtest.schema.SchemaSnapshot;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.node.ArrayNode;
 
@@ -305,6 +308,9 @@ public final class LoadTestGenerator {
                             s.loginPath));
             GrafanaStack.write(r.outDir(), catalog.project(),
                     GrafanaStack.scrape(baseUrl, d.settings().properties()));
+            if (db != null && s.schemaSnapshot) {
+                writeSchemaSnapshot(r.outDir().resolve("data/schema.sql"), d.settings());
+            }
             return new GenerationResult(r.outDir(), baseUrl, r.apis(), r.fields(), r.pools(), seed,
                     journey == null ? 0 : journey.size());
         } finally {
@@ -318,23 +324,97 @@ public final class LoadTestGenerator {
         }
     }
 
-    private @Nullable DatabaseSampler openDatabase(ProjectSettings settings) {
+    /**
+     * Reads the current structure of the configured database (tables, columns, keys, indexes, views, sequences,
+     * enum types) over a read-only connection. The database is the one of {@link Builder#database}, else the
+     * project's {@code spring.datasource.*}; {@link Builder#databaseSchema} narrows it to one schema.
+     *
+     * @param rowCounts also run an exact {@code count(*)} per table (can be slow on big tables)
+     * @return the snapshot; render it with {@link #ddl(SchemaSnapshot)}
+     * @throws IllegalStateException when no database is configured or {@link Builder#noDatabase()} was set
+     * @throws SQLException          when connecting or reading fails
+     */
+    public SchemaSnapshot readSchema(boolean rowCounts) throws SQLException {
+        Path projectDir = s.project;
+        ProjectSettings settings = projectDir != null && Files.isDirectory(projectDir)
+                ? ProjectSettings.read(projectDir) : ProjectSettings.DEFAULTS;
+        DbConnection c = databaseConnection(settings);
+        if (c == null) {
+            throw new IllegalStateException(s.useDatabase
+                    ? "no database configured: set a database URL (--db-url) or the project's spring.datasource.url"
+                    : "database access is disabled (noDatabase)");
+        }
+        SchemaSnapshot snapshot = SchemaReader.read(c.url(), c.user(), c.password(),
+                new SchemaReader.Options(s.dbSchema, rowCounts, false));
+        log("schema: " + snapshot.count(SchemaSnapshot.Kind.TABLE, SchemaSnapshot.Kind.PARTITIONED_TABLE)
+                + " tables, " + snapshot.count(SchemaSnapshot.Kind.VIEW, SchemaSnapshot.Kind.MATERIALIZED_VIEW)
+                + " views read from " + c.redactedUrl());
+        return snapshot;
+    }
+
+    /**
+     * Renders a snapshot as DDL that rebuilds its structure on an empty database.
+     *
+     * @param snapshot a snapshot from {@link #readSchema(boolean)}
+     * @return a SQL script
+     */
+    public String ddl(SchemaSnapshot snapshot) {
+        return DdlWriter.render(snapshot);
+    }
+
+    /** The suite's copy of the database structure the data was planned against; never fails the generation. */
+    private void writeSchemaSnapshot(Path file, ProjectSettings settings) {
+        DbConnection c = databaseConnection(settings);
+        if (c == null) {
+            return;
+        }
+        try {
+            SchemaSnapshot snapshot = SchemaReader.read(c.url(), c.user(), c.password(),
+                    new SchemaReader.Options(s.dbSchema, false, false));
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, DdlWriter.render(snapshot));
+            log("schema: database structure written to " + file.getFileName());
+        } catch (SQLException | java.io.IOException | RuntimeException e) {
+            log("schema snapshot skipped (" + e.getMessage() + ")");
+        }
+    }
+
+    /** Where to connect: URL, user and password, resolved from the builder, the environment and the project. */
+    private record DbConnection(String url, @Nullable String user, @Nullable String password) {
+
+        String redactedUrl() {
+            return url.replaceAll("(?i)(password|pwd)=[^&;]*", "$1=***");
+        }
+    }
+
+    private @Nullable DbConnection databaseConnection(ProjectSettings settings) {
         if (!s.useDatabase) {
             return null;
         }
         String url = s.dbUrl != null ? s.dbUrl : settings.datasourceUrl();
         if (url == null || url.isBlank()) {
-            log("no database configured (dbUrl or the project's spring.datasource.url): real data from "
-                    + "database disabled");
             return null;
         }
         String user = s.dbUser != null ? s.dbUser : settings.datasourceUsername();
         String password = s.dbPassword != null ? s.dbPassword
                 : System.getenv().getOrDefault("LOADTEST_DB_PASSWORD",
                 settings.datasourcePassword() == null ? "" : settings.datasourcePassword());
+        return new DbConnection(url, user, password);
+    }
+
+    private @Nullable DatabaseSampler openDatabase(ProjectSettings settings) {
+        if (!s.useDatabase) {
+            return null;
+        }
+        DbConnection c = databaseConnection(settings);
+        if (c == null) {
+            log("no database configured (dbUrl or the project's spring.datasource.url): real data from "
+                    + "database disabled");
+            return null;
+        }
         try {
-            DatabaseSampler db = DatabaseSampler.connect(url, user, password, s.dbSchema);
-            log("database: " + db.tables().size() + " tables at " + url.replaceAll("password=[^&;]*", "password=***"));
+            DatabaseSampler db = DatabaseSampler.connect(c.url(), c.user(), c.password(), s.dbSchema);
+            log("database: " + db.tables().size() + " tables at " + c.redactedUrl());
             return db;
         } catch (SQLException e) {
             log("database unavailable (" + e.getMessage() + "): real data from database disabled");
@@ -357,7 +437,7 @@ public final class LoadTestGenerator {
                             @Nullable String dbPassword, @Nullable String dbSchema, int sampleSize, boolean harvest,
                             List<Path> userDataFiles, Map<String, List<Object>> values, Map<String, String> bindings,
                             boolean dropUnverified, String authType, @Nullable String loginPath,
-                            @Nullable UserDataPrompt prompt, Consumer<String> log) {
+                            @Nullable UserDataPrompt prompt, boolean schemaSnapshot, Consumer<String> log) {
     }
 
     /**
@@ -392,6 +472,7 @@ public final class LoadTestGenerator {
         private String authType = "none";
         private @Nullable String loginPath;
         private @Nullable UserDataPrompt prompt;
+        private boolean schemaSnapshot = true;
         private Consumer<String> log = line -> { };
 
         private Builder() {
@@ -687,6 +768,18 @@ public final class LoadTestGenerator {
         }
 
         /**
+         * Whether {@code generate()} also writes {@code data/schema.sql}, the DDL of the database structure the
+         * data was planned against (only when a database was reached).
+         *
+         * @param on default {@code true}; {@code --no-schema-snapshot} turns it off
+         * @return this
+         */
+        public Builder schemaSnapshot(boolean on) {
+            this.schemaSnapshot = on;
+            return this;
+        }
+
+        /**
          * Receives progress lines (what was found, sampled, skipped). Never receives row data or secrets.
          *
          * @param log consumer
@@ -709,7 +802,7 @@ public final class LoadTestGenerator {
                     List.copyOf(har), List.copyOf(harHosts), harValues, List.copyOf(include), List.copyOf(exclude),
                     defaultExcludes, Map.copyOf(headers), outDir, baseUrl, dataMode, useDatabase, dbUrl, dbUser,
                     dbPassword, dbSchema, sampleSize, harvest, List.copyOf(userDataFiles), Map.copyOf(copiedValues),
-                    Map.copyOf(bindings), dropUnverified, authType, loginPath, prompt, log));
+                    Map.copyOf(bindings), dropUnverified, authType, loginPath, prompt, schemaSnapshot, log));
         }
     }
 }

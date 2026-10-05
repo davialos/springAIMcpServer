@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      Local rule-engine ecosystem (ADR-0026): the deployable services of the Docker dev stack. Like docker/demo-app this is
+      NOT part of the library reactor: it consumes the library artifacts (ruleengine, persistence) and builds online
+      from Maven Central, so the offline-repo stays limited to the library itself.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springaimcpservercommon.ecosystem</groupId>
+    <artifactId>rule-engine-ecosystem</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>springAIMcpServerCommon :: Rule-engine ecosystem</name>
+
+    <modules>
+        <module>contract</module>
+        <module>auth-service</module>
+        <!--M<module>rule-engine-service</module>M-->
+    </modules>
+
+    <properties>
+        <java.version>25</java.version>
+        <maven.compiler.release>25</maven.compiler.release>
+        <maven.compiler.parameters>true</maven.compiler.parameters>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <library.version>0.1.0-SNAPSHOT</library.version>
+    </properties>
+
+    <build>
+        <plugins>
+            <!-- *IT classes need PostgreSQL (Testcontainers, or ECOSYSTEM_IT_JDBC_URL): run by failsafe in verify -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.springaimcpservercommon.ecosystem</groupId>
+                <artifactId>rule-engine-contract</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

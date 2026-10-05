@@ -35,6 +35,28 @@ public final class DatabaseSampler implements AutoCloseable {
     private static final int QUERY_TIMEOUT_SECONDS = 30;
     private static final int VERIFY_CHUNK = 500;
 
+    /**
+     * Whether a schema belongs to the database or the library rather than to the host's own data (system
+     * catalogs and the library's {@code dynamic_ai} schema).
+     *
+     * @param schema schema name
+     * @return {@code true} when it is skipped by sampling and by schema snapshots
+     */
+    public static boolean isSystemSchema(String schema) {
+        String s = schema.toLowerCase(Locale.ROOT);
+        return SYSTEM_SCHEMAS.contains(s) || s.startsWith("pg_");
+    }
+
+    /**
+     * Whether a table only records schema migrations (Flyway / Liquibase history).
+     *
+     * @param table table name
+     * @return {@code true} for migration history tables
+     */
+    public static boolean isMigrationHistory(String table) {
+        return table.toLowerCase(Locale.ROOT).contains("schema_history");
+    }
+
     private final Connection connection;
     private final String quote;
     private final String product;
@@ -84,8 +106,7 @@ public final class DatabaseSampler implements AutoCloseable {
             while (rs.next()) {
                 String s = rs.getString("TABLE_SCHEM");
                 String t = rs.getString("TABLE_NAME");
-                if ((s != null && SYSTEM_SCHEMAS.contains(s.toLowerCase(Locale.ROOT)))
-                        || t.toLowerCase(Locale.ROOT).contains("schema_history")) {
+                if ((s != null && isSystemSchema(s)) || isMigrationHistory(t)) {
                     continue;
                 }
                 tables.put(qualified(s, t), new DbTable(s, t, Map.of(), List.of()));

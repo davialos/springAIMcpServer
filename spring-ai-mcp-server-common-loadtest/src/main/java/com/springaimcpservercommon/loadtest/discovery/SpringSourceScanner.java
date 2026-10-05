@@ -22,6 +22,7 @@ import com.sun.source.tree.ParameterizedTypeTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.VariableTree;
 import org.jspecify.annotations.Nullable;
+import tools.jackson.databind.JsonNode;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -86,7 +87,9 @@ public final class SpringSourceScanner {
         SourceTrees trees = SourceTrees.parse(files);
         TypeMapper mapper = new TypeMapper(trees, settings.snakeCaseJson());
         List<EntityTable> entities = new JpaEntityScanner(trees).scan();
-        Context ctx = new Context(trees, mapper, entities, settings, stereotypes(trees), composedMappings(trees));
+        ResponseTypeMapper responses = new ResponseTypeMapper(trees, mapper, settings.snakeCaseJson());
+        Context ctx = new Context(trees, mapper, responses, entities, settings, stereotypes(trees),
+                composedMappings(trees));
         Map<String, ApiEndpoint> endpoints = new LinkedHashMap<>();
         for (SourceTrees.TypeDecl decl : trees.types()) {
             ClassTree ct = decl.tree();
@@ -130,8 +133,8 @@ public final class SpringSourceScanner {
     }
 
     /** Everything a scan needs, shared by the helpers. */
-    private record Context(SourceTrees trees, TypeMapper mapper, List<EntityTable> entities,
-                           ProjectSettings settings, Set<String> stereotypes,
+    private record Context(SourceTrees trees, TypeMapper mapper, ResponseTypeMapper responses,
+                           List<EntityTable> entities, ProjectSettings settings, Set<String> stereotypes,
                            Map<String, List<String>> composedMappings) {
     }
 
@@ -315,6 +318,7 @@ public final class SpringSourceScanner {
                     .orElse(operationId(m.getName().toString(), controllerName));
             String summary = SourceTrees.annotation(m.getModifiers(), "Operation")
                     .flatMap(op -> trees.string(op, "summary")).orElse(null);
+            JsonNode response = ctx.responses().map(m.getReturnType(), d.bindings());
             for (String base : bases) {
                 for (String path : paths) {
                     for (HttpMethod method : methods) {
@@ -323,7 +327,7 @@ public final class SpringSourceScanner {
                         List<ApiParam> params = withPathConstraints(full, handler.params());
                         Schema body = method.hasBody() ? wrapRoot(handler.body(), ctx) : null;
                         out.add(new ApiEndpoint(id, method, stripRegex(full), summary, List.of(controllerName),
-                                params, body, resource, Set.of("source")));
+                                params, body, resource, Set.of("source"), response));
                     }
                 }
             }

@@ -4,6 +4,7 @@ import { check, sleep } from 'k6';
 import encoding from 'k6/encoding';
 import * as data from './data.js';
 import { parseMode } from './modes.js';
+import * as validate from './validate.js';
 
 const DEFAULT_EXPECTED = { GET: [200], HEAD: [200], POST: [200, 201, 202], PUT: [200, 201, 204], PATCH: [200, 204], DELETE: [200, 202, 204], OPTIONS: [200, 204] };
 
@@ -15,7 +16,7 @@ function baseUrl(config) {
  * Resolves the APIs this run uses (enabled in config, READ_ONLY, API filter), with their expected statuses.
  * Throws when BASE_URL looks like production and ALLOW_PROD is not set (safety.blockedHostPattern).
  */
-export function prepare(config, modules, seedSteps) {
+export function prepare(config, modules, seedSteps, responseSchemas) {
   const creates = {};
   for (const step of seedSteps || []) creates[step.api] = step;
   const url = baseUrl(config);
@@ -48,6 +49,7 @@ export function prepare(config, modules, seedSteps) {
       expected,
       callback: http.expectedStatuses(...expected),
       creates: creates[meta.id], // the table this API inserts into, if it is a create endpoint
+      responseSchema: (responseSchemas || {})[meta.id], // what a successful response looks like, if known
       mod,
     };
     byId[api.id] = api;
@@ -63,7 +65,22 @@ export function prepare(config, modules, seedSteps) {
   if (only) {
     for (const id of only) if (!byId[id]) throw new Error(`API=${id}: no such API (see loadtest.config.json → apis)`);
   }
-  return { apis, byId, baseUrl: url, config, dataMode, readOnly };
+  return { apis, byId, baseUrl: url, config, dataMode, readOnly, validation: validationSettings(config) };
+}
+
+/** config.validation, with the VALIDATE_RESPONSES / VALIDATE_SAMPLE overrides: how responses and reads are checked. */
+function validationSettings(config) {
+  const cfg = config.validation || {};
+  const mode = __ENV.VALIDATE_RESPONSES || cfg.responses || 'check';
+  const sample = __ENV.VALIDATE_SAMPLE !== undefined ? parseFloat(__ENV.VALIDATE_SAMPLE) : cfg.sample !== undefined ? cfg.sample : 0.25;
+  const raw = cfg.readAfterWrite || {};
+  return {
+    mode, // check | log | off
+    sample,
+    maxViolations: cfg.maxViolations !== undefined ? cfg.maxViolations : 0,
+    readAfterWrite: mode !== 'off' && raw.enabled !== false,
+    maxMismatches: raw.maxMismatches !== undefined ? raw.maxMismatches : 0,
+  };
 }
 
 function resolveEnv(value) {
@@ -173,10 +190,53 @@ export function send(api, req, ctx, runtime, auth, hooks, phase) {
     responseCallback: api.callback,
     timeout: (config.http && config.http.timeout) || '30s',
   });
-  check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 },
-    phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id });
+  const tags = phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id };
+  check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, tags);
+  checkResponse(api, res, runtime, tags);
   if (hooks && typeof hooks.afterResponse === 'function') hooks.afterResponse(api.id, res, req, ctx);
   return res;
+}
+
+const loggedViolations = {};
+
+/** Validates a sample of successful JSON responses against the API's schema (see lib/validate.js). */
+function checkResponse(api, res, runtime, tags) {
+  const v = runtime.validation;
+  if (v.mode === 'off' || !api.responseSchema || res.status < 200 || res.status >= 300) return;
+  if (v.sample < 1 && Math.random() >= v.sample) return;
+  const type = String(res.headers['Content-Type'] || res.headers['content-type'] || '');
+  if (type.indexOf('json') < 0 || !res.body) return;
+  let errors;
+  try {
+    errors = validate.validate(api.responseSchema, res.json());
+  } catch (e) {
+    errors = ['$: the body is not valid JSON'];
+  }
+  const ok = errors.length === 0;
+  if (v.mode === 'check') check(res, { 'response matches schema': () => ok }, tags);
+  if (ok) return;
+  validate.violations.add(1, tags);
+  if ((loggedViolations[api.id] = (loggedViolations[api.id] || 0) + 1) <= 3) {
+    console.warn(`response of ${api.method} ${api.path} (HTTP ${res.status}) breaks its schema: ${errors.join('; ')}`);
+  }
+}
+
+/** After a read that follows a write of the same row: did the read return what the write sent? */
+function checkReadAfterWrite(api, res, written, runtime) {
+  if (!runtime.validation.readAfterWrite || !written || res.status < 200 || res.status >= 300) return;
+  let body;
+  try {
+    body = res.json();
+  } catch (e) {
+    return;
+  }
+  const diffs = validate.mismatches(written, body);
+  const tags = { api: api.id };
+  check(res, { 'read returns what was written': () => diffs.length === 0 }, tags);
+  if (diffs.length) {
+    validate.readMismatches.add(1, tags);
+    console.warn(`read ${api.method} ${api.path} differs from the write before it: ${diffs.join('; ')}`);
+  }
 }
 
 // ── Journey: replay of a recorded browser flow (data/journey.json) ──────────────────────────────────────
@@ -256,7 +316,7 @@ function stepRequest(step, api, runtime, results, seeded) {
 }
 
 /** Replays the whole recorded flow once (one iteration). Steps of disabled APIs (e.g. DELETE) are skipped. */
-export function replay(runtime, steps, auth, hooks) {
+export function replay(runtime, steps, auth, hooks, options) {
   const allowed = {};
   for (const a of runtime.apis) allowed[a.id] = true;
   const cfg = runtime.config.journey || {};
@@ -264,6 +324,7 @@ export function replay(runtime, steps, auth, hooks) {
   const scale = cfg.pauseScale !== undefined ? cfg.pauseScale : 1;
   const results = [];
   results.locations = [];
+  let lastWrite = null; // body of the last successful write of this flow (lifecycle: read-after-write)
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const api = runtime.byId[step.api];
@@ -291,6 +352,14 @@ export function replay(runtime, steps, auth, hooks) {
       if (/^\d+$/.test(id) && id.length < 16) id = parseInt(id, 10);
       results.locations[i] = id;
     }
+    if (options && options.readAfterWrite) {
+      if (api.method === 'GET') {
+        checkReadAfterWrite(api, res, lastWrite, runtime);
+      } else {
+        const wrote = res.status >= 200 && res.status < 300 && req.body && typeof req.body === 'object';
+        lastWrite = wrote && api.method !== 'DELETE' ? req.body : null; // a body-less action may change anything
+      }
+    }
     // a step that failed leaves nothing for later steps to correlate with: they fall back to recorded values
     results.push(res.status >= 200 && res.status < 300 ? json : undefined);
     if (step.stopOnFailure === true && !(res.status >= 200 && res.status < 300)) break;
@@ -307,7 +376,7 @@ export function lifecycle(runtime, flows, auth, hooks) {
   const usable = flows.filter((f) => !wanted || wanted.indexOf(f.name) >= 0);
   if (!usable.length) return;
   const flow = usable[(typeof __ITER === 'number' ? __ITER : 0) % usable.length];
-  replay(runtime, flow.steps, auth, hooks);
+  replay(runtime, flow.steps, auth, hooks, { readAfterWrite: true });
 }
 
 /** MODE=lifecycle-preview: prints the steps of every flow (LIFECYCLE=<name> narrows). Sends nothing. */

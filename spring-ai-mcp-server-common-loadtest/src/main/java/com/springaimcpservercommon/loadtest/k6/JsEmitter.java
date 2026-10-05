@@ -322,9 +322,12 @@ final class JsEmitter {
                 // (entity relationships); see README "Seeding".
                 const SEED = JSON.parse(open('./data/seed.json'));
 
+                // What a successful response of each API must look like (checked on a sample of responses).
+                const RESPONSE_SCHEMAS = JSON.parse(open('./data/response-schemas.json'));
+
                 const MODULES = [
                 %s];
-                const RUNTIME = prepare(CONFIG, MODULES, SEED);
+                const RUNTIME = prepare(CONFIG, MODULES, SEED, RESPONSE_SCHEMAS);
                 export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length, LIFECYCLE.length);
 
                 export function setup() {

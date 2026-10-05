@@ -10,6 +10,7 @@ import com.springaimcpservercommon.loadtest.model.ScalarSchema;
 import com.springaimcpservercommon.loadtest.model.Schema;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
 import java.net.URLDecoder;
@@ -465,9 +466,17 @@ public final class HarReader {
                 body = SchemaInference.merge(body, SchemaInference.infer(r.body()));
             }
         }
+        ObjectNode response = null; // what the successful responses looked like, for response validation
+        for (Raw r : ok) {
+            if (r.response() != null && r.status() / 100 == 2) {
+                ObjectNode inferred = ResponseSchemas.infer(r.response());
+                response = response == null ? inferred : ResponseSchemas.merge(response, inferred);
+            }
+        }
         String summary = "recorded " + calls.size() + (calls.size() == 1 ? " call" : " calls");
         return new ApiEndpoint(operationId(first.method(), template), first.method(), template, summary,
-                List.of("recording"), params, first.method().hasBody() ? body : null, null, Set.of("har"));
+                List.of("recording"), params, first.method().hasBody() ? body : null, null, Set.of("har"),
+                ResponseSchemas.isEmpty(response) ? null : response);
     }
 
     private static void addParams(List<ApiParam> params, List<Raw> calls, ParamLocation in) {

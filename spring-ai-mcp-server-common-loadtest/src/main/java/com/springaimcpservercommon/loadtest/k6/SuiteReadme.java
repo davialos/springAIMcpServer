@@ -3,6 +3,7 @@ package com.springaimcpservercommon.loadtest.k6;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
 import com.springaimcpservercommon.loadtest.data.LifecyclePlan;
+import com.springaimcpservercommon.loadtest.discovery.ResponseSchemas;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
@@ -85,6 +86,19 @@ final class SuiteReadme {
                 .append("like production traffic (`SKEW=hot` with `hotFraction`/`hotShare`; `SKEW_S` for the Zipf ")
                 .append("exponent). `PARTITION=vu` (or `data.partition.mode`) gives every VU its own slice of each ")
                 .append("pool for writes, so concurrent updates and deletes do not fight over rows.\n\n");
+
+        long checked = catalog.endpoints().stream().filter(e -> !ResponseSchemas.isEmpty(e.responseSchema())).count();
+        md.append("## Response validation and read-after-write\n\n")
+                .append(checked).append(" of ").append(catalog.endpoints().size()).append(" APIs have a known response ")
+                .append("shape (`data/response-schemas.json`: from the OpenAPI response, the Java return type or the ")
+                .append("recorded responses). A sample of the successful JSON responses (`validation.sample`, default ")
+                .append("25%) is checked against it — wrong type, missing required member, value outside an enum — and a ")
+                .append("mismatch fails the run (`response_schema_violations` threshold, `validation.maxViolations`). ")
+                .append("`VALIDATE_RESPONSES=log` only reports, `off` disables, `VALIDATE_SAMPLE=1` checks everything. ")
+                .append("Lifecycle flows also compare each read with the write before it (a lost update shows up as ")
+                .append("`status: wrote \"PAID\", read \"NEW\"`; `read_after_write_mismatches` threshold, ")
+                .append("`validation.readAfterWrite`). The checks are lenient: extra members, dates, secrets and ")
+                .append("members the response does not return are never mismatches.\n\n");
 
         md.append("## Seeding (test data from the entity relationships)\n\n");
         if (seed == null || seed.steps().isEmpty()) {

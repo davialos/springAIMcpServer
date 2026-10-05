@@ -192,7 +192,7 @@ final class TypeMapper {
         };
     }
 
-    private static @Nullable ScalarSchema builtinScalar(String name) {
+    static @Nullable ScalarSchema builtinScalar(String name) {
         return switch (name) {
             case "String", "CharSequence", "StringBuilder" -> ScalarSchema.of(ScalarType.STRING, null);
             case "Character" -> ScalarSchema.of(ScalarType.STRING, null)
@@ -445,7 +445,7 @@ final class TypeMapper {
     }
 
     /** Instance fields of a class and its parsed superclasses, superclass fields first. */
-    private List<VariableTree> fields(ClassTree ct, Set<String> seen) {
+    List<VariableTree> fields(ClassTree ct, Set<String> seen) {
         List<VariableTree> out = new ArrayList<>();
         if (!seen.add(ct.getSimpleName().toString())) {
             return out;

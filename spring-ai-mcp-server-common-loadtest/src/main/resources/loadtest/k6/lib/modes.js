@@ -110,6 +110,9 @@ function thresholds(config, profile, runtime, mixed) {
     t[`http_req_failed{api:${api.id}}`] = errorRate !== undefined ? [`rate<${errorRate}`] : ['rate>=0'];
     t[`http_reqs{api:${api.id}}`] = ['count>=0']; // keeps a per-API request count in the summary
   }
+  const v = runtime.validation || {};
+  if (v.mode === 'check') t.response_schema_violations = [`count<=${v.maxViolations || 0}`];
+  if (v.readAfterWrite) t.read_after_write_mismatches = [`count<=${v.maxMismatches || 0}`];
   if (profile.abortOnFail) {
     for (const metric of Object.keys(base)) {
       t[metric] = t[metric].map((r) => ({ threshold: r, abortOnFail: true, delayAbortEval: profile.delayAbortEval || '30s' }));

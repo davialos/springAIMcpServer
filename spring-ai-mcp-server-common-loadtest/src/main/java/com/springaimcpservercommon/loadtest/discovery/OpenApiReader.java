@@ -16,6 +16,7 @@ import com.springaimcpservercommon.loadtest.model.ScalarType;
 import com.springaimcpservercommon.loadtest.model.Schema;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -148,7 +149,143 @@ public final class OpenApiReader {
         op.path("tags").forEach(t -> tags.add(t.asString()));
         String summary = op.path("summary").isString() ? op.path("summary").asString() : null;
         return new ApiEndpoint(id, method, path, summary, tags, new ArrayList<>(params.values()), body, null,
-                Set.of("openapi"));
+                Set.of("openapi"), responseSchema(op));
+    }
+
+    // ── response validation schemas ────────────────────────────────────────────────────────────────────
+
+    /**
+     * What a successful response looks like: the lowest 2xx response that declares a JSON body. References are
+     * inlined (a cycle or a nesting past {@link ResponseSchemas#MAX_DEPTH} becomes "anything"); read-only members
+     * stay (a response carries them), write-only ones go.
+     */
+    private @Nullable JsonNode responseSchema(JsonNode op) {
+        String best = null;
+        JsonNode bestContent = null;
+        for (var r : op.path("responses").properties()) {
+            String code = r.getKey();
+            if (!code.matches("2\\d\\d") || best != null && code.compareTo(best) >= 0) {
+                continue;
+            }
+            for (var c : deref(r.getValue()).path("content").properties()) {
+                if (c.getKey().contains("json")) {
+                    best = code;
+                    bestContent = c.getValue();
+                    break;
+                }
+            }
+        }
+        if (bestContent == null || !bestContent.has("schema")) {
+            return null;
+        }
+        ObjectNode out = responseNode(bestContent.path("schema"), 0, new HashSet<>());
+        return ResponseSchemas.isEmpty(out) ? null : out;
+    }
+
+    private ObjectNode responseNode(JsonNode raw, int depth, Set<String> refs) {
+        if (depth >= ResponseSchemas.MAX_DEPTH || raw.isMissingNode() || raw.isNull()) {
+            return ResponseSchemas.any();
+        }
+        String ref = raw.path("$ref").isString() ? raw.path("$ref").asString() : null;
+        if (ref != null && !refs.add(ref)) {
+            return ResponseSchemas.any(); // a cycle
+        }
+        try {
+            JsonNode node = deref(raw);
+            boolean nullable = node.path("nullable").asBoolean(false) || nullInType(node);
+            ObjectNode out = responseShape(node, depth, refs);
+            if (nullable) {
+                out.put("nullable", true);
+            }
+            return out;
+        } finally {
+            if (ref != null) {
+                refs.remove(ref);
+            }
+        }
+    }
+
+    private ObjectNode responseShape(JsonNode node, int depth, Set<String> refs) {
+        if (node.has("allOf")) {
+            ObjectNode merged = ResponseSchemas.object();
+            for (JsonNode part : node.path("allOf")) {
+                ObjectNode p = responseNode(part, depth + 1, refs);
+                if (!"object".equals(p.path("type").asString(""))) {
+                    return ResponseSchemas.any(); // a non-object part: no reliable shape
+                }
+                for (var e : p.path("properties").properties()) {
+                    ResponseSchemas.property(merged, e.getKey(), e.getValue(),
+                            ResponseSchemas.required(p).contains(e.getKey()));
+                }
+            }
+            for (var e : responseProperties(node, depth, refs).properties()) {
+                ResponseSchemas.property(merged, e.getKey(), e.getValue(),
+                        declaresRequired(node, e.getKey()));
+            }
+            return merged;
+        }
+        if (node.has("oneOf") || node.has("anyOf")) {
+            return ResponseSchemas.any(); // which branch the server answers with is data-dependent
+        }
+        String type = type(node);
+        if (type.equals("array")) {
+            return ResponseSchemas.array(responseNode(node.path("items"), depth + 1, refs));
+        }
+        if (List.of("string", "integer", "number", "boolean").contains(type)) {
+            ObjectNode n = ResponseSchemas.scalar(type);
+            if (node.path("enum").isArray() && !node.path("enum").isEmpty()) {
+                var values = n.putArray("enum");
+                node.path("enum").forEach(v -> {
+                    if (!v.isNull()) {
+                        values.add(v.asString());
+                    }
+                });
+            }
+            return n;
+        }
+        if (type.equals("object") || node.has("properties")) {
+            ObjectNode o = ResponseSchemas.object();
+            for (var e : responseProperties(node, depth, refs).properties()) {
+                ResponseSchemas.property(o, e.getKey(), e.getValue(),
+                        declaresRequired(node, e.getKey()));
+            }
+            return o;
+        }
+        return ResponseSchemas.any();
+    }
+
+    /** Member schemas of an object node, without the write-only ones. */
+    private ObjectNode responseProperties(JsonNode node, int depth, Set<String> refs) {
+        ObjectNode props = ResponseSchemas.any();
+        for (var e : node.path("properties").properties()) {
+            JsonNode p = deref(e.getValue());
+            if (p.path("writeOnly").asBoolean(false)) {
+                continue;
+            }
+            props.set(e.getKey(), responseNode(e.getValue(), depth + 1, refs));
+        }
+        return props;
+    }
+
+    private static boolean declaresRequired(JsonNode node, String name) {
+        for (JsonNode r : node.path("required")) {
+            if (r.asString().equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean nullInType(JsonNode node) {
+        JsonNode t = node.path("type");
+        if (t.isArray()) {
+            for (JsonNode x : t) {
+                if ("null".equals(x.asString())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private JsonNode deref(JsonNode node) {

@@ -85,6 +85,12 @@ final class SuiteConfig {
         root.putObject("journey").put("pauseScale", 1.0).put("maxPauseMs", 5000);
         root.putObject("seed").put("enabled", true).put("perTable", 5).put("cleanup", false);
         root.putObject("lifecycle").put("deleteOwnRows", true);
+        // responses: check (a mismatch fails the run) | log (counted and logged) | off. sample: share of responses
+        // validated (parsing costs load-generator CPU). maxViolations: tolerated mismatches before the threshold fails.
+        // readAfterWrite: lifecycle flows compare what a read returns with what the previous write sent.
+        ObjectNode validation = root.putObject("validation");
+        validation.put("responses", "check").put("sample", 0.25).put("maxViolations", 0);
+        validation.putObject("readAfterWrite").put("enabled", true).put("maxMismatches", 0);
 
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {

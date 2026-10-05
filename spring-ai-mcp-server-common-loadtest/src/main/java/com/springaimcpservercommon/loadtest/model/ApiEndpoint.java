@@ -2,6 +2,8 @@ package com.springaimcpservercommon.loadtest.model;
 
 import org.jspecify.annotations.Nullable;
 
+import tools.jackson.databind.JsonNode;
+
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -21,16 +23,49 @@ import java.util.Set;
  * @param resource entity the endpoint operates on, when known (e.g. the controller's {@code @AiContext} or the
  *                 collection segment of the path); used to bind real data
  * @param sources  where the endpoint was discovered ({@code source}, {@code openapi}, {@code actuator})
+ * @param responseSchema what a successful response looks like, as a JSON-Schema subset ({@code type},
+ *                 {@code properties}, {@code required}, {@code items}, {@code enum}; {@code {}} = anything) for response
+ *                 validation, or {@code null} when it is unknown or not JSON. Separate from {@code body}: responses keep
+ *                 ids, read-only fields and nested objects that request schemas leave out.
  */
 public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
                           List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
-                          Set<String> sources) {
+                          Set<String> sources, @Nullable JsonNode responseSchema) {
 
     /** Compact constructor: defensive copies. */
     public ApiEndpoint {
         tags = List.copyOf(tags);
         params = List.copyOf(params);
         sources = Set.copyOf(new LinkedHashSet<>(sources));
+    }
+
+    /**
+     * An endpoint whose response shape is unknown.
+     *
+     * @param id       identifier
+     * @param method   HTTP method
+     * @param path     URI template
+     * @param summary  description
+     * @param tags     tags
+     * @param params   parameters
+     * @param body     request body schema
+     * @param resource entity the endpoint operates on
+     * @param sources  discovery sources
+     */
+    public ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
+                       List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
+                       Set<String> sources) {
+        this(id, method, path, summary, tags, params, body, resource, sources, null);
+    }
+
+    /**
+     * Copy with a response schema.
+     *
+     * @param response response schema, or {@code null}
+     * @return the endpoint
+     */
+    public ApiEndpoint withResponse(@Nullable JsonNode response) {
+        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, response);
     }
 
     /**
@@ -87,6 +122,6 @@ public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable S
      * @return the copy
      */
     public ApiEndpoint withId(String newId) {
-        return new ApiEndpoint(newId, method, path, summary, tags, params, body, resource, sources);
+        return new ApiEndpoint(newId, method, path, summary, tags, params, body, resource, sources, responseSchema);
     }
 }

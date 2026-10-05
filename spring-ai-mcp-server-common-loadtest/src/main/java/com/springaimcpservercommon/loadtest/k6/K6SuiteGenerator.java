@@ -6,6 +6,7 @@ import com.springaimcpservercommon.loadtest.data.LifecyclePlan;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.ResponseSchemas;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import org.jspecify.annotations.Nullable;
@@ -39,6 +40,7 @@ import java.util.stream.Stream;
  * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * data/lifecycle.json    per-resource business flows from the code, MODE=lifecycle-&lt;profile&gt;
+ * data/response-schemas.json  what a successful response of each API looks like (validated under load)
  * hooks.js               user hooks (created once, never overwritten)
  * grafana/               Prometheus + Grafana stack and dashboard (written by GrafanaStack)
  * README.md              how to run; API and field tables
@@ -48,7 +50,7 @@ public final class K6SuiteGenerator {
 
     private static final List<String> RUNTIME_FILES = List.of(
             "lib/data.js", "lib/dummy.js", "lib/random.js", "lib/modes.js", "lib/http.js", "lib/report.js",
-            "lib/grafana.js", "lib/dictionaries.json");
+            "lib/grafana.js", "lib/validate.js", "lib/dictionaries.json");
 
     /**
      * Generation options.
@@ -162,6 +164,7 @@ public final class K6SuiteGenerator {
             LifecyclePlan lifecycle = seed == null ? new LifecyclePlan(List.of())
                     : LifecyclePlan.build(catalog, plan, seed);
             writeJson(out.resolve("data/lifecycle.json"), lifecycle.toJson());
+            writeJson(out.resolve("data/response-schemas.json"), responseSchemas(catalog));
 
             Files.writeString(out.resolve("README.md"),
                     SuiteReadme.render(catalog, plan, realPools, user, config, seed, lifecycle));
@@ -171,6 +174,17 @@ public final class K6SuiteGenerator {
         } catch (IOException e) {
             throw new UncheckedIOException("cannot write suite to " + out, e);
         }
+    }
+
+    /** API id → response schema, for the APIs whose success response shape is known. */
+    static ObjectNode responseSchemas(ApiCatalog catalog) {
+        ObjectNode out = Documents.json().createObjectNode();
+        for (ApiEndpoint e : catalog.endpoints()) {
+            if (!ResponseSchemas.isEmpty(e.responseSchema())) {
+                out.set(e.id(), e.responseSchema());
+            }
+        }
+        return out;
     }
 
     private static void removeStaleGenerated(Path apis, ApiCatalog catalog) throws IOException {

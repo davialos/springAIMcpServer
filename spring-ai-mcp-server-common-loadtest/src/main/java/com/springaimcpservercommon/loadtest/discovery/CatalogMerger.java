@@ -87,7 +87,8 @@ public final class CatalogMerger {
         List<String> tags = first.tags().isEmpty() ? later.tags() : first.tags();
         return new ApiEndpoint(first.id(), first.method(), first.path(),
                 first.summary() != null ? first.summary() : later.summary(), tags, new ArrayList<>(params.values()),
-                body, first.resource() != null ? first.resource() : later.resource(), sources);
+                body, first.resource() != null ? first.resource() : later.resource(), sources,
+                first.responseSchema() != null ? first.responseSchema() : later.responseSchema());
     }
 
     private static boolean isUnknown(Schema s) {
@@ -134,7 +135,7 @@ public final class CatalogMerger {
             String path = (prefix + "/" + e.path()).replaceAll("/+", "/");
             path = path.length() > 1 && path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
             moved.add(new ApiEndpoint(e.id(), e.method(), path, e.summary(), e.tags(), e.params(), e.body(),
-                    e.resource(), e.sources()));
+                    e.resource(), e.sources(), e.responseSchema()));
         }
         return new ApiCatalog(catalog.project(), basePath, moved, catalog.schemas(), catalog.entities());
     }

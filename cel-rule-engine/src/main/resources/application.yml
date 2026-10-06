@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: cel-rule-engine
+  datasource:
+    url: ${RULEENGINE_DB_URL:jdbc:postgresql://localhost:5432/ruleengine}
+    username: ${RULEENGINE_DB_USER:ruleengine}
+    password: ${RULEENGINE_DB_PASSWORD:ruleengine}
+  flyway:
+    # db/seed holds local reference data (tenant ACME, rules, messages); drop it for an empty production database
+    locations: classpath:db/migration,classpath:db/seed
+
+server:
+  port: ${PORT:8080}
+
+ruleengine:
+  # DEV | QA | PROD: API channels may only call APIs of this environment
+  environment: ${RULEENGINE_ENV:DEV}
+  # host patterns per environment; a host in none of them is "external" and must be confirmed once
+  api-hosts:
+    dev: [localhost, 127.0.0.1, "*.dev.acme.test"]
+    qa: ["*.qa.acme.test"]
+    prod: ["*.acme.com"]
+  library-refresh: 5m
+  default-language: en
+  store-context-keys: true
+  channels:
+    email-gateway-url: ${RULEENGINE_EMAIL_GATEWAY_URL:}
+    push-gateway-url: ${RULEENGINE_PUSH_GATEWAY_URL:}
+    api-timeout: 5s
+
+logging:
+  level:
+    com.springaimcpservercommon.ruleengine: INFO

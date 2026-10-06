@@ -91,6 +91,8 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
   regenerate with `scripts/schema-usecase-map/` + the `schema-usecase-mapper` agent
 - `.claude/agents/saimcp-*.md` — host-integration experts per feature (start with `saimcp-integration-lead`); keep them
   in step with the code when a feature's wiring changes
+- `cel-rule-engine/` — standalone Spring Boot app (not part of the starter reactor): multi-tenant CEL rule engine with a parameter
+  library, evaluation policies, multilingual messages and notification channels; see its README
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
 

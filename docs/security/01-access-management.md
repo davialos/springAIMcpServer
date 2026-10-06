@@ -107,6 +107,10 @@ Mapping result cached per (issuer, subject, token hash / session id) for its lif
 | `data:write-confirm` (confirm own proposal) | via grant | | | via grant | via grant | | | via grant |
 | `data:write-approve` (second-person approval) | | | | | | ✔ | | |
 | `audit:read` | | ✔ | ✔ | own ws | | | | |
+| `rules:read` (rule engine, LLD-18) | ✔ | | | ✔ | ✔ | ✔ | | |
+| `rules:author` (drafts, submit, messages/templates/endpoints/channels/triggers) | ✔ | | | ✔ | ✔ | | | |
+| `rules:publish` (approve, reject, publish, rollback, retire, retry dead deliveries) | ✔ | | | ✔ | | ✔ | | |
+| `rules:library` (platform parameter library, global only) | ✔ | | | | | | | |
 | `endpoint/agent/tool:invoke` | via grant | | | via grant | via grant (playground: draft only) | | | via grant |
 
 \* requires approval by a second `PLATFORM_ADMIN`/`SECURITY_ADMIN`. ** only when publish policy says approval not required.

@@ -1586,6 +1586,10 @@ Other rules: no prompt content, answers, `values` or row data in logs; audit sto
 
 ## 12. Persistence (design sketch for migration V11)
 
+> **Name clash (OQ-79).** `dai_chat_interaction` already exists (V14) for the `dai-stream/1` `choice` answers of
+> `<saimcp-chat>` (LLD-13 §3.1). Rename the table below, or migrate those rows into it, when P1 lands; the next free
+> migration number is V15.
+
 Conventions as LLD-15 §4: UUIDv7 keys set by the application, `timestamptz` UTC, closed sets as `text` plus `CHECK`, `row_version` for mutable rows, `dai_` prefix. These tables merge into LLD-15 when V11 lands.
 
 ```sql

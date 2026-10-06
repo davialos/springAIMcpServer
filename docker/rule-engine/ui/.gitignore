@@ -1,0 +1,7 @@
+node_modules
+dist
+test-results
+playwright-report
+e2e/screenshots
+# generated from ../contract/src/main/protobuf by `npm run proto`
+src/proto/gen

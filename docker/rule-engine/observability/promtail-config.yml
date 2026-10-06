@@ -1,0 +1,42 @@
+# Ships the stdout of every container that carries the label logging=promtail (compose sets it on the two services and the UI
+# web server). The services print one JSON object per line (Spring Boot structured logging, ecs/logstash format); the pipeline
+# lifts level and logger into labels so Grafana can filter on them. Message text is never indexed.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /positions/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["logging=promtail"]
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: project
+    pipeline_stages:
+      # nginx lines are plain text and fail the json stage harmlessly; the services' lines are logstash JSON
+      - json:
+          expressions:
+            level: level
+            logger: logger_name
+            message: message
+            trace: traceId
+      - labels:
+          level:
+      - structured_metadata:
+          logger:
+          trace:
+      - output:
+          source: message

@@ -4,7 +4,7 @@ Load testing for Spring Boot projects with Grafana k6, driven by an agent.
 
 | Part | What it does |
 |---|---|
-| MCP server `spring-loadtest` | Tools `loadtest_discover`, `loadtest_generate`, `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes` over the generator in this repository |
+| MCP server `spring-loadtest` | Tools `loadtest_discover`, `loadtest_generate`, `loadtest_schema`, `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes` over the generator in this repository |
 | Skill `loadtest-generate` | Create or refresh a suite for a project and iterate until `smoke` passes |
 | Skill `loadtest-analyze` | Explain a run: report, baseline comparison, Grafana/Prometheus app metrics, JFR hot spots → ranked findings |
 | Skill `loadtest-capacity` | Stress and breakpoint runs to find the sustainable rate per API and for the mix |

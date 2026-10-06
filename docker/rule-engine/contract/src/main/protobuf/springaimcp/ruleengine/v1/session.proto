@@ -1,0 +1,52 @@
+// Wire contract of the rule-engine ecosystem (ADR-0026).
+//
+// The login flow moves the signed-in user together with the tenant and organization it works for. The ids are opaque
+// strings owned by the host (ADR-0005): the canonical text form of a UUID. The same ids are signed into the access
+// token's claims; services take them from the token, never from a request body, so a client cannot widen its scope.
+//
+// Evolving: only add fields with new numbers; never renumber or reuse a number (proto3 compatibility).
+syntax = "proto3";
+
+package springaimcp.ruleengine.v1;
+
+option java_multiple_files = true;
+option java_package = "com.springaimcpservercommon.ruleengine.contract.v1";
+option java_outer_classname = "SessionProto";
+
+// What a user may do. ADMIN includes everything USER may do and can read the operational logs.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER = 1;
+  ROLE_ADMIN = 2;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// The signed-in user and the scope every later request runs in.
+message Session {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+  Role role = 4;
+  string tenant_id = 5;
+  string tenant_name = 6;
+  string organization_id = 7;
+  string organization_name = 8;
+}
+
+message LoginResponse {
+  Session session = 1;
+  // Bearer token for the rule-engine API; carries the same tenant and organization ids as signed claims.
+  string access_token = 2;
+  // Token expiry, seconds since the Unix epoch (UTC).
+  int64 expires_at_epoch_seconds = 3;
+}
+
+// Failure body of the auth endpoints when the client asked for protobuf.
+message ErrorResponse {
+  string code = 1;
+  string message = 2;
+}

@@ -85,6 +85,17 @@ public record DynamicAiSecurityOptions(
     }
 
     /**
+     * Pattern of the static chat UI assets (the {@code spring-ai-mcp-server-common-chat-ui} jar serves them from
+     * {@code META-INF/resources/dynamic-ai/ui/}). They hold no data, so anonymous {@code GET}s are permitted; every
+     * API call the UI makes is still authenticated.
+     *
+     * @return {@code <base>/ui/**}
+     */
+    public String uiPattern() {
+        return basePath + "/ui/**";
+    }
+
+    /**
      * Pattern of everything under the base path.
      *
      * @return {@code <base>/**}

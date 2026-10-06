@@ -3,6 +3,7 @@ package com.springaimcpservercommon.security.web;
 import com.springaimcpservercommon.security.apikey.ApiKeyAuthenticationFilter;
 import org.jspecify.annotations.Nullable;
 import org.springframework.core.Ordered;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.HeadersConfigurer;
@@ -165,7 +166,9 @@ public final class DynamicAiHttpSecurityConfigurer {
                     .csrf(csrf -> csrf.disable());
         }
         http.headers(h -> commonHeaders(h, DynamicAiSecurityOptions.API_CSP, ReferrerPolicy.NO_REFERRER))
-                .authorizeHttpRequests(a -> a.anyRequest().authenticated())
+                // static chat UI assets: no data, loaded by a <script> tag before the user's token is known
+                .authorizeHttpRequests(a -> a.requestMatchers(HttpMethod.GET, options.uiPattern()).permitAll()
+                        .anyRequest().authenticated())
                 .exceptionHandling(e -> e.authenticationEntryPoint(entryPoint).accessDeniedHandler(deniedHandler));
         tokenAuthentication(http, entryPoint);
     }

@@ -1,0 +1,212 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# CEL rule engine — complete local ecosystem (ADR-0026)
+#
+#   scripts/rule-engine/dev.sh up        one command: generates .env on first run, builds, starts, seeds, waits until healthy
+#
+#   console (UI)  http://localhost:8080     admin / admin123 and user / user123 (seeded, local stack only)
+#   Grafana       http://localhost:3000     admin / admin (dashboard "Rule engine — operations")
+#   Prometheus    http://localhost:9090     Loki http://localhost:3100     PostgreSQL localhost:55433
+#
+# Every published port is bound to 127.0.0.1. Passwords and the token-signing key are generated into .env (git-ignored).
+# The defaults below exist so `docker compose config` works on a fresh checkout; dev.sh never relies on them.
+# ──────────────────────────────────────────────────────────────────────────────
+name: ruleengine
+
+x-service-env: &service-env
+  JWT_SECRET: ${JWT_SECRET:?run scripts/rule-engine/dev.sh up (it creates .env)}
+  # one JSON object per line: promtail ships them to Loki without parsing free text
+  LOGGING_STRUCTURED_FORMAT_CONSOLE: logstash
+
+x-java-health: &java-health
+  # the runtime image has neither curl nor wget: speak HTTP over bash's /dev/tcp
+  interval: 10s
+  timeout: 5s
+  start_period: 40s
+  retries: 6
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dai_store}
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?run scripts/rule-engine/dev.sh up}
+      DAI_MIGRATOR_PASSWORD: ${RULES_MIGRATOR_PASSWORD:?run scripts/rule-engine/dev.sh up}
+      DAI_APP_PASSWORD: ${RULES_APP_PASSWORD:?run scripts/rule-engine/dev.sh up}
+      RE_AUTH_PASSWORD: ${AUTH_DB_PASSWORD:?run scripts/rule-engine/dev.sh up}
+      GRAFANA_RO_PASSWORD: ${GRAFANA_RO_PASSWORD:?run scripts/rule-engine/dev.sh up}
+    ports:
+      - "127.0.0.1:${RE_PG_PORT:-55433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # the library's own roles + schema (shared with the root stack), then this ecosystem's roles
+      - ../postgres/init.sh:/docker-entrypoint-initdb.d/00_library.sh:ro
+      - ./postgres/10_ecosystem.sh:/docker-entrypoint-initdb.d/10_ecosystem.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  auth-service:
+    image: ruleengine/auth-service:dev
+    build:
+      context: ../..
+      dockerfile: docker/rule-engine/Dockerfile.service
+      args:
+        SERVICE: auth-service
+    restart: unless-stopped
+    labels:
+      logging: promtail
+    environment:
+      <<: *service-env
+      AUTH_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-dai_store}
+      AUTH_DB_USER: re_auth
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin123}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-user123}
+    ports:
+      - "127.0.0.1:${RE_AUTH_PORT:-8091}:8091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8091 && printf 'GET /actuator/health/readiness HTTP/1.0\\r\\nHost: x\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      <<: *java-health
+
+  rule-engine-service:
+    image: ruleengine/rule-engine-service:dev
+    build:
+      context: ../..
+      dockerfile: docker/rule-engine/Dockerfile.service
+      args:
+        SERVICE: rule-engine-service
+    restart: unless-stopped
+    labels:
+      logging: promtail
+    environment:
+      <<: *service-env
+      RULES_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-dai_store}
+      RULES_DB_USER: dai_app
+      RULES_DB_PASSWORD: ${RULES_APP_PASSWORD}
+      RULES_MIGRATOR_USER: dai_migrator
+      RULES_MIGRATOR_PASSWORD: ${RULES_MIGRATOR_PASSWORD}
+      # decides which API environments communication channels may call (LLD-12): the local stack is DEV
+      DAI_ENV_TIER: dev
+    ports:
+      - "127.0.0.1:${RE_RULES_PORT:-8092}:8092"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8092 && printf 'GET /actuator/health/readiness HTTP/1.0\\r\\nHost: x\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      <<: *java-health
+
+  # one-shot, after both services are healthy (their Flyway migrations created the tables): Grafana grants, sample rules, dev history
+  seed:
+    image: postgres:16-alpine
+    restart: "no"
+    entrypoint: ["/bin/sh", "/seed/run.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-dai_store}
+      PGUSER: ${POSTGRES_SUPERUSER:-postgres}
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+    volumes:
+      - ./seed:/seed:ro
+      - ../../scripts/rule-engine/sample-data.sql:/scripts/sample-data.sql:ro
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      rule-engine-service:
+        condition: service_healthy
+
+  ui:
+    image: ruleengine/ui:dev
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+      args:
+        DEV_LOGIN_HINT: "true"
+    restart: unless-stopped
+    labels:
+      logging: promtail
+    environment:
+      AUTH_UPSTREAM: auth-service:8091
+      RULES_UPSTREAM: rule-engine-service:8092
+    ports:
+      - "127.0.0.1:${RE_UI_PORT:-8080}:8080"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      rule-engine-service:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - "127.0.0.1:${RE_PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+
+  loki:
+    image: grafana/loki:3.1.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports:
+      - "127.0.0.1:${RE_LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - promtail-positions:/positions
+      # Docker service discovery needs the daemon socket (read-only still lets the holder list and read every container's logs):
+      # acceptable for a local stack, never copy this into a shared environment (docs/lld/18 §12.6).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/rule-engine-ops.json
+      # interpolated by the datasource provisioning file
+      POSTGRES_DB: ${POSTGRES_DB:-dai_store}
+      GRAFANA_RO_PASSWORD: ${GRAFANA_RO_PASSWORD}
+    ports:
+      - "127.0.0.1:${RE_GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+      - postgres
+
+volumes:
+  pgdata:
+  promdata:
+  lokidata:
+  promtail-positions:
+  grafanadata:

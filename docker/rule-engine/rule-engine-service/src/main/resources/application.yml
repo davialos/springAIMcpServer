@@ -42,6 +42,10 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      # latency heat-maps and p95/p99 in Grafana come from the histogram buckets
+      percentiles-histogram:
+        http.server.requests: true
 
 ecosystem:
   rules:

@@ -1,0 +1,27 @@
+# One image recipe for both Spring Boot services (ARG SERVICE = auth-service | rule-engine-service).
+# Build context is the REPOSITORY ROOT: the rule-engine service uses the library modules (ruleengine, persistence) that are
+# installed into the build's Maven cache first.
+#   docker build -f docker/rule-engine/Dockerfile.service --build-arg SERVICE=rule-engine-service -t ruleengine/rule-engine-service:dev .
+
+# the repository requires JDK 25 and Maven 3.9.x (maven-enforcer): the official image has both
+FROM maven:3.9.11-eclipse-temurin-25-noble AS build
+ARG SERVICE
+WORKDIR /workspace
+COPY . .
+# 1. the library modules the services depend on (no tests: they need Docker-in-Docker and run in CI)
+# 2. the service, as an executable jar
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -B -q -pl spring-ai-mcp-server-common-ruleengine,spring-ai-mcp-server-common-persistence -am install \
+        -DskipTests -DskipITs --no-transfer-progress && \
+    mvn -B -q -f docker/rule-engine/pom.xml -pl ${SERVICE} -am package -DskipTests -DskipITs --no-transfer-progress && \
+    cp docker/rule-engine/${SERVICE}/target/*.jar /workspace/app.jar
+
+FROM eclipse-temurin:25-jre-noble AS runtime
+ARG SERVICE
+RUN groupadd --system app && useradd --system --gid app --home /app --shell /usr/sbin/nologin app
+WORKDIR /app
+COPY --from=build --chown=app:app /workspace/app.jar /app/app.jar
+USER app
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -Dfile.encoding=UTF-8 -Djava.security.egd=file:/dev/./urandom"
+LABEL org.opencontainers.image.title="rule-engine-ecosystem ${SERVICE}"
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

@@ -1,0 +1,9 @@
+# context = docker/rule-engine (the UI image)
+**/node_modules
+**/dist
+**/target
+ui/test-results
+ui/playwright-report
+ui/e2e/screenshots
+ui/src/proto/gen
+.env

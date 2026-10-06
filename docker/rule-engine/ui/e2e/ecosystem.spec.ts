@@ -7,6 +7,27 @@ import { expect, test, type Page } from '@playwright/test';
  */
 test.describe.configure({ mode: 'serial' });
 
+/**
+ * The console runs under a strict Content-Security-Policy (no eval, no inline script or style). Any violation, uncaught error or
+ * failed same-origin request in ANY test is a failure: a CSP that silently blocks the protobuf codec would otherwise only show
+ * up as a blank page in production.
+ */
+const problems: string[] = [];
+test.beforeEach(({ page }) => {
+  problems.length = 0;
+  page.on('pageerror', (e) => problems.push(`uncaught: ${e.message}`));
+  page.on('console', (m) => {
+    // refusals (401/403/422...) are asserted by the tests that provoke them; everything else at error level is a problem
+    // ("Refused to load/execute ... Content Security Policy" included)
+    if (m.type() === 'error' && !/Failed to load resource: the server responded with a status of 4\d\d/.test(m.text())) {
+      problems.push(`console: ${m.text()}`);
+    }
+  });
+});
+test.afterEach(() => {
+  expect(problems, 'browser errors / CSP violations').toEqual([]);
+});
+
 const run = Date.now().toString(36);
 const RULE = `e2e-age-${run}`;
 const GROUP = `e2e-group-${run}`;

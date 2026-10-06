@@ -734,18 +734,26 @@ class RuleEngineServiceIT {
 
     @Test
     void theChatLogShowsTheTenantsConversationsAndTranscripts() {
-        Resp list = api.get("/api/v1/admin/logs/conversations", Persona.ADMIN);
+        Resp list = api.get("/api/v1/admin/logs/conversations?size=100", Persona.ADMIN);
 
-        assertThat(list.at("/total").asLong()).isEqualTo(1);
-        assertThat(list.at("/items/0/title").asString()).isEqualTo("Why was my loan blocked?");
-        assertThat(list.at("/items/0/messages").asInt()).isEqualTo(2);
-        String id = list.at("/items/0/id").asString();
+        // other tests of this class chat with the assistant, so look the seeded conversation up by its title
+        JsonNode seededConversation = null;
+        for (JsonNode c : list.at("/items")) {
+            if ("Why was my loan blocked?".equals(c.at("/title").asString())) {
+                seededConversation = c;
+            }
+        }
+        assertThat(seededConversation).isNotNull();
+        assertThat(seededConversation.at("/messages").asInt()).isEqualTo(2);
+        String id = seededConversation.at("/id").asString();
         Resp detail = api.get("/api/v1/admin/logs/conversations/" + id, Persona.ADMIN);
         assertThat(detail.at("/messages/1/role").asString()).isEqualTo("ASSISTANT");
         assertThat(detail.at("/messages/1/content").asString()).isEqualTo("Your score was below 650.");
 
         // another tenant's administrator sees none of it and cannot fetch it by id
-        assertThat(api.get("/api/v1/admin/logs/conversations", Persona.GLOBEX_ADMIN).at("/total").asLong()).isZero();
+        for (JsonNode c : api.get("/api/v1/admin/logs/conversations?size=100", Persona.GLOBEX_ADMIN).at("/items")) {
+            assertThat(c.at("/title").asString()).isNotEqualTo("Why was my loan blocked?");
+        }
         assertThat(api.get("/api/v1/admin/logs/conversations/" + id, Persona.GLOBEX_ADMIN).status()).isEqualTo(404);
     }
 
@@ -761,5 +769,120 @@ class RuleEngineServiceIT {
                 .isIn(403, 404, 405);
         assertThat(new ArrayList<>(List.of(api.get("/api/v1/rules/" + UUID.randomUUID(), Persona.USER).status())))
                 .containsExactly(404);
+    }
+
+    // ── the AI assistant: the starter's agent runtime inside this service (ADR-0027) ──
+
+    private static String chatPath(String slug) {
+        return "/dynamic-ai/api/agents/" + slug + "/chat/stream";
+    }
+
+    /** The text of a streamed turn: its text.delta events joined. */
+    private static String answer(Resp turn) {
+        StringBuilder text = new StringBuilder();
+        for (String line : turn.raw().split("\n")) {
+            if (line.startsWith("data:") && line.contains("\"type\":\"text.delta\"")) {
+                text.append(JSON.readTree(line.substring(5)).at("/text").asString());
+            }
+        }
+        return text.toString();
+    }
+
+    private static final tools.jackson.databind.json.JsonMapper JSON = tools.jackson.databind.json.JsonMapper.builder().build();
+
+    @Test
+    void theAssistantIsProvisionedOnFirstUseAndAnswersFromTheCallersOwnSetup() {
+        Resp info = api.get("/api/v1/assistant", Persona.ADMIN);
+
+        assertThat(info.status()).isEqualTo(200);
+        assertThat(info.at("/available").asBoolean()).isTrue();
+        assertThat(info.at("/provider").asString()).isEqualTo("offline");
+        String slug = info.at("/agentSlug").asString();
+        assertThat(slug).startsWith("rule-assistant-");
+        // idempotent: asking again changes nothing
+        assertThat(api.get("/api/v1/assistant", Persona.ADMIN).at("/agentSlug").asString()).isEqualTo(slug);
+
+        Resp turn = api.post(chatPath(slug), Persona.ADMIN, Map.of("message", "list the active rules"));
+
+        assertThat(turn.status()).isEqualTo(200);
+        assertThat(turn.raw()).contains("event:turn.start").contains("event:text.delta")
+                .contains("event:turn.end");
+        assertThat(answer(turn)).contains("ADULT").contains("KYC_VERIFIED").contains("customer.age >= 18");
+    }
+
+    @Test
+    void theAssistantOnlySeesWhatTheCallersTenantSees() {
+        String acme = api.get("/api/v1/assistant", Persona.ADMIN).at("/agentSlug").asString();
+        Resp globexInfo = api.get("/api/v1/assistant", Persona.GLOBEX_ADMIN);
+        String globex = globexInfo.at("/agentSlug").asString();
+
+        assertThat(globex).isNotEqualTo(acme);
+        Resp turn = api.post(chatPath(globex), Persona.GLOBEX_ADMIN, Map.of("message", "list the rules"));
+        assertThat(turn.status()).isEqualTo(200);
+        assertThat(answer(turn)).contains("no matching rule").doesNotContain("ADULT");
+        // the other tenant's agent is not theirs to use: the library's authorization refuses, default deny
+        assertThat(api.post(chatPath(acme), Persona.GLOBEX_ADMIN, Map.of("message", "list the rules")).status())
+                .isIn(403, 404);
+    }
+
+    @Test
+    void aUserWhoNeverOpenedTheAssistantMayNotChatAndAnAnonymousCallerIsRefused() {
+        String slug = api.get("/api/v1/assistant", Persona.ADMIN).at("/agentSlug").asString();
+
+        // CORP is of the same tenant but was never provisioned: nothing is granted until the host does it
+        assertThat(api.post(chatPath(slug), Persona.CORP, Map.of("message", "hi")).status()).isEqualTo(403);
+        assertThat(api.call("POST", chatPath(slug), null, Map.of("message", "hi")).status()).isEqualTo(401);
+        // after opening the assistant the same user may chat
+        assertThat(api.get("/api/v1/assistant", Persona.CORP).at("/available").asBoolean()).isTrue();
+        assertThat(api.post(chatPath(slug), Persona.CORP, Map.of("message", "list the rule groups")).status())
+                .isEqualTo(200);
+    }
+
+    @Test
+    void theAssistantChecksCelExpressionsAndNeverChangesAnything() {
+        String slug = api.get("/api/v1/assistant", Persona.USER).at("/agentSlug").asString();
+        Long rulesBefore = jdbc.sql("SELECT count(*) FROM dai_re_rule").query(Long.class).single();
+
+        Resp bad = api.post(chatPath(slug), Persona.USER, Map.of("message", "check `customer.age >=`"));
+        Resp good = api.post(chatPath(slug), Persona.USER, Map.of("message", "check `customer.age >= 18`"));
+        Resp unknownParameter = api.post(chatPath(slug), Persona.USER, Map.of("message", "validate `customer.shoeSize > 3`"));
+
+        assertThat(answer(bad)).contains("not valid");
+        assertThat(answer(good)).contains("valid").contains("customer.age");
+        assertThat(answer(unknownParameter)).contains("not valid");
+        assertThat(jdbc.sql("SELECT count(*) FROM dai_re_rule").query(Long.class).single()).isEqualTo(rulesBefore);
+    }
+
+    @Test
+    void anAssistantConversationIsRecordedInTheTenantsChatLog() {
+        String slug = api.get("/api/v1/assistant", Persona.ADMIN).at("/agentSlug").asString();
+        Resp turn = api.post(chatPath(slug), Persona.ADMIN, Map.of("message", "which parameters are in the library?"));
+        assertThat(turn.status()).isEqualTo(200);
+
+        Resp log = api.get("/api/v1/admin/logs/conversations?size=100", Persona.ADMIN);
+
+        boolean found = false;
+        for (JsonNode c : log.at("/items")) {
+            Resp detail = api.get("/api/v1/admin/logs/conversations/" + c.at("/id").asString(), Persona.ADMIN);
+            found |= detail.raw().contains("which parameters are in the library?");
+        }
+        assertThat(found).as("the admin chat log lists the assistant conversation").isTrue();
+    }
+
+    @Test
+    void theExpressionCheckAnswersForTheCallersLibraryWithoutSavingAnything() {
+        Resp good = api.post("/api/v1/expressions/check", Persona.USER, Map.of("expression", "customer.age >= 18 && loan.amount < 5.0"));
+        Resp bad = api.post("/api/v1/expressions/check", Persona.USER, Map.of("expression", "customer.age >= 'x'"));
+        Resp unknown = api.post("/api/v1/expressions/check", Persona.USER, Map.of("expression", "nobody.knows > 1"));
+        Resp empty = api.post("/api/v1/expressions/check", Persona.USER, Map.of("expression", " "));
+
+        assertThat(good.status()).isEqualTo(200);
+        assertThat(good.at("/valid").asBoolean()).isTrue();
+        assertThat(good.at("/parameters").toString()).contains("customer.age").contains("loan.amount");
+        assertThat(bad.at("/valid").asBoolean()).isFalse();
+        assertThat(bad.at("/error").asString()).isNotBlank();
+        assertThat(unknown.at("/valid").asBoolean()).isFalse();
+        assertThat(empty.at("/valid").asBoolean()).isFalse();
+        assertThat(api.call("POST", "/api/v1/expressions/check", null, Map.of("expression", "true")).status()).isEqualTo(401);
     }
 }

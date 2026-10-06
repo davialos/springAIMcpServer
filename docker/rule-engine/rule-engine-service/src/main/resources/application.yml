@@ -25,6 +25,15 @@ spring:
     baseline-on-migrate: false
   jackson:
     default-property-inclusion: non_null
+  ai:
+    # the Anthropic starter is on the class path but inactive unless SPRING_AI_MODEL_CHAT=anthropic (+ ANTHROPIC_API_KEY)
+    model:
+      chat: ${SPRING_AI_MODEL_CHAT:none}
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        options:
+          model: ${ANTHROPIC_CHAT_MODEL:claude-sonnet-5-5}
 
 server:
   port: ${SERVER_PORT:8092}
@@ -47,7 +56,35 @@ management:
       percentiles-histogram:
         http.server.requests: true
 
+# The starter (ADR-0027): persistence unit, agent runtime and the /dynamic-ai chat + admin APIs. This service's own Flyway
+# applies the library migrations, so the starter only validates and uses them.
+dynamic:
+  ai:
+    agent:
+      environment:
+        tier: ${DAI_ENV_TIER:dev}
+        application-name: rule-engine-service
+      store:
+        migrate: false
+        validate-schema: true
+      scan:
+        base-packages: com.example.ruleconsole.assistant
+      conversations:
+        enabled: true
+      security:
+        static-role-mappings:
+          # only the service's own provisioning identity (a token it signs itself, scope dai.provision) may administer the
+          # library; no user token carries a scope
+          - source: AUTHORITY
+            match-value: SCOPE_dai.provision
+            role: PLATFORM_ADMIN
+
 ecosystem:
+  assistant:
+    enabled: ${ASSISTANT_ENABLED:true}
+    # offline = the built-in template assistant (no key needed) | anthropic = a real model
+    provider: ${ASSISTANT_PROVIDER:offline}
+    model-name: ${ASSISTANT_MODEL_NAME:offline-rule-assistant}
   rules:
     # must equal the auth service's key; >= 32 bytes. Local-stack default only: compose passes it from .env.
     jwt-secret: ${JWT_SECRET:local-dev-only-secret-change-me-0123456789abcdef}

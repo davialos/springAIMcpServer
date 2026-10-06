@@ -37,6 +37,22 @@ public record Caller(UUID userId, String username, String displayName, boolean a
                 org == null || org.isBlank() ? null : uuid(org), jwt.getClaimAsString(TokenClaims.ORGANIZATION_NAME));
     }
 
+    /**
+     * The caller of the code running now, from the request's verified token. Used by code that is not a controller (the
+     * AI assistant's tools run on the caller's behalf, with the caller's authentication, ADR-0027).
+     *
+     * @return the caller
+     * @throws IllegalStateException when no token-authenticated caller is present
+     */
+    public static Caller current() {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken t) {
+            return from(t.getToken());
+        }
+        throw new IllegalStateException("no token-authenticated caller");
+    }
+
     private static UUID uuid(@Nullable String value) {
         if (value == null) {
             throw new IllegalArgumentException("token is missing a required id claim");

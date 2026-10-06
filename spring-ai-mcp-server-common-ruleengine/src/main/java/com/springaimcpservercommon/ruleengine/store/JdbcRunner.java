@@ -176,7 +176,7 @@ public final class JdbcRunner {
 
         private final @Nullable String sqlState;
 
-        StoreFailure(@Nullable String sqlState, String message, Throwable cause) {
+        public StoreFailure(@Nullable String sqlState, String message, Throwable cause) {
             super(message, cause);
             this.sqlState = sqlState;
         }

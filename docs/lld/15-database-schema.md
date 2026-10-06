@@ -877,12 +877,19 @@ as "built-in job, advisory-locked, any node"; still open whether a deploying tea
 entirely and run 100% DBA-driven maintenance — resolved: `store.maintenance.enabled=false` turns the runner off;
 the DBA then owns partitions, retention and the sweeps).
 
-## Rule-engine tables (V11, V12)
+## Rule-engine tables (V11, V13)
 
 Migration `V11__rule_engine.sql` adds the `dai_re_*` tables of the CEL rule engine (parameter library, bundles, rules,
-rule groups, channels, trigger points, evaluation log, change markers). `V12__rule_engine_lifecycle_outbox.sql` adds
+rule groups, channels, trigger points, evaluation log, change markers). `V13__rule_engine_lifecycle_outbox.sql` adds
 `dai_re_revision` (rule/group revision history), `dai_re_dispatch` (delivery outbox) and makes `dai_re_evaluation` /
 `dai_re_evaluation_result` monthly partitions registered in `dai_partitioned_table` (13 months). They have no JPA entities; the `ruleengine`
 module reads and writes them with plain JDBC, so Hibernate schema validation is unaffected. Their columns, constraints
 and meaning are documented in [LLD-18 §2](18-rule-engine.md) (ADR-0025); `tenant_id`/`organization_id` are opaque host
 ids without foreign keys (ADR-0005).
+
+## Rule-engine audit trail (V12)
+
+Migration `V12__rule_engine_audit_log.sql` adds `dai_re_audit_log` (who changed or evaluated what: actor, scope, action,
+entity, value-free `details` jsonb; indexes by tenant+time and entity). Written by the rule-engine service in the same
+transaction as the change it records ([LLD-18 §12](18-rule-engine.md), ADR-0026). Like `dai_re_evaluation` it has no
+retention job yet (OQ-68).

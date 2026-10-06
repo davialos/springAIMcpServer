@@ -42,7 +42,7 @@ cache refresh (ADR-0006) and "stateless, no new infrastructure" defaults (ADR-00
   data type is therefore a first-class column.
 - − The module pulls ~10 MB of dependencies (protobuf, Guava, ANTLR, re2j) into hosts that opt in; `offline-repo/` grows
   accordingly.
-- − The UI on top of the authoring API is not part of this decision (OQ-70).
+- − The UI on top of the authoring API is not part of this decision (OQ-74).
 
 ## Addendum 2026-10-06: authoring, lifecycle, outbox, partitioning (OQ-65..68)
 - **Authoring is a REST API in `autoconfigure`** backed by plain-JDBC services in the `ruleengine` module
@@ -56,4 +56,8 @@ cache refresh (ADR-0006) and "stateless, no new infrastructure" defaults (ADR-00
   comparison, at-least-once with a dispatch id for de-duplication, recipient scrubbed on delivery (ADR-0021: no new
   infrastructure). Rejected: Kafka/Redis queues; a Spring `@Scheduled` per node without claiming (double sends).
 - **Evaluation log partitioned monthly** and registered with the existing maintenance job (retention 13 months, overridable).
-- Consequence: PROD rule changes need the production override (OQ-72) until a signed-bundle path exists for rules.
+- Consequence: PROD rule changes need the production override (OQ-76) until a signed-bundle path exists for rules.
+- Relationship to ADR-0026: the ecosystem service is a second front end over the same tables with its own authoring SQL. It does not use
+  the revisions of this addendum, so its changes skip the four-eyes review until it moves onto `RuleLifecycle` (OQ-78). Migration
+  numbering: V12 is the ecosystem's audit log; the lifecycle, outbox and partitioning migration is V13 and keeps V12's index on
+  `dai_re_evaluation`.

@@ -1,5 +1,5 @@
 -- =====================================================================================================
--- Migration V12: rule-engine lifecycle, outbox and evaluation-log partitioning (OQ-66, OQ-67, OQ-68; LLD-18).
+-- Migration V13: rule-engine lifecycle, outbox and evaluation-log partitioning (OQ-66, OQ-67, OQ-68; LLD-18).
 --   1. dai_re_evaluation / dai_re_evaluation_result become monthly range partitions registered with the
 --      maintenance job (creation of future partitions, retention drop).                       (OQ-68)
 --   2. dai_re_revision: draft -> submitted -> approved -> published history of every rule and rule group,
@@ -9,7 +9,9 @@
 -- =====================================================================================================
 
 -- ---------------------------------------------------------------------------------------------------
--- 1. Partition the evaluation log by evaluated_at (same pattern as dai_agent_turn, LLD-15 §6)
+-- 1. Partition the evaluation log by evaluated_at (same pattern as dai_agent_turn, LLD-15 §6).
+--    Tables are re-created (copied through temp tables); grants made on the old tables (docker/rule-engine/seed/grants.sql)
+--    must be applied again after this migration.
 -- ---------------------------------------------------------------------------------------------------
 CREATE TEMP TABLE tmp_re_evaluation AS SELECT * FROM dai_re_evaluation;
 CREATE TEMP TABLE tmp_re_evaluation_result AS
@@ -20,7 +22,9 @@ DROP TABLE dai_re_evaluation;
 CREATE TABLE dai_re_evaluation
 (
     id               uuid        NOT NULL,
-    evaluated_at     timestamptz NOT NULL,
+    -- partition key; the default keeps writers that never set it working (now() is the transaction time, so the
+    -- evaluation and its result rows written in one transaction get the same instant)
+    evaluated_at     timestamptz NOT NULL DEFAULT now(),
     tenant_id        uuid        NOT NULL,
     organization_id  uuid,
     rule_group_id    uuid        NOT NULL,
@@ -33,13 +37,15 @@ CREATE TABLE dai_re_evaluation
     CONSTRAINT ck_re_evaluation_decision CHECK (decision IN ('ALLOW', 'WARN', 'BLOCK'))
 ) PARTITION BY RANGE (evaluated_at);
 CREATE INDEX ix_re_evaluation_group ON dai_re_evaluation (tenant_id, rule_group_id, evaluated_at DESC);
+-- V12 created this index on the table that is replaced here; keep it (listing a tenant's evaluations newest first)
+CREATE INDEX ix_re_evaluation_time ON dai_re_evaluation (tenant_id, evaluated_at DESC);
 CREATE TABLE dai_re_evaluation_pdefault PARTITION OF dai_re_evaluation DEFAULT;
 COMMENT ON TABLE dai_re_evaluation IS 'One row per group evaluation. No input values are stored. Monthly partitions, dropped by retention (dai_partitioned_table).';
 
 CREATE TABLE dai_re_evaluation_result
 (
     evaluation_id uuid        NOT NULL,
-    evaluated_at  timestamptz NOT NULL,
+    evaluated_at  timestamptz NOT NULL DEFAULT now(),
     rule_id       uuid        NOT NULL,
     sequence      integer     NOT NULL,
     outcome       text        NOT NULL,

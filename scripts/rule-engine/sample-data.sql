@@ -86,6 +86,20 @@ VALUES ('dddddddd-0000-0000-0000-000000000001', '11111111-1111-1111-1111-1111111
         'aaaaaaaa-0000-0000-0000-000000000001', 'HIGH_VALUE_REVIEW', 'Loan under 500000 needs no review', 'loan.amount < 500000.0', 'ACTIVE',
         NULL, 'cccccccc-0000-0000-0000-000000000009', 'ALLOW', 'WARN');
 
+-- parameters each rule reads (impact analysis, "which rules break if I change customer.age?"). The authoring API keeps
+-- this table in step with the compiled expression; rules inserted by SQL must fill it themselves.
+INSERT INTO dai_re_rule_parameter (rule_id, attribute_id)
+SELECT r.id, a.id
+FROM (VALUES ('ADULT', 'customer', 'age'),
+             ('KYC_VERIFIED', 'customer', 'kycStatus'),
+             ('CREDIT_SCORE_MIN', 'customer', 'creditScore'),
+             ('AMOUNT_WITHIN_LIMIT', 'loan', 'amount'),
+             ('AMOUNT_WITHIN_LIMIT', 'customer', 'creditScore'),
+             ('HIGH_VALUE_REVIEW', 'loan', 'amount')) AS p(rule_code, object_code, attribute_code)
+         JOIN dai_re_rule r ON r.code = p.rule_code AND r.tenant_id = '11111111-1111-1111-1111-111111111111'
+         JOIN dai_re_sys_object o ON o.code = p.object_code
+         JOIN dai_re_sys_object_attribute a ON a.object_id = o.id AND a.code = p.attribute_code;
+
 -- rule groups: one per evaluation policy -----------------------------------------------------------
 INSERT INTO dai_re_rule_group (id, tenant_id, organization_id, module_id, code, name, status, evaluation_policy, match_on,
                                composite_true_bundle_id, composite_false_bundle_id, composite_true_action, composite_false_action)

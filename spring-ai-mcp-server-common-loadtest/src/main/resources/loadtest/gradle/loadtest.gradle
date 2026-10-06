@@ -4,6 +4,7 @@
 //
 //   ./gradlew loadtestDiscover                      APIs, fields and seeding order found in this project
 //   ./gradlew loadtestGenerate                      write the k6 suite (default load-tests/)
+//   ./gradlew loadtestSchema [-Ploadtest.schemaFile=…] [-Ploadtest.dbSchema=…] [-Ploadtest.rowCounts]   the database's current structure as DDL
 //   ./gradlew loadtestRun -Ploadtest.mode=mixed-load [-Ploadtest.baseUrl=…] [-Ploadtest.api=…] [-Ploadtest.grafana]
 //   ./gradlew loadtestCompare -Ploadtest.baseline=load-tests/baseline.json      regression gate
 //
@@ -78,6 +79,15 @@ loadtestTask('loadtestDiscover', 'Lists the APIs, request fields and seeding ord
 
 loadtestTask('loadtestGenerate', 'Writes the k6 load-test suite (request builders, data, seeding, Grafana).') {
     ['generate', '--project', projectDir.path, '--out', file(loadtest.outDir).path] + loadtest.generateArgs
+}
+
+loadtestTask('loadtestSchema', 'Prints the current structure of the configured database as DDL (-Ploadtest.schemaFile=<file> writes it there).') {
+    def args = ['schema', '--project', projectDir.path]
+    if (prop('dbUrl')) args += ['--db-url', prop('dbUrl')]
+    if (prop('dbSchema')) args += ['--db-schema', prop('dbSchema')]
+    if (project.hasProperty('loadtest.rowCounts')) args += ['--row-counts']
+    if (prop('schemaFile')) args += ['--out', file(prop('schemaFile')).path]
+    args
 }
 
 loadtestTask('loadtestRun', 'Runs the suite with k6; fails on failed thresholds (or a regression with -Ploadtest.baseline).') {

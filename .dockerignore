@@ -48,3 +48,10 @@ dist/
 
 # Vendored dependency repository (not needed inside the image build context)
 offline-repo/
+
+# Rule-engine ecosystem (docker/rule-engine): its UI's local build output, test output and its own secrets
+**/node_modules/
+docker/rule-engine/ui/dist/
+docker/rule-engine/ui/test-results/
+docker/rule-engine/ui/playwright-report/
+docker/rule-engine/.env

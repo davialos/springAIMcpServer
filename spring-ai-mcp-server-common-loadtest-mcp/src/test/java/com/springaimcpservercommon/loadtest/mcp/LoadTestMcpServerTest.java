@@ -53,8 +53,61 @@ class LoadTestMcpServerTest {
         return (Map<String, Object>) r.structuredContent();
     }
 
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> properties(McpSchema.Tool tool) {
+        return (Map<String, Object>) tool.inputSchema().get("properties");
+    }
+
     private static String text(McpSchema.CallToolResult r) {
         return ((McpSchema.TextContent) r.content().getFirst()).text();
+    }
+
+    @Test
+    void schemaWithoutADatasourceIsAnErrorTheAgentCanRead() throws IOException {
+        project("shop"); // application.properties has no spring.datasource.url
+
+        McpSchema.CallToolResult r = new LoadTestTools(root).schema(Map.of("project", "shop"));
+
+        assertThat(r.isError()).isTrue();
+        assertThat(text(r)).contains("no database configured");
+    }
+
+    @Test
+    void schemaStaysInsideTheRoot() {
+        McpSchema.CallToolResult r = new LoadTestTools(root).schema(Map.of("project", "../.."));
+
+        assertThat(r.isError()).isTrue();
+    }
+
+    @Test
+    void schemaReadsTheProjectsOwnDatabase() throws IOException, java.sql.SQLException {
+        String url = System.getenv("LOADTEST_IT_JDBC_URL");
+        assumeThat(url).as("LOADTEST_IT_JDBC_URL (a PostgreSQL to read)").isNotNull();
+        String user = System.getenv().getOrDefault("LOADTEST_IT_USER", "");
+        String password = System.getenv().getOrDefault("LOADTEST_IT_PASSWORD", "");
+        project("shop");
+        Files.writeString(root.resolve("shop/src/main/resources/application.properties"),
+                "server.port=8282\nspring.datasource.url=" + url + "\nspring.datasource.username=" + user
+                        + "\nspring.datasource.password=" + password + "\n");
+        try (var c = java.sql.DriverManager.getConnection(url, user, password); var st = c.createStatement()) {
+            st.execute("DROP SCHEMA IF EXISTS mcp_schema_it CASCADE");
+            st.execute("CREATE SCHEMA mcp_schema_it");
+            st.execute("CREATE TABLE mcp_schema_it.pets (id bigserial PRIMARY KEY, name text NOT NULL)");
+            st.execute("INSERT INTO mcp_schema_it.pets(name) VALUES ('Rex-the-secret-dog')");
+        }
+        try {
+            Map<String, Object> out = structured(new LoadTestTools(root).schema(
+                    Map.of("project", "shop", "schema", "mcp_schema_it", "rowCounts", true)));
+
+            assertThat(out.get("ddl").toString()).contains("CREATE TABLE mcp_schema_it.pets (")
+                    .contains("-- rows: 1").doesNotContain("Rex-the-secret-dog");
+            assertThat(out.get("truncated")).isEqualTo(false);
+            assertThat(out.get("tables").toString()).contains("name=pets", "kind=TABLE", "columns=2", "rows=1");
+        } finally {
+            try (var c = java.sql.DriverManager.getConnection(url, user, password); var st = c.createStatement()) {
+                st.execute("DROP SCHEMA IF EXISTS mcp_schema_it CASCADE");
+            }
+        }
     }
 
     @Test
@@ -62,9 +115,16 @@ class LoadTestMcpServerTest {
         project("shop");
         LoadTestTools tools = new LoadTestTools(root);
         assertThat(tools.tools()).extracting(t -> t.tool().name()).containsExactly("loadtest_discover",
-                "loadtest_generate", "loadtest_run", "loadtest_report", "loadtest_compare", "loadtest_modes");
+                "loadtest_generate", "loadtest_schema", "loadtest_run", "loadtest_report", "loadtest_compare",
+                "loadtest_modes");
         assertThat(tools.tools()).filteredOn(t -> t.tool().name().equals("loadtest_run")).singleElement()
                 .satisfies(t -> assertThat(t.tool().annotations().readOnlyHint()).isFalse());
+        // reading the structure changes nothing, and it has no parameter that could name another database
+        assertThat(tools.tools()).filteredOn(t -> t.tool().name().equals("loadtest_schema")).singleElement()
+                .satisfies(t -> {
+                    assertThat(t.tool().annotations().readOnlyHint()).isTrue();
+                    assertThat(properties(t.tool())).containsOnlyKeys("project", "schema", "rowCounts");
+                });
 
         Map<String, Object> d = structured(tools.discover(Map.of("project", "shop", "fields", true)));
         assertThat((List<?>) d.get("apis")).hasSize(2);

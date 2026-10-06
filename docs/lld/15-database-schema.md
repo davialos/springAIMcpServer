@@ -877,10 +877,12 @@ as "built-in job, advisory-locked, any node"; still open whether a deploying tea
 entirely and run 100% DBA-driven maintenance — resolved: `store.maintenance.enabled=false` turns the runner off;
 the DBA then owns partitions, retention and the sweeps).
 
-## Rule-engine tables (V11)
+## Rule-engine tables (V11, V12)
 
 Migration `V11__rule_engine.sql` adds the `dai_re_*` tables of the CEL rule engine (parameter library, bundles, rules,
-rule groups, channels, trigger points, evaluation log, change markers). They have no JPA entities; the `ruleengine`
+rule groups, channels, trigger points, evaluation log, change markers). `V12__rule_engine_lifecycle_outbox.sql` adds
+`dai_re_revision` (rule/group revision history), `dai_re_dispatch` (delivery outbox) and makes `dai_re_evaluation` /
+`dai_re_evaluation_result` monthly partitions registered in `dai_partitioned_table` (13 months). They have no JPA entities; the `ruleengine`
 module reads and writes them with plain JDBC, so Hibernate schema validation is unaffected. Their columns, constraints
 and meaning are documented in [LLD-18 §2](18-rule-engine.md) (ADR-0025); `tenant_id`/`organization_id` are opaque host
 ids without foreign keys (ADR-0005).

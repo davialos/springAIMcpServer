@@ -20,14 +20,15 @@ case "${1:-start}" in
     rm -rf "$PGDIR"; mkdir -p "$PGDIR"; if [ "$(id -u)" = 0 ]; then chown postgres "$PGDIR"; fi
     as_pg "$PGBIN/initdb -D $PGDIR/data -A trust -U postgres >/dev/null"
     as_pg "$PGBIN/pg_ctl -D $PGDIR/data -o '-p $PGPORT -k $PGDIR' -l $PGDIR/log -w start >/dev/null"
-    "$PGBIN/psql" -h "$PGDIR" -p "$PGPORT" -U postgres -q -c "CREATE ROLE dai LOGIN PASSWORD 'dai' SUPERUSER" -c "CREATE DATABASE dai OWNER dai"
+    "$PGBIN/psql" -h "$PGDIR" -p "$PGPORT" -U postgres -q -c "CREATE ROLE dai LOGIN PASSWORD 'dai' SUPERUSER" -c "CREATE DATABASE dai OWNER dai" -c "CREATE DATABASE dai_host_it OWNER dai"
     sql -c "CREATE SCHEMA dynamic_ai"
     # numeric order (V2 before V10), search_path = dynamic_ai exactly as Flyway sets it
     for f in $(ls "$mig" | sort -t_ -k1.2 -n); do
       PGOPTIONS="-c search_path=dynamic_ai" sql -f "$mig/$f"
     done
     PGOPTIONS="-c search_path=dynamic_ai" sql -f "$root/scripts/rule-engine/sample-data.sql"
-    echo "ready: jdbc:postgresql://localhost:$PGPORT/dai  user=dai password=dai  schema=dynamic_ai" ;;
+    echo "ready: jdbc:postgresql://localhost:$PGPORT/dai  user=dai password=dai  schema=dynamic_ai"
+    echo "empty database for host-application ITs (they migrate it themselves): jdbc:postgresql://localhost:$PGPORT/dai_host_it" ;;
   psql) PGOPTIONS="-c search_path=dynamic_ai" sql ;;
   stop) as_pg "$PGBIN/pg_ctl -D $PGDIR/data -m immediate stop" || true; rm -rf "$PGDIR" ;;
 esac

@@ -42,4 +42,18 @@ cache refresh (ADR-0006) and "stateless, no new infrastructure" defaults (ADR-00
   data type is therefore a first-class column.
 - − The module pulls ~10 MB of dependencies (protobuf, Guava, ANTLR, re2j) into hosts that opt in; `offline-repo/` grows
   accordingly.
-- − Authoring (REST admin API and UI for the tables) is not in this change; the schema, runtime and SQL contracts are.
+- − The UI on top of the authoring API is not part of this decision (OQ-70).
+
+## Addendum 2026-10-06: authoring, lifecycle, outbox, partitioning (OQ-65..68)
+- **Authoring is a REST API in `autoconfigure`** backed by plain-JDBC services in the `ruleengine` module
+  (`RuleLifecycle`, `RuleConfigAdmin`, `ExpressionTester`), gated by four new permissions (`rules:read|author|publish|library`) and,
+  for writes, by the AUTHORING capability (LLD-12). The workspace is the tenant.
+- **Lifecycle by revisions.** The live rows keep only published content; drafts live in `dai_re_revision` (jsonb), move
+  DRAFT → SUBMITTED → APPROVED → PUBLISHED with a database-enforced reviewer ≠ submitter, and are applied in one
+  transaction. Rejected alternative: reuse `dai_resource` / `ConfigStore` (LLD-09) — it is workspace/JPA-centric and
+  its publish produces snapshot generations the engine does not read; the rule engine already has its own change markers.
+- **Outbox in PostgreSQL** (`dai_re_dispatch`), claimed with `FOR UPDATE SKIP LOCKED` + lease, **database clock** for every time
+  comparison, at-least-once with a dispatch id for de-duplication, recipient scrubbed on delivery (ADR-0021: no new
+  infrastructure). Rejected: Kafka/Redis queues; a Spring `@Scheduled` per node without claiming (double sends).
+- **Evaluation log partitioned monthly** and registered with the existing maintenance job (retention 13 months, overridable).
+- Consequence: PROD rule changes need the production override (OQ-72) until a signed-bundle path exists for rules.

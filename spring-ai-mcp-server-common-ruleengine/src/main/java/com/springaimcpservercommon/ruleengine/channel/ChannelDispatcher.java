@@ -1,19 +1,18 @@
 package com.springaimcpservercommon.ruleengine.channel;
 
+import com.springaimcpservercommon.core.id.Ids;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.ruleengine.channel.DispatchResult.Status;
 import com.springaimcpservercommon.ruleengine.model.ChannelType;
 import com.springaimcpservercommon.ruleengine.response.EvaluationResponse;
-import com.springaimcpservercommon.ruleengine.response.ResponseMessage;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Sends planned communications through the ports. Each channel is isolated: one failing sender never stops the
@@ -21,7 +20,7 @@ import java.util.Objects;
  * {@link ApiEnvironmentPolicy} first. A missing port means SKIPPED, not an error. Recipients and payloads are never
  * logged. Thread-safe if the ports are.
  */
-public final class ChannelDispatcher {
+public final class ChannelDispatcher implements ChannelDelivery {
 
     private static final Logger log = LoggerFactory.getLogger(ChannelDispatcher.class);
 
@@ -49,11 +48,13 @@ public final class ChannelDispatcher {
     /**
      * Sends every planned channel.
      *
+     * @param tenantId    tenant of the evaluation (unused here; the outbox stores it)
      * @param planned     what the evaluation asked for
      * @param response    the response the caller gets (decision and messages go into API payloads)
      * @return one result per planned channel, in order
      */
-    public List<DispatchResult> dispatch(List<PlannedChannel> planned, EvaluationResponse response) {
+    @Override
+    public List<DispatchResult> dispatch(UUID tenantId, List<PlannedChannel> planned, EvaluationResponse response) {
         List<DispatchResult> out = new ArrayList<>(planned.size());
         for (PlannedChannel p : planned) {
             out.add(send(p, response));
@@ -111,30 +112,8 @@ public final class ChannelDispatcher {
             log.warn("API channel {} refused: {}", p.binding().id(), check.reasonKey());
             return result(p, Status.REFUSED, check.reasonKey());
         }
-        api.call(p.apiEndpoint(), CanonicalJson.write(payload(response)));
+        api.call(p.apiEndpoint(), CanonicalJson.write(DispatchPayloads.api(response, Ids.newId())));
         return result(p, Status.SENT, null);
-    }
-
-    private static Map<String, Object> payload(EvaluationResponse r) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("module", r.moduleCode());
-        body.put("group", r.groupCode());
-        body.put("policy", r.policy().name());
-        body.put("decision", r.decision().name());
-        body.put("matched", r.matched());
-        List<Object> messages = new ArrayList<>();
-        for (ResponseMessage m : r.messages()) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("source", m.source().name());
-            item.put("rule", m.ruleCode());
-            item.put("outcome", m.outcome().name());
-            item.put("action", m.action().name());
-            item.put("language", m.language());
-            item.put("text", m.text());
-            messages.add(item);
-        }
-        body.put("messages", messages);
-        return body;
     }
 
     private static DispatchResult result(PlannedChannel p, Status status, @Nullable String reason) {

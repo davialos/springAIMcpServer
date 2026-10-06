@@ -118,6 +118,19 @@ public final class RuleEngineTestDatabase implements AutoCloseable {
         }
     }
 
+    /** Runs a single-value text query in the test schema. */
+    public String queryText(String sql) {
+        try (Connection c = dataSource.getConnection(); Statement st = c.createStatement()) {
+            c.setSchema(schema);
+            try (var rs = st.executeQuery(sql)) {
+                rs.next();
+                return rs.getString(1);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
     @Override
     public void close() {
         try (Connection c = dataSource.getConnection(); Statement st = c.createStatement()) {

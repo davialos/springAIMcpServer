@@ -19,6 +19,8 @@ public record DispatchResult(UUID bindingId, ChannelType type, Status status, @N
     public enum Status {
         /** Handed to the sender / endpoint answered 2xx. */
         SENT,
+        /** Stored in the delivery outbox; a worker sends it with retries (OQ-67). */
+        QUEUED,
         /** Nothing to do: no sender configured, no recipient, or the configuration is incomplete. */
         SKIPPED,
         /** The API environment guard refused the endpoint. */

@@ -3,7 +3,7 @@ package com.springaimcpservercommon.ruleengine;
 import com.springaimcpservercommon.ruleengine.cache.RuleCatalogCache;
 import com.springaimcpservercommon.ruleengine.cache.TenantCatalog;
 import com.springaimcpservercommon.ruleengine.cel.Facts;
-import com.springaimcpservercommon.ruleengine.channel.ChannelDispatcher;
+import com.springaimcpservercommon.ruleengine.channel.ChannelDelivery;
 import com.springaimcpservercommon.ruleengine.channel.ChannelPlanner;
 import com.springaimcpservercommon.ruleengine.channel.DispatchResult;
 import com.springaimcpservercommon.ruleengine.channel.PlannedChannel;
@@ -31,7 +31,7 @@ import java.util.UUID;
  *   <li>takes the tenant's cached snapshot ({@link RuleCatalogCache}),</li>
  *   <li>evaluates the group's CEL rules under the group's policy ({@link GroupEvaluator}),</li>
  *   <li>composes the localized response ({@link ResponseComposer}),</li>
- *   <li>plans the communications ({@link ChannelPlanner}) and, if asked, sends them ({@link ChannelDispatcher}),</li>
+ *   <li>plans the communications ({@link ChannelPlanner}) and, if asked, sends them ({@link ChannelDelivery}),</li>
  *   <li>records the decision without the input values ({@link EvaluationRecorder}).</li>
  * </ol>
  * Thread-safe; holds no per-request state.
@@ -41,7 +41,7 @@ public final class RuleEngine {
     private static final Logger log = LoggerFactory.getLogger(RuleEngine.class);
 
     private final RuleCatalogCache cache;
-    private final @Nullable ChannelDispatcher dispatcher;
+    private final @Nullable ChannelDelivery dispatcher;
     private final EvaluationRecorder recorder;
     private final GroupEvaluator evaluator = new GroupEvaluator();
     private final ResponseComposer composer = new ResponseComposer();
@@ -51,10 +51,10 @@ public final class RuleEngine {
      * Creates the engine.
      *
      * @param cache      rule cache
-     * @param dispatcher sends communications, or {@code null} to only plan them
+     * @param dispatcher delivers communications (direct or through the outbox), or {@code null} to only plan them
      * @param recorder   evaluation log
      */
-    public RuleEngine(RuleCatalogCache cache, @Nullable ChannelDispatcher dispatcher, EvaluationRecorder recorder) {
+    public RuleEngine(RuleCatalogCache cache, @Nullable ChannelDelivery dispatcher, EvaluationRecorder recorder) {
         this.cache = Objects.requireNonNull(cache, "cache");
         this.dispatcher = dispatcher;
         this.recorder = Objects.requireNonNull(recorder, "recorder");
@@ -134,7 +134,7 @@ public final class RuleEngine {
         EvaluationResponse response = composer.compose(raw, catalog.messages(), languages, detail);
         List<PlannedChannel> planned = planner.plan(catalog, raw, facts, languages);
         List<DispatchResult> dispatched = dispatch && dispatcher != null
-                ? dispatcher.dispatch(planned, response) : List.of();
+                ? dispatcher.dispatch(tenantId, planned, response) : List.of();
         try {
             recorder.record(tenantId, organizationId, triggerId, languages.isEmpty() ? null : languages.getFirst(),
                     micros, raw);

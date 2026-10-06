@@ -59,5 +59,5 @@ cache refresh (ADR-0006) and "stateless, no new infrastructure" defaults (ADR-00
 - Consequence: PROD rule changes need the production override (OQ-76) until a signed-bundle path exists for rules.
 - Relationship to ADR-0026: the ecosystem service is a second front end over the same tables with its own authoring SQL. It does not use
   the revisions of this addendum, so its changes skip the four-eyes review until it moves onto `RuleLifecycle` (OQ-78). Migration
-  numbering: V12 is the ecosystem's audit log; the lifecycle, outbox and partitioning migration is V13 and keeps V12's index on
+  numbering: V12 is the ecosystem's audit log and V13 the chat UI state; the lifecycle, outbox and partitioning migration is V14 and keeps V12's index on
   `dai_re_evaluation`.

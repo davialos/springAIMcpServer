@@ -88,7 +88,7 @@ BEGIN
              JOIN tmp_result r ON r.evaluation_id = e.id
     GROUP BY e.id, e.org, e.group_id, e.policy, e.composite_true_action, e.composite_false_action, e.lang, e.micros, e.at;
 
-    -- evaluated_at is the partition key of both tables (V13): a result carries its evaluation's instant
+    -- evaluated_at is the partition key of both tables (V14): a result carries its evaluation's instant
     INSERT INTO dai_re_evaluation_result (evaluation_id, evaluated_at, rule_id, sequence, outcome, action, error_code)
     SELECT t.evaluation_id, e.at, t.rule_id, t.sequence, t.outcome, t.action, t.error_code
     FROM tmp_result t JOIN tmp_eval e ON e.id = t.evaluation_id;

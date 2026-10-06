@@ -32,6 +32,7 @@ final class ConversationRetentionJob implements AutoCloseable {
 
     private final TelemetryStore store;
     private final @Nullable ChatMemoryStore memoryStore;
+    private final com.springaimcpservercommon.persistence.chat.@Nullable ChatUiStore chatUiStore;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "dai-conversation-retention");
         t.setDaemon(true);
@@ -39,8 +40,15 @@ final class ConversationRetentionJob implements AutoCloseable {
     });
 
     ConversationRetentionJob(TelemetryStore store, @Nullable ChatMemoryStore memoryStore, Duration interval) {
+        this(store, memoryStore, null, interval);
+    }
+
+    ConversationRetentionJob(TelemetryStore store, @Nullable ChatMemoryStore memoryStore,
+                             com.springaimcpservercommon.persistence.chat.@Nullable ChatUiStore chatUiStore,
+                             Duration interval) {
         this.store = Objects.requireNonNull(store, "store");
         this.memoryStore = memoryStore;
+        this.chatUiStore = chatUiStore;
         Objects.requireNonNull(interval, "interval");
         if (interval.compareTo(Duration.ofMinutes(1)) < 0) {
             throw new IllegalArgumentException("interval must be at least one minute");
@@ -67,6 +75,7 @@ final class ConversationRetentionJob implements AutoCloseable {
                 SafeMetrics.count("dynamic.ai.agent.conversation.purge.runs");
             }
             purgeMemory();
+            purgeChatUi();
         } catch (RuntimeException e) {
             LOG.warn("Conversation retention run failed ({}); retrying at the next interval",
                     e.getClass().getSimpleName());
@@ -88,6 +97,24 @@ final class ConversationRetentionJob implements AutoCloseable {
         }
         if (total > 0) {
             LOG.info("Chat memory retention purged {} message(s)", total);
+        }
+    }
+
+    /** Deletes expired chat components, answers and feedback (V13), in bounded batches. */
+    private void purgeChatUi() {
+        if (chatUiStore == null) {
+            return;
+        }
+        int total = 0;
+        for (int i = 0; i < MAX_BATCHES_PER_RUN; i++) {
+            int deleted = chatUiStore.purgeExpired(BATCH);
+            total += deleted;
+            if (deleted < BATCH) {
+                break;
+            }
+        }
+        if (total > 0) {
+            LOG.info("Chat UI state retention purged {} row(s)", total);
         }
     }
 

@@ -51,6 +51,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `security` | `…security` | principal mapping, authorization engine, API keys, filter chain pieces | core, persistence, spring-security |
 | `query` | `…query` | dynamic query AST → Criteria compiler/executor over **host** entities | core |
 | `ruleengine` | `…ruleengine` | opt-in CEL rule engine: parameter library (`object.attribute` typed CEL variables), rule groups + evaluation policies, multilingual messages, e-mail/push/API channels, trigger points; JDBC store over `dai_re_*` (V11), change-marker cache (ADR-0025, LLD-18). **No Spring**; not in the starter/BOM-default path (CEL pulls protobuf + Guava) | core, cel-java |
+| `docker/rule-engine` | `…ecosystem` | NOT in the reactor: local rule-engine ecosystem — `contract` (protobuf), `auth-service`, `rule-engine-service`, `ui` (React console), compose + Grafana/Loki/Prometheus (ADR-0026, LLD-18 §12); `scripts/rule-engine/dev.sh` | ruleengine, persistence, protobuf, Spring Boot |
 | `ai` | `…ai` | agent runtime, tool bridge, advisors, write guard | core, spring-ai |
 | `mcp` | `…mcp` | MCP server exposure, auth glue | ai, security |
 | `webmvc` | `…webmvc` | dynamic endpoints, admin API, SSE streaming, problem details | core, security |
@@ -85,7 +86,8 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 
 - `docs/README.md` index · `docs/01-feature-catalog.md` · `docs/02-architecture-overview.md` · `docs/lld/*.md`
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
-- `docs/lld/18-rule-engine.md` — CEL rule engine (parameter library, policies, messages, channels, triggers); local DB + sample data: `scripts/rule-engine/` (`local-db.sh`, `sample-data.sql`); decision ADR-0025
+- `docs/lld/18-rule-engine.md` — CEL rule engine (parameter library, policies, messages, channels, triggers); local DB + sample data: `scripts/rule-engine/` (`local-db.sh`, `sample-data.sql`); decision ADR-0025; §12 authoring API/console/logs ecosystem (ADR-0026)
+- `docs/integration/rule-engine-ecosystem.md` — one-command local stack (`scripts/rule-engine/dev.sh up|smoke|dashboards|e2e`), users, ports, troubleshooting · `docs/design/README.md` — console design tokens, Figma status (OQ-70)
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`, `scripts/loadtest-mcp.sh`); guide `docs/integration/load-testing-guide.md`
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/tools/perf-test.md` — universal performance test against any running service: k6 load + JFR profile +

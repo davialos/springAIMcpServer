@@ -884,3 +884,10 @@ rule groups, channels, trigger points, evaluation log, change markers). They hav
 module reads and writes them with plain JDBC, so Hibernate schema validation is unaffected. Their columns, constraints
 and meaning are documented in [LLD-18 §2](18-rule-engine.md) (ADR-0025); `tenant_id`/`organization_id` are opaque host
 ids without foreign keys (ADR-0005).
+
+## Rule-engine audit trail (V12)
+
+Migration `V12__rule_engine_audit_log.sql` adds `dai_re_audit_log` (who changed or evaluated what: actor, scope, action,
+entity, value-free `details` jsonb; indexes by tenant+time and entity). Written by the rule-engine service in the same
+transaction as the change it records ([LLD-18 §12](18-rule-engine.md), ADR-0026). Like `dai_re_evaluation` it has no
+retention job yet (OQ-68).

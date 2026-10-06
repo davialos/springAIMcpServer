@@ -33,12 +33,21 @@ public final class PostgresTestSupport {
      */
     public static synchronized DataSource dataSource() {
         if (dataSource == null) {
-            container = new PostgreSQLContainer(IMAGE);
-            container.start();
+            // Without Docker: DAI_IT_JDBC_URL / DAI_IT_USER / DAI_IT_PASSWORD point at a local PostgreSQL 15+
+            // (e.g. scripts/rule-engine/local-db.sh); every test class still gets its own random schema.
+            String externalUrl = System.getenv("DAI_IT_JDBC_URL");
             HikariConfig config = new HikariConfig();
-            config.setJdbcUrl(container.getJdbcUrl());
-            config.setUsername(container.getUsername());
-            config.setPassword(container.getPassword());
+            if (externalUrl != null) {
+                config.setJdbcUrl(externalUrl);
+                config.setUsername(System.getenv().getOrDefault("DAI_IT_USER", "dai"));
+                config.setPassword(System.getenv().getOrDefault("DAI_IT_PASSWORD", "dai"));
+            } else {
+                container = new PostgreSQLContainer(IMAGE);
+                container.start();
+                config.setJdbcUrl(container.getJdbcUrl());
+                config.setUsername(container.getUsername());
+                config.setPassword(container.getPassword());
+            }
             config.setMaximumPoolSize(16);
             config.setPoolName("dai-it");
             dataSource = new HikariDataSource(config);

@@ -10,8 +10,8 @@ group* (or a trigger point such as "form LOAN_APPLICATION, action SUBMIT"); it r
 (`ALLOW` / `WARN` / `BLOCK`), the **localized messages** the group's policy says to show, optionally the raw per-rule
 results, and the **communications** that fired (e-mail, push, API call).
 
-Out of scope here: REST/UI authoring of the tables (follows the admin-API pattern of LLD-08), rule versioning/approval
-(use the configuration lifecycle of LLD-09 when authoring is added), a rule test bench.
+Authoring is a REST API with a draft → review → publish lifecycle (§13, §14); the UI that sits on it is not part of
+this document (OQ-74). Out of scope: a group-level test bench (OQ-75).
 
 ## 2. Data model (tables `dai_re_*`, V11)
 
@@ -30,7 +30,9 @@ Out of scope here: REST/UI authoring of the tables (follows the admin-API patter
 | `dai_re_api_endpoint` | HTTP endpoint with `environment` DEV/QA/PROD/EXTERNAL; EXTERNAL requires `external_confirmed_by/at` (CHECK). Secrets are referenced (`auth_secret_ref`), never stored. |
 | `dai_re_outcome_channel` | "When rule/group X yields TRUE/FALSE/ERROR/ANY → EMAIL (template) / PUSH (title+body bundles) / API (endpoint)", with a CEL `recipient_expression` (e.g. `customer.email`). CHECK keeps the columns consistent with the channel type. |
 | `dai_re_trigger_point` | Binds `(application, form, action[, field])` to a rule group: `FORM_ACTION` (SUBMIT, APPROVE, ADD, BUY…) and `FORM_FIELD` (ON_CHANGE of one field). Several groups per trigger run in `sequence` order. |
-| `dai_re_evaluation` / `dai_re_evaluation_result` | Value-free log: group, policy, decision, language, duration, and per rule outcome/action/error code. |
+| `dai_re_evaluation` / `dai_re_evaluation_result` | Value-free log: group, policy, decision, language, duration, and per rule outcome/action/error code. **Monthly range partitions** on `evaluated_at` (V13), registered in `dai_partitioned_table` (13 months retention, V13) so the existing maintenance job creates future partitions and drops old ones; override with `dynamic.ai.agent.store.retention.dai_re_evaluation`. |
+| `dai_re_revision` | Revision history of every rule and group (V13): `kind` RULE/GROUP, `revision_no`, `state` DRAFT/SUBMITTED/APPROVED/REJECTED/PUBLISHED/SUPERSEDED, the whole definition as `content jsonb`, `rollback_of`, who created/submitted/reviewed/published and when. At most one open revision per subject (partial unique index); a CHECK forbids `reviewed_by = submitted_by`. |
+| `dai_re_dispatch` | Delivery outbox (V13): `channel_type`, `payload jsonb`, `status` PENDING/DELIVERED/DEAD, `attempts`/`max_attempts`, `next_attempt_at`, lease (`locked_until`, `locked_by`), `last_error` (a short code). |
 | `dai_re_change_marker` | One row per scope (PARAMETERS, BUNDLES, RULES), bumped by statement triggers on every write. |
 
 Tenancy: `tenant_id` and `organization_id` are opaque host ids (ADR-0005, no foreign keys). `organization_id NULL` =
@@ -95,6 +97,23 @@ integrate an external API that we cannot validate… please confirm and proceed"
 endpoint and an unconfirmed one is never called. `ApiEnvironmentClassifier` pre-selects DEV/QA/PROD from host glob
 patterns and answers `EXTERNAL` when nothing, or more than one environment, matches.
 
+### 6.1 Delivery: direct or outbox (OQ-67)
+`dynamic.ai.agent.rule-engine.delivery`:
+- `IMMEDIATE` (default): `ChannelDispatcher` sends on the caller's thread; a failure is reported in `dispatched` and not retried.
+- `OUTBOX`: `OutboxChannelDelivery` writes one `dai_re_dispatch` row per communication (status `QUEUED` in the response) and
+  `OutboxWorker` — a daemon loop on every node — delivers them. Rows are claimed with `FOR UPDATE SKIP LOCKED` and a lease
+  (`attempts` is incremented at claim, so a crash mid-send still counts); a node that dies leaves a lease that expires.
+  Failure → back to PENDING after `base-delay × 2^(attempt−1)` (cap `max-delay`, ±20 % jitter); after `max-attempts`, or at once
+  for a permanent failure (endpoint removed, **environment guard refusal — checked again at send time**), the row is DEAD.
+  Delivery is **at-least-once**: API bodies carry `dispatchId` so receivers can de-duplicate.
+  **All time comparisons use the database clock** (`now()`), so clock skew between nodes cannot make a row early, late or
+  double-claimed. The recipient is scrubbed (`payload = '{}'`) when a row is delivered; DELIVERED rows are purged after
+  `delivered-retention` (1 d) and DEAD rows after `dead-retention` (14 d). Operators list dead rows
+  (`GET …/deliveries/dead`, no payloads) and retry them. Errors are stored as short codes only (never a message that
+  could carry the recipient).
+- Not atomic with the caller's own transaction: the row is written after the evaluation. A caller that needs "decision and
+  notification or neither" should call the engine inside its transaction using its own `ChannelDelivery`.
+
 ## 7. Trigger points and integration
 ```java
 // "the user pressed SUBMIT on form LOAN_APPLICATION"
@@ -113,6 +132,19 @@ dynamic.ai.agent.rule-engine.poll-interval=10s     # 1s..10m
 dynamic.ai.agent.rule-engine.max-tenants=500
 dynamic.ai.agent.rule-engine.default-language=en
 dynamic.ai.agent.rule-engine.record-evaluations=true
+dynamic.ai.agent.rule-engine.require-review=true   # a second person must approve before publish
+dynamic.ai.agent.rule-engine.delivery=IMMEDIATE    # or OUTBOX
+dynamic.ai.agent.rule-engine.outbox.poll-interval=5s      # 1s..5m
+dynamic.ai.agent.rule-engine.outbox.batch-size=20         # 1..500
+dynamic.ai.agent.rule-engine.outbox.max-attempts=6        # 1..50
+dynamic.ai.agent.rule-engine.outbox.lease=2m              # 10s..1h
+dynamic.ai.agent.rule-engine.outbox.base-delay=10s        # doubles per attempt
+dynamic.ai.agent.rule-engine.outbox.max-delay=1h
+dynamic.ai.agent.rule-engine.outbox.delivered-retention=1d
+dynamic.ai.agent.rule-engine.outbox.dead-retention=14d
+dynamic.ai.agent.rule-engine.api-hosts.dev=localhost,127.0.0.1      # host globs; * allowed
+dynamic.ai.agent.rule-engine.api-hosts.qa=*.qa.acme.com
+dynamic.ai.agent.rule-engine.api-hosts.prod=api.acme.com
 ```
 Host beans: `EmailSender`, `PushSender` (optional); every library bean is `@ConditionalOnMissingBean`.
 Dependency: add `spring-ai-mcp-server-common-ruleengine` (not part of the default starter).
@@ -133,8 +165,10 @@ messages in en/hi/th, an e-mail template, DEV/QA/PROD endpoints, channels, 3 tri
 runs the integration tests against it (without the variable they use Testcontainers).
 
 ## 11. Open points
-OQ-65 (authoring API/UI: first version delivered by §12, remaining: bundles/channels/trigger authoring), OQ-66 (rule lifecycle/versioning), OQ-67 (async delivery/outbox for channels), OQ-68
-(row-level partitioning/retention of `dai_re_evaluation`).
+OQ-69 (message placeholders), OQ-70 (console design), OQ-71 (dev-only auth service), OQ-74 (UI on the starter's authoring API,
+§13), OQ-75 (group-level test bench), OQ-76 (promoting rules to PROD without the authoring override), OQ-77 (outbox atomic with the
+caller's transaction), OQ-78 (the ecosystem service writes rules and groups directly and bypasses the review lifecycle of §14).
+Resolved by §13, §14 and §6.1: OQ-65, OQ-66, OQ-67, OQ-68.
 
 ## 12. Authoring API, console and logs (ecosystem, ADR-0026)
 Implemented outside the library in `docker/rule-engine/` (not part of the starter). Runbook:
@@ -144,7 +178,7 @@ Implemented outside the library in `docker/rule-engine/` (not part of the starte
 | Service | Port | Role |
 |---------|------|------|
 | `auth-service` | 8091 | Users, tenants, organizations (`re_auth_*`); `POST /auth/login` (protobuf or JSON); signs the access token |
-| `rule-engine-service` | 8092 | Resource server over the library: setup, authoring, evaluation, admin logs; runs V1–V12 migrations |
+| `rule-engine-service` | 8092 | Resource server over the library: setup, authoring, evaluation, admin logs; runs V1–V13 migrations |
 | `ui` (nginx) | 8080 | Console; proxies `/auth` and `/api` (one origin) |
 
 ### 12.2 Identity and scope
@@ -172,3 +206,62 @@ PostgreSQL log tables → Grafana through role `grafana_ro` (grants in `docker/r
 Channels are read-only in the console; e-mail/push senders are not wired. Lockout per username can be abused to lock a known
 account. Promtail mounts `/var/run/docker.sock`; the seeded passwords are shown on the login page of the local build. None of
 this belongs in a shared environment.
+
+### 12.7 Relationship to the starter's authoring API (§13–§14)
+Two front ends exist over the same `dai_re_*` tables. The ecosystem service of this section is a standalone deployable with its
+own token claims and writes rules/groups directly (create, status change), so a rule it creates has **no revision history** and no
+`published_revision_id`. The starter's authoring API (§13) goes through `RuleLifecycle`: drafts, four-eyes review, publish, rollback.
+Mixing them on one database is safe (the lifecycle starts a revision history the first time it edits such a rule) but the review
+rules of §14 only apply to changes made through §13 (OQ-78).
+
+## 13. Authoring API of the starter (OQ-65)
+Base path `/dynamic-ai/admin/api/v1`. **The workspace is the tenant**: workspace-scoped calls live under
+`/workspaces/{workspaceId}/rule-engine/…` and need the permission *in that workspace*; another workspace's ids are 404.
+
+| Permission | Held by (default bundles) | Allows |
+|---|---|---|
+| `rules:read` | platform admin, workspace owner, author, approver | everything that reads (lists, details, revisions, log, dead deliveries, expression validation) |
+| `rules:author` | platform admin, workspace owner, author | drafts, submit, withdraw, bundles, e-mail templates, API endpoints, channels, triggers, expression test bench |
+| `rules:publish` | platform admin, workspace owner, approver | approve, reject, publish, rollback, retire, retry dead deliveries |
+| `rules:library` | platform admin (global only) | modules, sys objects/attributes, platform bundles |
+
+**Writes also need the AUTHORING capability of the environment** (LLD-12): off in PROD unless the audited, time-boxed
+production override is on; reads stay available in every tier. (Promotion of rules to PROD without the override is
+OQ-76.) Every write is audited (`RULE_*`, `GROUP_*`, `RULES_*`).
+
+| Endpoint (under the workspace base) | |
+|---|---|
+| `GET/POST /rules`, `GET /rules/{id}`, `PUT /rules/{id}/draft`; same for `/groups` | list, create (draft), detail with open and published revision, save draft |
+| `POST /{rules\|groups}/{id}/submit · withdraw · approve · reject · publish · rollback · retire`, `GET …/revisions` | lifecycle (§14) |
+| `POST /expressions/validate`, `POST /expressions/test` | compile against the library (issues + parameters read); run on sample values (nothing stored) |
+| `GET /library` | modules and sys objects with attributes (for the editor) |
+| `GET/POST /bundles`, `PUT/DELETE /bundles/{id}/texts/{language}`, `DELETE /bundles/{id}` | workspace messages; platform bundles are read-only here |
+| `GET/POST/PUT /email-templates` | caller-side template id + name |
+| `GET/POST/PUT /api-endpoints`, `POST /api-endpoints/check` | endpoints; `check` returns the environment, verdict and pop-up text |
+| `GET/POST/PUT/DELETE /channels`, `/triggers` | outcome channels, trigger points (validated against owner, module, template, endpoint, recipient expression) |
+| `GET /evaluations`, `GET /deliveries/dead`, `POST /deliveries/{id}/retry` | evaluation log, dead letters |
+| `/rule-library/**` (global) | modules, objects, attributes (+ `GET …/attributes/{id}/usage`), platform bundles |
+
+Errors are RFC 9457 problems; the **title is a stable code**: 404 `not_found`; 409 `four_eyes`, `revision_locked`,
+`invalid_state`, `revision_open`, `rule_in_use` (detail lists the groups), `parameter_in_use` (lists the rules),
+`duplicate_code`, `duplicate`, `bundle_in_use`, `last_text`, `confirmation_required`; 400 with one field violation per problem
+for invalid content (`expression: undeclared reference to …`, `members: …`) and `api_environment_mismatch`.
+
+## 14. Rule and group lifecycle (OQ-66)
+```
+DRAFT --submit--> SUBMITTED --approve (not the submitter)--> APPROVED --publish--> PUBLISHED  (previous → SUPERSEDED)
+  ^                   |  \--reject (comment required)--> REJECTED --edit--> DRAFT
+  \-----withdraw------/
+```
+- The live rows (`dai_re_rule`, `dai_re_rule_group` + members) hold only **published** content and are the only thing the engine
+  reads; a draft never affects evaluation. Editing a live rule opens the next revision; the old one keeps running until the new
+  one is published. Publishing updates the live row, the rule's parameter links and a group's members **in one transaction**.
+- **Four eyes**: the submitter cannot approve or reject (service check + `ck_re_revision_reviewer`). With `require-review=false`
+  an author may publish a DRAFT directly (small teams, DEV).
+- **Validated three times**: when saved (expression compiles to bool against the current library, bundles exist, sequences
+  unique, composite messages only on COMPOSITE), when submitted and when published (the library may have changed; a group's
+  member rules must be published, belong to the group's module and tenant). Invalid content is a 400, nothing is saved.
+- **Rollback** copies an older PUBLISHED/SUPERSEDED revision into a new DRAFT (`rollback_of`) that goes through the same steps.
+- **Retire** takes a rule or group out of service; a rule in an active group is refused (`rule_in_use`). Library parameters
+  that an active rule reads cannot be retyped or deactivated (`parameter_in_use`).
+- Every statement is scoped by tenant and the subject row is locked while it changes.

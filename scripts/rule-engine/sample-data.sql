@@ -155,3 +155,29 @@ VALUES ('11111111-1111-1111-1111-111111111111', 'loan-portal', 'aaaaaaaa-0000-00
         'FORM_ACTION', 'LOAN_APPLICATION', 'APPROVE', NULL, 'eeeeeeee-0000-0000-0000-000000000004'),
        ('11111111-1111-1111-1111-111111111111', 'loan-portal', 'aaaaaaaa-0000-0000-0000-000000000001',
         'FORM_FIELD', 'LOAN_APPLICATION', 'ON_CHANGE', 'amount', 'eeeeeeee-0000-0000-0000-000000000002');
+
+-- revisions: every ACTIVE sample rule/group starts as PUBLISHED revision 1 (what the admin API would have created) ---
+INSERT INTO dai_re_revision (tenant_id, kind, subject_id, revision_no, state, content, created_by, published_by, published_at)
+SELECT r.tenant_id, 'RULE', r.id, 1, 'PUBLISHED',
+       jsonb_build_object('name', r.name, 'description', r.description, 'expression', r.cel_expression,
+                          'trueMessageBundleId', r.true_message_bundle_id, 'falseMessageBundleId', r.false_message_bundle_id,
+                          'trueAction', r.true_action, 'falseAction', r.false_action),
+       'sample-data', 'sample-data', now()
+FROM dai_re_rule r WHERE r.status = 'ACTIVE' AND r.published_revision_id IS NULL;
+UPDATE dai_re_rule r SET published_revision_id = v.id
+FROM dai_re_revision v WHERE v.kind = 'RULE' AND v.subject_id = r.id AND v.state = 'PUBLISHED';
+
+INSERT INTO dai_re_revision (tenant_id, kind, subject_id, revision_no, state, content, created_by, published_by, published_at)
+SELECT g.tenant_id, 'GROUP', g.id, 1, 'PUBLISHED',
+       jsonb_build_object('name', g.name, 'description', g.description, 'policy', g.evaluation_policy,
+                          'matchOn', g.match_on, 'compositeTrueBundleId', g.composite_true_bundle_id,
+                          'compositeFalseBundleId', g.composite_false_bundle_id,
+                          'compositeTrueAction', g.composite_true_action, 'compositeFalseAction', g.composite_false_action,
+                          'onError', g.on_error,
+                          'members', COALESCE((SELECT jsonb_agg(jsonb_build_object('ruleId', m.rule_id, 'sequence', m.sequence,
+                                                                                    'enabled', m.enabled) ORDER BY m.sequence)
+                                               FROM dai_re_rule_group_rule m WHERE m.group_id = g.id), '[]'::jsonb)),
+       'sample-data', 'sample-data', now()
+FROM dai_re_rule_group g WHERE g.status = 'ACTIVE' AND g.published_revision_id IS NULL;
+UPDATE dai_re_rule_group g SET published_revision_id = v.id
+FROM dai_re_revision v WHERE v.kind = 'GROUP' AND v.subject_id = g.id AND v.state = 'PUBLISHED';

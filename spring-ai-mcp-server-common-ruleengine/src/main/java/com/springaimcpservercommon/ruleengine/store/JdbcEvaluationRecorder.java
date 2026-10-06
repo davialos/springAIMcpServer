@@ -8,6 +8,8 @@ import org.jspecify.annotations.Nullable;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Objects;
@@ -38,34 +40,39 @@ public final class JdbcEvaluationRecorder implements EvaluationRecorder {
     public void record(UUID tenantId, @Nullable UUID organizationId, @Nullable UUID triggerPointId,
                        @Nullable String language, long durationMicros, GroupResult result) {
         UUID id = Ids.newId();
+        // the same instant on both rows: it is the partition key of both tables
+        Timestamp at = Timestamp.from(Instant.now());
         try (Connection c = dataSource.getConnection()) {
             c.setAutoCommit(false);
             c.setSchema(schema);
             try {
                 try (PreparedStatement ps = c.prepareStatement(
-                        "INSERT INTO dai_re_evaluation (id, tenant_id, organization_id, rule_group_id, trigger_point_id,"
-                                + " policy, decision, language, duration_micros) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        "INSERT INTO dai_re_evaluation (id, evaluated_at, tenant_id, organization_id, rule_group_id,"
+                                + " trigger_point_id, policy, decision, language, duration_micros)"
+                                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                     ps.setObject(1, id);
-                    ps.setObject(2, tenantId);
-                    ps.setObject(3, organizationId);
-                    ps.setObject(4, result.group().id());
-                    ps.setObject(5, triggerPointId);
-                    ps.setString(6, result.group().policy().name());
-                    ps.setString(7, result.decision().name());
-                    ps.setString(8, language);
-                    ps.setLong(9, durationMicros);
+                    ps.setTimestamp(2, at);
+                    ps.setObject(3, tenantId);
+                    ps.setObject(4, organizationId);
+                    ps.setObject(5, result.group().id());
+                    ps.setObject(6, triggerPointId);
+                    ps.setString(7, result.group().policy().name());
+                    ps.setString(8, result.decision().name());
+                    ps.setString(9, language);
+                    ps.setLong(10, durationMicros);
                     ps.executeUpdate();
                 }
                 try (PreparedStatement ps = c.prepareStatement(
-                        "INSERT INTO dai_re_evaluation_result (evaluation_id, rule_id, sequence, outcome, action, error_code)"
-                                + " VALUES (?, ?, ?, ?, ?, ?)")) {
+                        "INSERT INTO dai_re_evaluation_result (evaluation_id, evaluated_at, rule_id, sequence, outcome, action,"
+                                + " error_code) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
                     for (RuleResult r : result.evaluated()) {
                         ps.setObject(1, id);
-                        ps.setObject(2, r.ruleId());
-                        ps.setInt(3, r.sequence());
-                        ps.setString(4, r.outcome().name());
-                        ps.setString(5, r.action().name());
-                        ps.setString(6, r.errorCode());
+                        ps.setTimestamp(2, at);
+                        ps.setObject(3, r.ruleId());
+                        ps.setInt(4, r.sequence());
+                        ps.setString(5, r.outcome().name());
+                        ps.setString(6, r.action().name());
+                        ps.setString(7, r.errorCode());
                         ps.addBatch();
                     }
                     ps.executeBatch();

@@ -45,12 +45,17 @@ public final class DaiTestDatabase implements AutoCloseable {
      * @return the database handle; close it in {@code @AfterAll}
      */
     public static DaiTestDatabase create() {
-        startContainerOnce();
+        // Without Docker: DAI_IT_JDBC_URL / DAI_IT_USER / DAI_IT_PASSWORD point at a local PostgreSQL 15+
+        // (e.g. scripts/rule-engine/local-db.sh); a random schema is created in it.
+        String externalUrl = System.getenv("DAI_IT_JDBC_URL");
+        if (externalUrl == null) {
+            startContainerOnce();
+        }
         String schema = "dai_it_" + HexFormat.of().toHexDigits(ThreadLocalRandom.current().nextLong());
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(POSTGRES.getJdbcUrl());
-        config.setUsername(POSTGRES.getUsername());
-        config.setPassword(POSTGRES.getPassword());
+        config.setJdbcUrl(externalUrl != null ? externalUrl : POSTGRES.getJdbcUrl());
+        config.setUsername(externalUrl != null ? System.getenv().getOrDefault("DAI_IT_USER", "dai") : POSTGRES.getUsername());
+        config.setPassword(externalUrl != null ? System.getenv().getOrDefault("DAI_IT_PASSWORD", "dai") : POSTGRES.getPassword());
         config.setMaximumPoolSize(24);
         config.setPoolName(schema);
         HikariDataSource dataSource = new HikariDataSource(config);

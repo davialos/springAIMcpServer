@@ -180,6 +180,10 @@ public final class LoadTestGenerator {
             ApiCatalog c = new OpenApiReader(this::log).read(Documents.text(spec, s.headers));
             catalogs.add(projectDir == null ? c : relativeToContext(c, settings.contextPath()));
         }
+        if (s.runtime != null) {
+            // what the running application serves, as the framework resolved it (spring-ai-mcp-server-common-loadtest-runtime)
+            catalogs.add(new OpenApiReader(this::log).read(runtimeModel(s.runtime)));
+        }
         if (projectDir != null) {
             catalogs.add(new SpringSourceScanner(this::log).scan(projectDir));
             ApiCatalog graphQl = new GraphQlSchemaReader(this::log).read(projectDir, settings);
@@ -203,7 +207,7 @@ public final class LoadTestGenerator {
             catalogs.add(new ActuatorMappingsReader(this::log).read(Documents.text(s.actuator, s.headers)));
         }
         if (catalogs.isEmpty()) {
-            throw new IllegalArgumentException("give at least one of project, openApi, har, actuator");
+            throw new IllegalArgumentException("give at least one of project, openApi, har, actuator, runtime");
         }
         ApiCatalog merged = CatalogMerger.merge(catalogs);
         SecurityModel security = projectDir == null ? SecurityModel.none()
@@ -379,11 +383,29 @@ public final class LoadTestGenerator {
         s.log.accept(line);
     }
 
+    /** The runtime model document: from a URL ({@code /actuator/loadtest} appended to a base URL) or a file. */
+    private String runtimeModel(String location) {
+        String where = location;
+        if (location.startsWith("http://") || location.startsWith("https://")) {
+            where = location.replaceAll("/+$", "");
+            if (!where.endsWith("/actuator/loadtest")) {
+                where += "/actuator/loadtest";
+            }
+        }
+        try {
+            return Documents.text(where, s.headers);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("cannot read the runtime model at " + where + " (" + e.getMessage()
+                    + "). The application needs the spring-ai-mcp-server-common-loadtest-runtime dependency, "
+                    + "loadtest.runtime.enabled=true and management.endpoints.web.exposure.include=loadtest", e);
+        }
+    }
+
     // ── configuration ──────────────────────────────────────────────────────────────────────────────────
 
     /** Immutable snapshot of a builder. */
     private record Settings(@Nullable Path project, List<String> openApi, boolean bundledOpenApi,
-                            @Nullable String actuator, List<String> har, List<String> harHosts, boolean harValues,
+                            @Nullable String actuator, @Nullable String runtime, List<String> har, List<String> harHosts, boolean harValues,
                             List<String> include, List<String> exclude, boolean defaultExcludes,
                             Map<String, String> headers, @Nullable Path outDir, @Nullable String baseUrl,
                             String dataMode, boolean useDatabase, @Nullable String dbUrl, @Nullable String dbUser,
@@ -401,6 +423,7 @@ public final class LoadTestGenerator {
         private final List<String> openApi = new ArrayList<>();
         private boolean bundledOpenApi = true;
         private @Nullable String actuator;
+        private @Nullable String runtime;
         private final List<String> har = new ArrayList<>();
         private final List<String> harHosts = new ArrayList<>();
         private boolean harValues = true;
@@ -461,6 +484,20 @@ public final class LoadTestGenerator {
          */
         public Builder bundledOpenApi(boolean on) {
             this.bundledOpenApi = on;
+            return this;
+        }
+
+        /**
+         * The runtime model of the running app: {@code /actuator/loadtest} of a host that has the
+         * {@code spring-ai-mcp-server-common-loadtest-runtime} dependency and {@code loadtest.runtime.enabled=true}
+         * — the routes it really serves with their Jackson shapes, validation constraints and method-security access.
+         * Given the application's base URL, {@code /actuator/loadtest} is appended.
+         *
+         * @param urlOrFile the app's base URL, the endpoint's URL, or a saved copy of its answer
+         * @return this
+         */
+        public Builder runtime(String urlOrFile) {
+            this.runtime = urlOrFile;
             return this;
         }
 
@@ -738,7 +775,7 @@ public final class LoadTestGenerator {
         public LoadTestGenerator build() {
             Map<String, List<Object>> copiedValues = new LinkedHashMap<>();
             values.forEach((k, v) -> copiedValues.put(k, List.copyOf(v)));
-            return new LoadTestGenerator(new Settings(project, List.copyOf(openApi), bundledOpenApi, actuator,
+            return new LoadTestGenerator(new Settings(project, List.copyOf(openApi), bundledOpenApi, actuator, runtime,
                     List.copyOf(har), List.copyOf(harHosts), harValues, List.copyOf(include), List.copyOf(exclude),
                     defaultExcludes, Map.copyOf(headers), outDir, baseUrl, dataMode, useDatabase, dbUrl, dbUser,
                     dbPassword, dbSchema, sampleSize, harvest, List.copyOf(userDataFiles), Map.copyOf(copiedValues),

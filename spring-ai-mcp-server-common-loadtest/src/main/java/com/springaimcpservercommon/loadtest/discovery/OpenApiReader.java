@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.loadtest.discovery;
 
+import com.springaimcpservercommon.loadtest.model.Access;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import com.springaimcpservercommon.loadtest.model.ApiParam;
@@ -163,7 +164,25 @@ public final class OpenApiReader {
         op.path("tags").forEach(t -> tags.add(t.asString()));
         String summary = op.path("summary").isString() ? op.path("summary").asString() : null;
         return new ApiEndpoint(id, method, path, summary, tags, new ArrayList<>(params.values()), body, null,
-                Set.of("openapi"), responseSchema(op), null, body == null ? null : bodyType);
+                Set.of(root.has("x-loadtest") ? "runtime" : "openapi"), responseSchema(op), access(op),
+                body == null ? null : bodyType);
+    }
+
+    /** {@code x-loadtest-access} of a runtime model: {@code {kind: ROLES|PUBLIC|AUTHENTICATED|DENIED, roles: [...]}}. */
+    private static @Nullable Access access(JsonNode op) {
+        JsonNode a = op.path("x-loadtest-access");
+        if (!a.isObject()) {
+            return null;
+        }
+        List<String> roles = new ArrayList<>();
+        a.path("roles").forEach(r -> roles.add(r.asString()));
+        return switch (a.path("kind").asString("")) {
+            case "PUBLIC" -> Access.open();
+            case "AUTHENTICATED" -> Access.authenticated();
+            case "DENIED" -> Access.denied();
+            case "ROLES" -> roles.isEmpty() ? Access.authenticated() : Access.roles(roles);
+            default -> null;
+        };
     }
 
     // ── response validation schemas ────────────────────────────────────────────────────────────────────

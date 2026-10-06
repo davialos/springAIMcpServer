@@ -159,8 +159,8 @@ public final class LoadTestCli {
     /** The generator configured from the discovery and generation options. */
     private LoadTestGenerator generator(CliArgs a) {
         if (a.get("project") == null && a.all("openapi").isEmpty() && a.all("har").isEmpty()
-                && a.get("actuator") == null) {
-            throw new IllegalArgumentException("give at least one of --project, --openapi, --har, --actuator");
+                && a.get("actuator") == null && a.get("runtime") == null) {
+            throw new IllegalArgumentException("give at least one of --project, --openapi, --har, --actuator, --runtime");
         }
         LoadTestGenerator.Builder b = LoadTestGenerator.builder().log(this::log);
         if (a.get("project") != null) {
@@ -172,6 +172,9 @@ public final class LoadTestCli {
         }
         a.all("openapi").forEach(b::openApi);
         b.bundledOpenApi(!a.flag("no-bundled-openapi"));
+        if (a.get("runtime") != null) {
+            b.runtime(a.get("runtime"));
+        }
         if (a.get("actuator") != null) {
             b.actuator(a.get("actuator"));
         }
@@ -829,6 +832,9 @@ public final class LoadTestCli {
                   --openapi <url|file>      OpenAPI 3 document, e.g. http://localhost:8080/v3/api-docs (repeatable;
                                             default: specs bundled in the project, --no-bundled-openapi to skip)
                   --actuator <url|file>     /actuator/mappings of the running app (also sees dynamic routes)
+                  --runtime <url|file>      /actuator/loadtest of an app with spring-ai-mcp-server-common-loadtest-runtime
+                                            (loadtest.runtime.enabled=true): live routes, Jackson shapes, validation
+                                            constraints and method-security access, as the framework resolved them
                   --har <file>              browser recording: DevTools ▸ Network ▸ Export HAR (repeatable). Adds
                                             the API calls seen, their recorded values, and a replayable journey
                   --har-host <host>         keep calls to this host (default: the most-called host; repeatable)

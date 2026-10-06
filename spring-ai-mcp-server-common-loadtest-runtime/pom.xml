@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+      Optional runtime discovery for the load-test generator (ADR-0025, LLD-16): an actuator endpoint,
+      GET /actuator/loadtest, that describes the routes the running application really serves (Spring MVC's handler
+      mappings, Jackson-visible request/response shapes, Bean Validation constraints, method-security access) as an
+      OpenAPI 3 document the generator reads with the generate command's runtime option. Dev/test dependency of a host: not part of the starter or
+      the BOM, off unless loadtest.runtime.enabled=true. Does not depend on the generator, so no generator code
+      ends up in the host.
+    -->
+    <artifactId>spring-ai-mcp-server-common-loadtest-runtime</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: Load Test :: Runtime Discovery</name>
+    <description>/actuator/loadtest: the host's live routes, shapes, constraints and access for the load-test generator.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.loadtest.runtime</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <!-- all of these are the host's own: it is a web application with actuator -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-actuator</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- the contract test: the generator reads what this module writes -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-loadtest</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- the host's method security: @PreAuthorize / @Secured are read by name -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

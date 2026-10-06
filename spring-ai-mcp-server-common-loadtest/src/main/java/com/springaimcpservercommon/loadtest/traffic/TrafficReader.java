@@ -1,6 +1,7 @@
 package com.springaimcpservercommon.loadtest.traffic;
 
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.observe.PrometheusText;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.JsonNode;
 
@@ -29,9 +30,6 @@ import java.util.regex.Pattern;
  */
 public final class TrafficReader {
 
-    private static final Pattern SAMPLE = Pattern.compile(
-            "^(\\w+)\\{(.*)}\\s+([-+0-9.eE]+|NaN|[+-]Inf)\\s*(?:\\d+)?$"); // labels may hold braces: uri="/a/{id}"
-    private static final Pattern LABEL = Pattern.compile("(\\w+)=\"([^\"]*)\"");
     private static final Pattern CLF = Pattern.compile(
             "^(\\S+) \\S+ (\\S+) \\[([^\\]]+)] \"(\\w+) (\\S+)[^\"]*\" (\\d{3}) \\S+(?: \"[^\"]*\" \"[^\"]*\")?(?:\\s+(\\d+(?:\\.\\d+)?))?.*$");
     private static final DateTimeFormatter CLF_TIME = DateTimeFormatter.ofPattern("dd/MMM/yyyy:HH:mm:ss Z",
@@ -125,18 +123,9 @@ public final class TrafficReader {
 
     private static List<Sample> textSamples(String text) {
         List<Sample> out = new ArrayList<>();
-        for (String line : text.split("\n")) {
-            Matcher m = SAMPLE.matcher(line.strip());
-            if (!line.startsWith("#") && m.matches()) {
-                Map<String, String> labels = new HashMap<>();
-                Matcher lm = LABEL.matcher(m.group(2));
-                while (lm.find()) {
-                    labels.put(lm.group(1), lm.group(2));
-                }
-                double v = parse(m.group(3));
-                if (Double.isFinite(v) || m.group(1).endsWith("_bucket")) {
-                    out.add(new Sample(m.group(1), labels, v));
-                }
+        for (PrometheusText.Sample p : PrometheusText.parse(text)) {
+            if (Double.isFinite(p.value()) || p.name().endsWith("_bucket")) {
+                out.add(new Sample(p.name(), p.labels(), p.value()));
             }
         }
         return out;

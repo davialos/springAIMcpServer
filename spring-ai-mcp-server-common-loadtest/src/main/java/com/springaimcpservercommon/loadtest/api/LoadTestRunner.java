@@ -2,6 +2,9 @@ package com.springaimcpservercommon.loadtest.api;
 
 import com.springaimcpservercommon.loadtest.k6.K6Runner;
 import com.springaimcpservercommon.loadtest.k6.LoadMode;
+import com.springaimcpservercommon.loadtest.observe.JfrRecorder;
+import com.springaimcpservercommon.loadtest.observe.ServerChecks;
+import com.springaimcpservercommon.loadtest.observe.ServerProbe;
 import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedReader;
@@ -36,6 +39,8 @@ public final class LoadTestRunner {
 
     /** k6's exit code when thresholds failed. */
     public static final int THRESHOLDS_FAILED = 99;
+    /** Exit code when k6 passed but the server-side checks failed (connection pool, GC, 5xx, log errors …). */
+    public static final int SERVER_CHECKS_FAILED = 4;
 
     private final Path suite;
     private String mode = "smoke";
@@ -46,6 +51,8 @@ public final class LoadTestRunner {
     private @Nullable String k6;
     private Consumer<String> output = System.out::println;
     private @Nullable Duration timeout;
+    private @Nullable ServerWatch serverWatch;
+    private JfrRecorder.@Nullable Settings jfr;
 
     private LoadTestRunner(Path suite) {
         this.suite = suite;
@@ -68,8 +75,23 @@ public final class LoadTestRunner {
      * @param output   everything k6 printed (stdout and stderr)
      * @param report   the report the run wrote, if it got that far
      * @param testId   the {@code testid} tag of the run's metrics (Grafana filter)
+     * @param serverFindings what the target's own metrics said (empty without server checks)
+     * @param recording the Java Flight Recording taken during the run, if any
      */
-    public record RunResult(int exitCode, String output, Optional<LoadTestReport> report, String testId) {
+    public record RunResult(int exitCode, String output, Optional<LoadTestReport> report, String testId,
+                            List<ServerChecks.Finding> serverFindings, Optional<Path> recording) {
+
+        /**
+         * A result without server findings or recording.
+         *
+         * @param exitCode k6's exit code
+         * @param output   everything k6 printed
+         * @param report   the report the run wrote
+         * @param testId   the {@code testid} tag
+         */
+        public RunResult(int exitCode, String output, Optional<LoadTestReport> report, String testId) {
+            this(exitCode, output, report, testId, List.of(), Optional.empty());
+        }
 
         /**
          * Whether k6 exited cleanly (all thresholds passed).
@@ -234,6 +256,42 @@ public final class LoadTestRunner {
     }
 
     /**
+     * What to watch on the target while the load runs.
+     *
+     * @param url      its Prometheus endpoint ({@code http://host:8080/actuator/prometheus})
+     * @param headers  request headers
+     * @param interval time between scrapes
+     * @param limits   the limits the findings are judged by
+     */
+    public record ServerWatch(String url, Map<String, String> headers, Duration interval,
+                              ServerChecks.Settings limits) {
+    }
+
+    /**
+     * Scrapes the target's Prometheus endpoint during the run and fails it ({@value #SERVER_CHECKS_FAILED}) when the
+     * server itself shows trouble: threads waiting for database connections, GC taking more than a few percent,
+     * 5xx answers, logged errors. Skipped quietly when the endpoint is unreachable.
+     *
+     * @param watch what to scrape and how to judge it, or {@code null} for no server checks
+     * @return this
+     */
+    public LoadTestRunner serverChecks(@Nullable ServerWatch watch) {
+        this.serverWatch = watch;
+        return this;
+    }
+
+    /**
+     * Records the target's JVM with Java Flight Recorder during the run.
+     *
+     * @param settings which JVM and where to put the recording, or {@code null} for none
+     * @return this
+     */
+    public LoadTestRunner jfr(JfrRecorder.@Nullable Settings settings) {
+        this.jfr = settings;
+        return this;
+    }
+
+    /**
      * Runs k6 in the suite directory and waits for it.
      *
      * @return exit code, output and report
@@ -255,6 +313,12 @@ public final class LoadTestRunner {
         long started = System.currentTimeMillis();
         StringBuilder all = new StringBuilder();
         int exit;
+        Optional<ServerProbe> probe = serverWatch == null ? Optional.empty()
+                : ServerProbe.start(serverWatch.url(), serverWatch.headers(), serverWatch.interval(), output);
+        if (serverWatch != null && probe.isPresent()) {
+            output.accept("server checks: sampling " + serverWatch.url() + " every " + serverWatch.interval().toSeconds() + " s");
+        }
+        JfrRecorder recorder = jfr == null ? null : JfrRecorder.start(jfr, testId, output);
         try {
             Process p = pb.start();
             Thread reader = Thread.ofVirtual().start(() -> {
@@ -285,6 +349,16 @@ public final class LoadTestRunner {
             Thread.currentThread().interrupt();
             exit = 130;
         }
+        Optional<Path> recording = recorder == null ? Optional.empty() : recorder.stop();
+        List<ServerChecks.Finding> findings = List.of();
+        if (probe.isPresent()) {
+            findings = ServerChecks.evaluate(probe.get().stop(), serverWatch.limits());
+            printFindings(findings);
+            writeFindings(testId, findings);
+            if (exit == 0 && ServerChecks.failed(findings)) {
+                exit = SERVER_CHECKS_FAILED;
+            }
+        }
         Optional<LoadTestReport> report = LoadTestReport.reports(suite, mode).stream()
                 .filter(f -> f.toFile().lastModified() >= started - 1000)
                 .findFirst().map(LoadTestReport::read);
@@ -292,6 +366,32 @@ public final class LoadTestRunner {
         synchronized (all) {
             text = all.toString();
         }
-        return new RunResult(exit, text, report, testId);
+        return new RunResult(exit, text, report, testId, findings, recording);
+    }
+
+    private void printFindings(List<ServerChecks.Finding> findings) {
+        if (findings.isEmpty()) {
+            return;
+        }
+        output.accept("Server-side checks (the target's own metrics during the run):");
+        for (ServerChecks.Finding f : findings) {
+            output.accept("  " + switch (f.level()) {
+                case FAIL -> "FAIL ";
+                case WARN -> "warn ";
+                case OK -> "ok   ";
+            } + f.id() + ": " + f.message());
+        }
+        output.accept(ServerChecks.failed(findings) ? "Server-side checks FAILED." : "Server-side checks passed.");
+    }
+
+    private void writeFindings(String testId, List<ServerChecks.Finding> findings) {
+        try {
+            Files.createDirectories(suite.resolve("reports"));
+            Files.writeString(suite.resolve("reports/" + testId + "-server-checks.json"),
+                    com.springaimcpservercommon.loadtest.discovery.Documents.json().valueToTree(findings)
+                            .toPrettyString());
+        } catch (IOException e) {
+            output.accept("server checks: cannot write the findings: " + e.getMessage());
+        }
     }
 }

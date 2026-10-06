@@ -44,6 +44,9 @@ import com.springaimcpservercommon.loadtest.traffic.TrafficReader;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import com.springaimcpservercommon.loadtest.observe.JfrRecorder;
+import com.springaimcpservercommon.loadtest.observe.ServerChecks;
+import tools.jackson.databind.JsonNode;
 import java.util.Set;
 
 /**
@@ -63,7 +66,7 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force", "yes", "allow-prod", "apply-slo");
+            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -362,6 +365,11 @@ public final class LoadTestCli {
             runner.k6(a.get("k6"));
         }
         a.passThrough().forEach(runner::k6Arg);
+        serverChecks(a, suite, runner);
+        if (a.flag("jfr")) {
+            runner.jfr(new JfrRecorder.Settings(a.get("jvm-pid"), a.get("jvm-match"), a.get("jcmd", "jcmd"),
+                    a.get("jfr-settings", "profile"), suite.resolve("reports"), a.all("jfr-package")));
+        }
         if (a.get("restore-snapshot") != null) { // comparable runs start from the same data
             Jdbc j = jdbc(a);
             try (var snapshots = DatabaseSnapshot.connect(j.url(), j.user(),
@@ -381,6 +389,42 @@ public final class LoadTestCli {
             }
         }
         return r.exitCode();
+    }
+
+    /** Server-side checks: on when the target's Prometheus endpoint answers (--no-server-checks, serverChecks.enabled). */
+    private void serverChecks(CliArgs a, Path suite, LoadTestRunner runner) {
+        JsonNode config;
+        try {
+            config = Documents.parse(Files.readString(suite.resolve("loadtest.config.json")));
+        } catch (IOException e) {
+            return;
+        }
+        JsonNode block = config.path("serverChecks");
+        if (a.flag("no-server-checks") || !block.path("enabled").asBoolean(true) || a.get("mode") != null
+                && a.get("mode").contains("preview")) {
+            return;
+        }
+        String base = a.get("base-url", System.getenv().getOrDefault("BASE_URL", config.path("baseUrl").asString("")));
+        String url = a.get("server-checks", block.path("url").asString("").isEmpty()
+                ? base.replaceAll("/+$", "") + "/actuator/prometheus" : block.path("url").asString());
+        if (base.isEmpty() && a.get("server-checks") == null) {
+            return;
+        }
+        Map<String, String> headers = new java.util.LinkedHashMap<>(headers(a));
+        a.all("server-header").forEach(h -> {
+            int i = h.indexOf(':');
+            headers.put(h.substring(0, i).strip(), h.substring(i + 1).strip());
+        });
+        String token = System.getenv("AUTH_TOKEN");
+        if (token != null && !headers.containsKey("Authorization")
+                && java.net.URI.create(url).getHost() != null && java.net.URI.create(url).getHost()
+                .equals(java.net.URI.create(base.isEmpty() ? url : base).getHost())) {
+            headers.put("Authorization", "Bearer " + token); // only to the target's own host
+        }
+        runner.serverChecks(new LoadTestRunner.ServerWatch(url, headers,
+                java.time.Duration.ofSeconds(Long.parseLong(a.get("server-interval",
+                        String.valueOf(block.path("intervalSeconds").asInt(5))))),
+                ServerChecks.Settings.from(block)));
     }
 
     private int report(CliArgs a) {
@@ -676,6 +720,11 @@ public final class LoadTestCli {
                   [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack (grafana/)
                   [--grafana-url url]                  annotate the run there (default http://localhost:3000)
                   [--baseline report.json]             also compare with a baseline (exit 3 on regression)
+                  Server-side checks run by default when <base-url>/actuator/prometheus answers (exit 4 when the
+                  target itself shows trouble: pool wait, GC, 5xx, logged errors; limits: config → serverChecks):
+                  [--server-checks <url>] [--server-header 'N: v'] [--server-interval 5] [--no-server-checks]
+                  [--jfr [--jvm-pid n | --jvm-match regex] [--jfr-settings profile] [--jcmd 'cmd'] [--jfr-package p]]
+                                                       record the target's JVM (jcmd) and analyze the recording
                   [--restore-snapshot name --db-url …] restore a db-snapshot first (comparable runs)
                   [-- extra k6 args]
 

@@ -103,6 +103,20 @@ final class SuiteReadme {
                 .append("`WARMUP=60s|off`) whose requests are tagged `warmup_<api>` and left out of thresholds and reports, ")
                 .append("so JIT compilation, cold caches and empty connection pools do not fail the run.\n\n");
 
+        md.append("## Server-side checks and profiling\n\n")
+                .append("`loadtest run` (and `./run.sh`) samples the target's own `/actuator/prometheus` during the run ")
+                .append("(`serverChecks.url` to change it, `--no-server-checks` to skip) and fails the run with exit code 4 ")
+                .append("when the service itself shows trouble although every request succeeded: threads waiting for ")
+                .append("database connections (HikariCP pending in more than 20% of the samples), GC taking more than 5% ")
+                .append("of the wall time, any 5xx counted by the server, logged errors. Warnings (not failures): ")
+                .append("connection pool, request threads or heap close to their limit, CPU-bound process, leaking threads. ")
+                .append("Checks whose metric the service does not expose are skipped; limits live in ")
+                .append("`loadtest.config.json → serverChecks`.\n\n")
+                .append("`loadtest run --jfr [--jvm-match regex | --jvm-pid n] [--jfr-package com.acme]` records the ")
+                .append("target's JVM with Java Flight Recorder (`jcmd`) during the run and analyzes it into the hot-spot ")
+                .append("report (CPU, allocation, GC, lock contention) in `reports/`; remote targets: ")
+                .append("`scripts/perf-test.sh` or a `--jcmd 'docker exec app jcmd'` prefix.\n\n");
+
         long uploads = catalog.endpoints().stream().filter(e -> "multipart".equals(e.bodyType())).count();
         long forms = catalog.endpoints().stream().filter(e -> "form".equals(e.bodyType())).count();
         long graphQl = catalog.endpoints().stream().filter(e -> e.isGraphQl()).count();

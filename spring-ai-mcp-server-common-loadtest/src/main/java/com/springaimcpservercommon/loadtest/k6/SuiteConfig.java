@@ -147,6 +147,14 @@ final class SuiteConfig {
             }
         }
 
+        // serverChecks: the target's own Prometheus endpoint is sampled during the run (loadtest run); a check that
+        // trips fails the run (exit 4). url "" = <baseUrl>/actuator/prometheus; every check is skipped when its metric is absent.
+        ObjectNode serverChecks = root.putObject("serverChecks");
+        serverChecks.put("enabled", true).put("url", "").put("intervalSeconds", 5);
+        serverChecks.put("hikariPendingShare", 0.2).put("hikariSaturation", 0.95).put("gcShare", 0.05);
+        serverChecks.put("threadSaturation", 0.95).put("heapUsage", 0.9).put("cpu", 0.9);
+        serverChecks.put("failOnServerErrors", true).put("failOnLogErrors", true);
+
         // model: closed (VUs, the default) | open (arrival rate: MODEL=open, RATE = requests/s at multiplier 1).
         // warmup: { duration, fraction, readOnly } runs before measuring (per profile, or here for all; WARMUP=off).
         root.put("model", "closed");

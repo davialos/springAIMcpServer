@@ -172,3 +172,16 @@ PostgreSQL log tables → Grafana through role `grafana_ro` (grants in `docker/r
 Channels are read-only in the console; e-mail/push senders are not wired. Lockout per username can be abused to lock a known
 account. Promtail mounts `/var/run/docker.sock`; the seeded passwords are shown on the login page of the local build. None of
 this belongs in a shared environment.
+
+## 13. AI assistant and the Angular console (ADR-0027)
+- **Endpoint:** `GET /api/v1/assistant` → `{available, agentSlug, provider, note}`; it provisions the tenant's workspace, tool
+  bindings and agent and the caller's grants on first use. The chat is the library's own
+  `POST /dynamic-ai/api/agents/{slug}/chat/stream` (SSE events `turn.start`, `text.delta`, `usage`, `turn.end`, `error`) with the
+  same bearer token. `POST /api/v1/expressions/check` compiles an expression for live validation.
+- **Tools:** six read-only operations over the caller's visible rules, groups and the parameter library, plus a CEL check; results
+  are bounded (25 items, expressions cut at 400 characters). They run as the caller, so scope is the token's.
+- **Log:** conversations are recorded by the library (`conversations.enabled=true`, redacted) in the tenant's workspace and are
+  read in the console's administration page and `GET /api/v1/admin/logs/conversations`.
+- **Configuration:** `ASSISTANT_ENABLED`, `ASSISTANT_PROVIDER` (`offline` | `anthropic`), `ASSISTANT_MODEL_NAME`,
+  `SPRING_AI_MODEL_CHAT`, `ANTHROPIC_API_KEY`, `ANTHROPIC_CHAT_MODEL`; `dynamic.ai.agent.*` as in the service's `application.yml`.
+- **Consoles:** React on :8080 and Angular on :8081 speak the same API and contract; only the Angular console has the assistant.

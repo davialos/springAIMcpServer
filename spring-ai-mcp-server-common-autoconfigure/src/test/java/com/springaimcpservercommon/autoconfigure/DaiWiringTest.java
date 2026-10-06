@@ -33,6 +33,7 @@ class DaiWiringTest {
             ModelRouter.class,
             AgentInvoker.class,
             AgentChatController.class,
+            com.springaimcpservercommon.webmvc.endpoint.ChatUiController.class,
             AdminApi.class,
             AdminAudit.class,
             AdminExceptionHandler.class,
@@ -127,6 +128,8 @@ class DaiWiringTest {
             assertThat(context.getBeanNamesForType(
                     com.springaimcpservercommon.ai.advisor.InvocationGuardAdvisor.KillSwitchChecker.class))
                     .containsExactly("storeAgentKillSwitchChecker");
+            assertThat(context.getBeanNamesForType(com.springaimcpservercommon.ai.chat.ChatUiState.class))
+                    .containsExactly("storeChatUiState");
         });
     }
 

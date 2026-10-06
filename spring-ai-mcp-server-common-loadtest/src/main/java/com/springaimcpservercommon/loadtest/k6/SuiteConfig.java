@@ -160,6 +160,16 @@ final class SuiteConfig {
         root.put("model", "closed");
         root.putObject("warmup").put("duration", "0s").put("fraction", 0.3).put("readOnly", false);
 
+        // resilience: network faults injected through Toxiproxy while the load runs (loadtest resilience-init, then
+        // run --resilience). baseUrl = the address of the proxy in front of the application (used as BASE_URL);
+        // proxies are created in setup; each experiment injects its toxics `startAfter` into the measured run for
+        // `duration`, then `recovery` is watched. expect: error rate / p95 allowed DURING the fault, and AFTER it
+        // (recoveryMaxErrorRate / recoveryP95Ms, default = the normal thresholds). EXPERIMENT=a,b runs a subset.
+        ObjectNode resilience = root.putObject("resilience");
+        resilience.put("enabled", false).put("toxiproxy", "http://localhost:8474").put("baseUrl", "");
+        resilience.putArray("proxies");
+        resilience.putArray("experiments");
+
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {
             modes.set(m.id(), m.defaultProfile());

@@ -5,6 +5,7 @@ import * as data from './data.js';
 import { parseMode, warmupFor } from './modes.js';
 import * as validate from './validate.js';
 import * as authn from './auth.js';
+import * as chaos from './resilience.js';
 
 const DEFAULT_EXPECTED = { GET: [200], HEAD: [200], POST: [200, 201, 202], PUT: [200, 201, 204], PATCH: [200, 204], DELETE: [200, 202, 204], OPTIONS: [200, 204] };
 
@@ -71,7 +72,8 @@ export function prepare(config, modules, seedSteps, responseSchemas) {
   }
   const parsed = parseMode(__ENV.MODE);
   const warmup = parsed.profile === 'preview' ? null : warmupFor(config, parsed.profile);
-  return { apis, byId, baseUrl: url, config, dataMode, readOnly, validation: validationSettings(config), warmup };
+  const resilience = parsed.profile === 'preview' ? null : chaos.prepare(config, warmup ? warmup.seconds + 5 : 0);
+  return { apis, byId, baseUrl: url, config, dataMode, readOnly, validation: validationSettings(config), warmup, resilience };
 }
 
 /** config.validation, with the VALIDATE_RESPONSES / VALIDATE_SAMPLE overrides: how responses and reads are checked. */
@@ -91,6 +93,19 @@ function validationSettings(config) {
 
 function at(obj, path) {
   return String(path || '').split('.').filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+
+/** Resilience (lib/resilience.js): creates the Toxiproxy proxies in setup, runs one fault scenario, removes every fault in teardown. */
+export function prepareResilience(runtime) {
+  if (runtime.resilience) chaos.ensureProxies(runtime.resilience);
+}
+
+export function fault(runtime) {
+  chaos.runFault(runtime.resilience, __ENV.FAULT);
+}
+
+export function cleanupResilience(runtime) {
+  chaos.cleanup(runtime.resilience);
 }
 
 /** Runs once before the load (k6 setup): obtains credentials. Secrets come from the environment only. */
@@ -170,6 +185,7 @@ export function send(api, req, ctx, runtime, auth, hooks, phase) {
   if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') body = encodeBody(api, req.body);
   // with a warm-up phase, measured requests carry phase:measure so the run-wide thresholds can leave the warm-up out
   const measured = runtime.warmup ? { api: api.id, name: api.name, phase: 'measure' } : { api: api.id, name: api.name };
+  if (runtime.resilience) measured.fault = chaos.tagNow(runtime.resilience, auth); // the injected fault this request runs under
   const params = {
     tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : measured,
     responseCallback: api.callback,
@@ -193,6 +209,7 @@ export function send(api, req, ctx, runtime, auth, hooks, phase) {
     break;
   }
   const tags = phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id };
+  if (runtime.resilience && !phase) tags.fault = params.tags.fault;
   check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, tags);
   checkResponse(api, res, runtime, tags);
   if (api.graphql && res.status === 200) checkGraphQl(api, res, tags);

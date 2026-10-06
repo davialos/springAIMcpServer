@@ -117,6 +117,32 @@ final class SuiteReadme {
                 .append("report (CPU, allocation, GC, lock contention) in `reports/`; remote targets: ")
                 .append("`scripts/perf-test.sh` or a `--jcmd 'docker exec app jcmd'` prefix.\n\n");
 
+        md.append("## Resilience: faults under load (Toxiproxy)\n\n")
+                .append("Real outages are partial and messy — a slow network, a throttled link, connections reset, a ")
+                .append("dependency that disappears — and the interesting question is not whether the service errors ")
+                .append("*during* the fault but whether it **recovers** after it. [Toxiproxy](https://github.com/Shopify/toxiproxy) ")
+                .append("sits between k6 and the application (and between the application and its database or ")
+                .append("downstream services); the suite injects its toxics on a schedule while the normal load runs.\n\n")
+                .append("```bash\n")
+                .append("loadtest resilience-init --suite . [--dependency db=host.docker.internal:5432:15432]\n")
+                .append("docker compose -f resilience/docker-compose.yml up -d\n")
+                .append("loadtest run --suite . --mode mixed-load --resilience [--experiment outage]\n")
+                .append("# or plain k6: k6 run -e MODE=mixed-load -e RESILIENCE=on -e BASE_URL=http://localhost:8666/… main.js\n")
+                .append("```\n\n")
+                .append("`loadtest.config.json → resilience` lists the proxies and the experiments (`slow-network`, ")
+                .append("`narrow-bandwidth`, `connection-resets`, `outage`, plus latency and outage per `--dependency`). ")
+                .append("Each starts `startAfter` into the measured run, injects its `toxics` for `duration`, then ")
+                .append("`recovery` is watched; `expect` says what is acceptable *during* the fault (`maxErrorRate`, ")
+                .append("`p95Ms`) and *after* it (`recoveryMaxErrorRate`, `recoveryP95Ms`; default: the normal ")
+                .append("thresholds). Requests are tagged `fault:<name>`, `fault:recover_<name>` or `fault:none`: the ")
+                .append("run-wide thresholds count only `fault:none`, so an injected outage does not fail the run, while ")
+                .append("a service that stays broken afterwards does (exit 99, named in the report's Resilience table). ")
+                .append("Toxiproxy is checked before the run (exit 5 when absent) and reset afterwards; server-side ")
+                .append("5xx / log-error checks are relaxed because faults cause them by design. The point of an ")
+                .append("experiment is a *timeout, retry, circuit-breaker or fallback* that is configured but never ")
+                .append("exercised — a `down` toxic on the database proxy shows whether the pool fails fast and the ")
+                .append("service heals.\n\n");
+
         long uploads = catalog.endpoints().stream().filter(e -> "multipart".equals(e.bodyType())).count();
         long forms = catalog.endpoints().stream().filter(e -> "form".equals(e.bodyType())).count();
         long graphQl = catalog.endpoints().stream().filter(e -> e.isGraphQl()).count();

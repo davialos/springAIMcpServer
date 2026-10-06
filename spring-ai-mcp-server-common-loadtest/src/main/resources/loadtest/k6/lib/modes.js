@@ -159,13 +159,24 @@ function shiftStart(s, extraSeconds) {
   return s;
 }
 
+/** The sub-metric filter of "requests that count": measured (not warm-up) and outside every injected fault. */
+function counted(runtime) {
+  const tags = [];
+  if (runtime.warmup) tags.push('phase:measure');
+  if (runtime.resilience) tags.push('fault:none');
+  return tags.join(',');
+}
+
 function thresholds(config, profile, runtime, mixed) {
   const t = {};
   const base = Object.assign({}, config.thresholds || {}, profile.thresholds || {});
   const baseKeys = [];
+  const filter = counted(runtime);
   for (const [metric, rules] of Object.entries(base)) {
-    // with a warm-up, the run-wide latency and error thresholds only count requests tagged phase:measure
-    const key = runtime.warmup && (metric === 'http_req_duration' || metric === 'http_req_failed') ? `${metric}{phase:measure}` : metric;
+    // with a warm-up or injected faults, the run-wide thresholds only count requests outside them
+    const qualify = filter && (metric === 'http_req_duration' || metric === 'http_req_failed');
+    // the status checks of requests under an injected fault fail by design: they are judged per experiment instead
+    const key = qualify ? `${metric}{${filter}}` : metric === 'checks' && runtime.resilience ? 'checks{fault:none}' : metric;
     t[key] = rules.slice();
     baseKeys.push(key);
   }
@@ -173,10 +184,24 @@ function thresholds(config, profile, runtime, mixed) {
   for (const api of runtime.apis) {
     const c = (config.apis || {})[api.id] || {};
     const p95 = profile.thresholds && profile.thresholds.http_req_duration ? null : c.p95Ms || defaults.p95Ms;
-    t[`http_req_duration{api:${api.id}}`] = p95 ? [`p(95)<${p95}`] : ['max>=0'];
     const errorRate = profile.maxErrorRate !== undefined ? profile.maxErrorRate : c.maxErrorRate !== undefined ? c.maxErrorRate : defaults.maxErrorRate;
-    t[`http_req_failed{api:${api.id}}`] = errorRate !== undefined ? [`rate<${errorRate}`] : ['rate>=0'];
+    const apiFilter = runtime.resilience ? `api:${api.id},fault:none` : `api:${api.id}`;
+    if (runtime.resilience) {
+      t[`http_req_duration{api:${api.id}}`] = ['max>=0']; // still tracked for the report, judged outside the faults
+      t[`http_req_failed{api:${api.id}}`] = ['rate>=0'];
+    }
+    t[`http_req_duration{${apiFilter}}`] = p95 ? [`p(95)<${p95}`] : ['max>=0'];
+    t[`http_req_failed{${apiFilter}}`] = errorRate !== undefined ? [`rate<${errorRate}`] : ['rate>=0'];
     t[`http_reqs{api:${api.id}}`] = ['count>=0']; // keeps a per-API request count in the summary
+  }
+  // resilience: each experiment is judged on its own phase — during the fault, and after it (the service must recover)
+  for (const e of (runtime.resilience ? runtime.resilience.experiments : [])) {
+    const x = e.expect || {};
+    t[`http_req_failed{fault:${e.name}}`] = [`rate<${x.maxErrorRate !== undefined ? x.maxErrorRate : 1.01}`];
+    t[`http_req_duration{fault:${e.name}}`] = x.p95Ms ? [`p(95)<${x.p95Ms}`] : ['max>=0'];
+    t[`http_req_failed{fault:recover_${e.name}}`] = [`rate<${x.recoveryMaxErrorRate !== undefined ? x.recoveryMaxErrorRate : defaults.maxErrorRate !== undefined ? defaults.maxErrorRate : 0.01}`];
+    const recoveryP95 = x.recoveryP95Ms || defaults.p95Ms;
+    t[`http_req_duration{fault:recover_${e.name}}`] = recoveryP95 ? [`p(95)<${recoveryP95}`] : ['max>=0'];
   }
   const v = runtime.validation || {};
   if (v.mode === 'check') t.response_schema_violations = [`count<=${v.maxViolations || 0}`];
@@ -240,9 +265,15 @@ export function buildOptions(config, runtime, journeySteps, lifecycleFlows, chan
       offset += scenarioSeconds(s) + gap;
     }
   }
+  if (runtime.resilience) {
+    runtime.resilience.experiments.forEach((e, i) => {
+      scenarios[`fault_${e.name}`] = { executor: 'per-vu-iterations', vus: 1, iterations: 1, maxDuration: `${Math.ceil(seconds(e.duration || '60s') + 30)}s`,
+        startTime: formatDuration(runtime.resilience.windows[i].start), exec: 'fault', env: { FAULT: e.name }, gracefulStop: '5s' };
+    });
+  }
   const warm = runtime.warmup;
   if (warm) {
-    for (const name of Object.keys(scenarios)) shiftStart(scenarios[name], warm.seconds + 5);
+    for (const name of Object.keys(scenarios)) if (name.indexOf('fault_') !== 0) shiftStart(scenarios[name], warm.seconds + 5); // faults already count the shift
     scenarios.warmup = warmupScenario(profile, warm);
   }
   return Object.assign(common, { scenarios, thresholds: thresholds(config, profile, runtime, mixed) });

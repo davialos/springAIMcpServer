@@ -5,6 +5,7 @@ import com.springaimcpservercommon.loadtest.k6.LoadMode;
 import com.springaimcpservercommon.loadtest.observe.JfrRecorder;
 import com.springaimcpservercommon.loadtest.observe.ServerChecks;
 import com.springaimcpservercommon.loadtest.observe.ServerProbe;
+import com.springaimcpservercommon.loadtest.resilience.Toxiproxy;
 import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedReader;
@@ -41,6 +42,8 @@ public final class LoadTestRunner {
     public static final int THRESHOLDS_FAILED = 99;
     /** Exit code when k6 passed but the server-side checks failed (connection pool, GC, 5xx, log errors …). */
     public static final int SERVER_CHECKS_FAILED = 4;
+    /** Exit code when resilience experiments were requested but the Toxiproxy server cannot be reached. */
+    public static final int RESILIENCE_UNAVAILABLE = 5;
 
     private final Path suite;
     private String mode = "smoke";
@@ -53,6 +56,7 @@ public final class LoadTestRunner {
     private @Nullable Duration timeout;
     private @Nullable ServerWatch serverWatch;
     private JfrRecorder.@Nullable Settings jfr;
+    private @Nullable String toxiproxyUrl;
 
     private LoadTestRunner(Path suite) {
         this.suite = suite;
@@ -292,6 +296,30 @@ public final class LoadTestRunner {
     }
 
     /**
+     * Injects the faults of {@code loadtest.config.json → resilience} through a Toxiproxy server while the load runs
+     * (network latency, outage, throttled bandwidth, reset connections, on the application and on its dependencies),
+     * and judges the service during each fault and after it. Traffic goes to the proxy in front of the application:
+     * {@code BASE_URL} defaults to {@code resilience.baseUrl}. Before the run Toxiproxy must answer
+     * (otherwise exit code {@value #RESILIENCE_UNAVAILABLE}); afterwards it is reset, so an interrupted run leaves no
+     * fault behind. Run-wide thresholds then count only requests outside the faults.
+     *
+     * @param toxiproxyApi the server's API address, or {@code null} for none (experiments off)
+     * @param experiments  names of the experiments to run, or {@code null} for all of them
+     * @return this
+     */
+    public LoadTestRunner resilience(@Nullable String toxiproxyApi, @Nullable List<String> experiments) {
+        this.toxiproxyUrl = toxiproxyApi;
+        if (toxiproxyApi != null) {
+            env.put("RESILIENCE", "on");
+            env.put("TOXIPROXY_URL", toxiproxyApi);
+            if (experiments != null && !experiments.isEmpty()) {
+                env.put("EXPERIMENT", String.join(",", experiments));
+            }
+        }
+        return this;
+    }
+
+    /**
      * Runs k6 in the suite directory and waits for it.
      *
      * @return exit code, output and report
@@ -303,6 +331,19 @@ public final class LoadTestRunner {
             throw new IllegalArgumentException(suite + " has no main.js (generate the suite first)");
         }
         String testId = mode + "-" + java.time.Instant.now().toString().replaceAll("[:.]", "-");
+        Toxiproxy toxiproxy = null;
+        if (toxiproxyUrl != null) {
+            toxiproxy = new Toxiproxy(toxiproxyUrl);
+            try {
+                output.accept("resilience: Toxiproxy " + toxiproxy.version() + " at " + toxiproxyUrl);
+            } catch (IOException e) {
+                String message = "resilience: Toxiproxy is not reachable at " + toxiproxyUrl + " (" + e.getMessage()
+                        + "). Start it: docker compose -f resilience/docker-compose.yml up -d  (loadtest resilience-init creates it)";
+                output.accept(message);
+                return new RunResult(RESILIENCE_UNAVAILABLE, message, Optional.empty(), testId);
+            }
+            proxyBaseUrl();
+        }
         List<String> args = new ArrayList<>(extra);
         args.add("--tag");
         args.add("testid=" + testId);
@@ -349,6 +390,13 @@ public final class LoadTestRunner {
             Thread.currentThread().interrupt();
             exit = 130;
         }
+        if (toxiproxy != null) {
+            try {
+                toxiproxy.reset(); // whatever happened, no fault stays behind
+            } catch (IOException e) {
+                output.accept("resilience: could not reset Toxiproxy (" + e.getMessage() + ") - remove its toxics by hand");
+            }
+        }
         Optional<Path> recording = recorder == null ? Optional.empty() : recorder.stop();
         List<ServerChecks.Finding> findings = List.of();
         if (probe.isPresent()) {
@@ -367,6 +415,24 @@ public final class LoadTestRunner {
             text = all.toString();
         }
         return new RunResult(exit, text, report, testId, findings, recording);
+    }
+
+    /** Traffic must go through the proxy in front of the application: its address replaces a BASE_URL nobody set. */
+    private void proxyBaseUrl() {
+        if (env.containsKey("BASE_URL") || System.getenv("BASE_URL") != null) {
+            return;
+        }
+        try {
+            var block = com.springaimcpservercommon.loadtest.discovery.Documents
+                    .parse(Files.readString(suite.resolve("loadtest.config.json"))).path("resilience");
+            String url = block.path("baseUrl").asString("");
+            if (!url.isBlank()) {
+                env.put("BASE_URL", url);
+                output.accept("resilience: load goes through the proxy " + url);
+            }
+        } catch (IOException e) {
+            // no readable config: k6 reports it
+        }
     }
 
     private void printFindings(List<ServerChecks.Finding> findings) {

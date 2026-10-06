@@ -293,7 +293,7 @@ final class JsEmitter {
                 import { SharedArray } from 'k6/data';
                 import * as data from './lib/data.js';
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
-                import { prepare, call, warmupCall, session as walkSession, replay, lifecycle as walkLifecycle, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney, previewLifecycle as printLifecycle } from './lib/http.js';
+                import { prepare, call, warmupCall, session as walkSession, replay, lifecycle as walkLifecycle, seed, cleanup, setupAuth, prepareResilience, fault as injectFault, cleanupResilience, preview as previewRequests, previewJourney as printJourney, previewLifecycle as printLifecycle } from './lib/http.js';
                 import { runChannels } from './lib/channels.js';
                 import { summary } from './lib/report.js';
                 import * as grafana from './lib/grafana.js';
@@ -348,13 +348,16 @@ final class JsEmitter {
                 export function setup() {
                   if (parseMode(__ENV.MODE).profile === 'preview') return { headers: {}, seeded: {} };
                   const annotation = grafana.start(parseMode(__ENV.MODE).mode, RUNTIME.dataMode, RUNTIME.baseUrl);
+                  prepareResilience(RUNTIME);
                   const auth = setupAuth(CONFIG);
                   auth.seeded = seed(RUNTIME, SEED, auth, hooks);
                   auth.annotation = annotation;
+                  auth.t0 = Date.now(); // the scenarios' clock starts here (resilience windows)
                   return auth;
                 }
 
                 export function teardown(data) {
+                  cleanupResilience(RUNTIME);
                   cleanup(RUNTIME, SEED, data, hooks);
                   if (data) grafana.end(data.annotation);
                 }
@@ -377,6 +380,11 @@ final class JsEmitter {
 
                 export function warmup(auth) {
                   warmupCall(RUNTIME, auth, hooks, pickWeighted);
+                }
+
+                // Resilience experiment: injects the faults of one config.resilience experiment (Toxiproxy), then removes them.
+                export function fault() {
+                  injectFault(RUNTIME);
                 }
 
                 export function session(auth) {

@@ -37,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.springaimcpservercommon.loadtest.resilience.ResilienceSetup;
 import com.springaimcpservercommon.loadtest.traffic.Route;
 import com.springaimcpservercommon.loadtest.traffic.TrafficImporter;
 import com.springaimcpservercommon.loadtest.traffic.TrafficModel;
@@ -66,7 +67,7 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks");
+            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks", "resilience");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -118,6 +119,7 @@ public final class LoadTestCli {
                 case "compare" -> compare(a);
                 case "init-gradle" -> initGradle(a);
                 case "traffic" -> traffic(a);
+                case "resilience-init" -> resilienceInit(a);
                 case "bulk-load" -> bulkLoad(a);
                 case "db-snapshot" -> dbSnapshot(a);
                 case "modes" -> modes();
@@ -370,6 +372,9 @@ public final class LoadTestCli {
             runner.jfr(new JfrRecorder.Settings(a.get("jvm-pid"), a.get("jvm-match"), a.get("jcmd", "jcmd"),
                     a.get("jfr-settings", "profile"), suite.resolve("reports"), a.all("jfr-package")));
         }
+        if (a.flag("resilience")) {
+            runner.resilience(a.get("toxiproxy", toxiproxyUrl(suite)), a.all("experiment").isEmpty() ? null : a.all("experiment"));
+        }
         if (a.get("restore-snapshot") != null) { // comparable runs start from the same data
             Jdbc j = jdbc(a);
             try (var snapshots = DatabaseSnapshot.connect(j.url(), j.user(),
@@ -421,10 +426,50 @@ public final class LoadTestCli {
                 .equals(java.net.URI.create(base.isEmpty() ? url : base).getHost())) {
             headers.put("Authorization", "Bearer " + token); // only to the target's own host
         }
+        ServerChecks.Settings limits = ServerChecks.Settings.from(block);
+        if (a.flag("resilience")) { // 5xx and logged errors are what an injected outage is supposed to cause
+            limits = new ServerChecks.Settings(limits.hikariPendingShare(), limits.hikariSaturation(), limits.gcShare(),
+                    limits.threadSaturation(), limits.heapUsage(), limits.cpu(), false, false);
+        }
         runner.serverChecks(new LoadTestRunner.ServerWatch(url, headers,
                 java.time.Duration.ofSeconds(Long.parseLong(a.get("server-interval",
                         String.valueOf(block.path("intervalSeconds").asInt(5))))),
-                ServerChecks.Settings.from(block)));
+                limits));
+    }
+
+    private String toxiproxyUrl(Path suite) {
+        try {
+            return Documents.parse(Files.readString(suite.resolve("loadtest.config.json"))).path("resilience")
+                    .path("toxiproxy").asString("http://localhost:8474");
+        } catch (IOException e) {
+            return "http://localhost:8474";
+        }
+    }
+
+    /** Prepares a suite for resilience experiments: the config block and a Compose file for Toxiproxy. */
+    private int resilienceInit(CliArgs a) {
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        List<ResilienceSetup.Dependency> dependencies = new java.util.ArrayList<>();
+        for (String d : a.all("dependency")) { // name=host:port:listenPort
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("([\\w-]+)=(.+:\\d+):(\\d+)").matcher(d);
+            if (!m.matches()) {
+                throw new IllegalArgumentException("--dependency expects name=upstreamHost:upstreamPort:listenPort, got " + d);
+            }
+            dependencies.add(new ResilienceSetup.Dependency(m.group(1), m.group(2), Integer.parseInt(m.group(3))));
+        }
+        ResilienceSetup.Options defaults = ResilienceSetup.Options.of("");
+        try {
+            Path compose = ResilienceSetup.write(suite, new ResilienceSetup.Options(a.get("base-url", ""), a.get("upstream"),
+                    Integer.parseInt(a.get("listen-port", String.valueOf(defaults.listenPort()))), dependencies,
+                    a.get("toxiproxy", defaults.toxiproxyUrl()), a.get("image", defaults.image())), a.flag("force"));
+            out.println("Resilience experiments added to " + suite.resolve("loadtest.config.json") + " (resilience block)");
+            out.println("Toxiproxy:  docker compose -f " + compose + " up -d");
+            out.println("Run:        loadtest run --suite " + suite + " --mode load --resilience   [--experiment outage]");
+            out.println("Point the dependencies you proxy (--dependency) at Toxiproxy's listen ports.");
+            return 0;
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot write the resilience setup: " + e.getMessage(), e);
+        }
     }
 
     private int report(CliArgs a) {
@@ -713,9 +758,18 @@ public final class LoadTestCli {
                   [--apply-slo [--slo-headroom 1.5]]  turn observed p95/error rate into thresholds; [--rate n] overrides
                                             the observed rate. Then: ./run.sh mixed-production | session-load
 
+                Resilience (faults injected under load, Toxiproxy)
+                  resilience-init --suite <dir> [--listen-port 8666] [--upstream host.docker.internal:8080]
+                                            [--dependency db=host.docker.internal:5432:15432] (repeatable) [--force]
+                                            adds config → resilience (slow network, narrow bandwidth, connection
+                                            resets, outage; latency + outage per dependency) and
+                                            resilience/docker-compose.yml. Then: docker compose up -d; run --resilience
+
                 Run
                   --suite <dir> --mode <mode> [--data-mode <mode>] [--api id1,id2] [--vus n] [--rate n]
                   [--duration-scale 0.1] [--base-url url] [--per-api parallel] [--read-only] [--k6 path]
+                  [--resilience [--toxiproxy http://localhost:8474] [--experiment name] (repeatable)]  inject the
+                                            config → resilience faults; judged during each fault and after it (exit 5: no Toxiproxy)
                   [--model open] [--warmup 60s|off]   arrival-rate (open) model; warm-up phase left out of the verdict
                   [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack (grafana/)
                   [--grafana-url url]                  annotate the run there (default http://localhost:3000)

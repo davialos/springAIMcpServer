@@ -53,7 +53,7 @@ public final class K6SuiteGenerator {
 
     private static final List<String> RUNTIME_FILES = List.of(
             "lib/data.js", "lib/dummy.js", "lib/random.js", "lib/modes.js", "lib/http.js", "lib/report.js",
-            "lib/grafana.js", "lib/validate.js", "lib/auth.js", "lib/channels.js", "lib/dictionaries.json");
+            "lib/grafana.js", "lib/validate.js", "lib/auth.js", "lib/channels.js", "lib/resilience.js", "lib/dictionaries.json");
 
     /**
      * Generation options.

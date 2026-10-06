@@ -1,9 +1,12 @@
 package com.springaimcpservercommon.loadtest.cli;
 
+import com.springaimcpservercommon.loadtest.api.CiReport;
 import com.springaimcpservercommon.loadtest.api.LoadTestGenerator;
 import com.springaimcpservercommon.loadtest.api.LoadTestReport;
 import com.springaimcpservercommon.loadtest.api.LoadTestRunner;
 import com.springaimcpservercommon.loadtest.api.ReportComparison;
+import com.springaimcpservercommon.loadtest.api.TrendHistory;
+import com.springaimcpservercommon.loadtest.ci.CiPipelines;
 import com.springaimcpservercommon.loadtest.data.BulkLoader;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.DatabaseSnapshot;
@@ -67,7 +70,7 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks", "resilience");
+            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks", "resilience", "ci", "update-baseline", "record");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -119,6 +122,8 @@ public final class LoadTestCli {
                 case "compare" -> compare(a);
                 case "init-gradle" -> initGradle(a);
                 case "traffic" -> traffic(a);
+                case "trend" -> trend(a);
+                case "init-ci" -> initCi(a);
                 case "resilience-init" -> resilienceInit(a);
                 case "bulk-load" -> bulkLoad(a);
                 case "db-snapshot" -> dbSnapshot(a);
@@ -385,15 +390,27 @@ public final class LoadTestCli {
             }
         }
         LoadTestRunner.RunResult r = runner.run();
-        if (!a.all("baseline").isEmpty() && r.report().isPresent()) {
-            ReportComparison c = ReportComparison.compare(LoadTestReport.read(Path.of(a.get("baseline"))),
+        ReportComparison comparison = null;
+        if (!a.all("baseline").isEmpty() && r.report().isPresent() && Files.isRegularFile(Path.of(a.get("baseline")))) {
+            comparison = ReportComparison.compare(LoadTestReport.read(Path.of(a.get("baseline"))),
                     r.report().get(), rules(a));
-            out.println(c.toMarkdown());
-            if (r.exitCode() == 0 && !c.passed()) {
-                return 3;
-            }
+            out.println(comparison.toMarkdown());
+        }
+        if (r.report().isPresent() && (a.flag("ci") || a.get("history") != null)) {
+            publishCi(a, suite, r.report().get(), comparison);
+        }
+        if (comparison != null && r.exitCode() == 0 && !comparison.passed()) {
+            return 3;
         }
         return r.exitCode();
+    }
+
+    /** CI outputs: pull-request comment, job summary, comparison file, history ({@code --ci}, {@code --history}). */
+    private void publishCi(CliArgs a, Path suite, LoadTestReport report, ReportComparison comparison) {
+        Path history = a.get("history") != null ? Path.of(a.get("history")) : suite.resolve("history/trend.jsonl");
+        CiReport.Published p = CiReport.publish(suite, report, comparison, history, System.getenv());
+        out.println("CI report: " + p.comment() + (p.summary() ? " (also appended to the job summary)" : "")
+                + (p.recorded() ? "; run recorded in " + history : ""));
     }
 
     /** Server-side checks: on when the target's Prometheus endpoint answers (--no-server-checks, serverChecks.enabled). */
@@ -495,13 +512,101 @@ public final class LoadTestCli {
         if (a.get("baseline") == null) {
             throw new IllegalArgumentException("--baseline <report.json> is required");
         }
-        LoadTestReport baseline = LoadTestReport.read(Path.of(a.get("baseline")));
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        Path baselineFile = Path.of(a.get("baseline"));
+        boolean first = a.flag("ci") && !Files.isRegularFile(baselineFile); // nothing to compare with yet
+        LoadTestReport baseline = first ? null : LoadTestReport.read(baselineFile);
+        String mode = a.get("mode", baseline == null ? null : baseline.mode());
         LoadTestReport current = a.get("current") != null ? LoadTestReport.read(Path.of(a.get("current")))
-                : LoadTestReport.latest(Path.of(a.get("suite", "load-tests")), baseline.mode())
-                .orElseThrow(() -> new IllegalArgumentException("no current report; pass --current"));
-        ReportComparison c = ReportComparison.compare(baseline, current, rules(a));
-        out.println(c.toMarkdown());
-        return c.passed() ? 0 : 3;
+                : LoadTestReport.latest(suite, mode).orElseThrow(() -> new IllegalArgumentException(
+                "no current report; pass --current"));
+        ReportComparison c = baseline == null ? null : ReportComparison.compare(baseline, current, rules(a));
+        if (c != null) {
+            out.println(c.toMarkdown());
+        } else {
+            out.println("No baseline at " + baselineFile + " yet: nothing to compare with.");
+        }
+        if (a.flag("ci") || a.get("history") != null) {
+            publishCi(a, suite, current, c);
+        }
+        boolean passed = c == null || c.passed();
+        if (passed && a.flag("update-baseline") && !current.file().toAbsolutePath().equals(baselineFile.toAbsolutePath())) {
+            try {
+                if (baselineFile.toAbsolutePath().getParent() != null) {
+                    Files.createDirectories(baselineFile.toAbsolutePath().getParent());
+                }
+                Files.copy(current.file(), baselineFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                out.println("Baseline updated from " + current.file().getFileName());
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+        return passed ? 0 : 3;
+    }
+
+    /** Writes a CI pipeline (GitHub Actions, GitLab CI or Jenkins) that runs the suite on every pull request and nightly. */
+    private int initCi(CliArgs a) {
+        Path project = Path.of(a.get("project", "."));
+        Path suitePath = Path.of(a.get("suite", project.resolve("load-tests").toString()));
+        String suite = project.toAbsolutePath().normalize().relativize(suitePath.toAbsolutePath().normalize()).toString()
+                .replace('\\', '/');
+        CiPipelines.BuildTool tool = a.get("build-tool") != null
+                ? CiPipelines.BuildTool.valueOf(a.get("build-tool").toUpperCase(Locale.ROOT))
+                : Files.exists(project.resolve("pom.xml")) ? CiPipelines.BuildTool.MAVEN
+                : Files.exists(project.resolve("build.gradle")) || Files.exists(project.resolve("build.gradle.kts"))
+                ? CiPipelines.BuildTool.GRADLE : CiPipelines.BuildTool.MAVEN;
+        String baseUrl = a.get("base-url", "http://localhost:8080");
+        try {
+            JsonNode config = Documents.parse(Files.readString(suitePath.resolve("loadtest.config.json")));
+            baseUrl = a.get("base-url", config.path("baseUrl").asString(baseUrl));
+        } catch (IOException | RuntimeException e) {
+            // no suite yet: the pipeline still works with the default address
+        }
+        CiPipelines.Options d = CiPipelines.Options.defaults(CiPipelines.Provider.parse(a.get("provider", "github")), tool,
+                suite.isEmpty() ? "." : suite, baseUrl);
+        CiPipelines.Options o = new CiPipelines.Options(d.provider(), d.tool(), d.suite(), a.get("mode", d.mode()),
+                a.get("nightly-mode", d.nightlyMode()), a.get("start", d.startCommand()), a.get("build", d.buildCommand()),
+                a.get("health-url", d.healthUrl()), d.baseUrl(), a.get("k6-version", d.k6Version()),
+                a.get("generator-version", d.generatorVersion()));
+        try {
+            Path file = CiPipelines.write(project, o, a.flag("force"));
+            if (file == null) {
+                out.println(project.resolve(o.provider().file()) + " exists (--force to overwrite)");
+                return 0;
+            }
+            out.println("Wrote " + file + " (" + tool.name().toLowerCase(Locale.ROOT) + ", mode " + o.mode()
+                    + ", nightly " + o.nightlyMode() + ")");
+            out.println("Edit the build/start commands and the services the application needs. Baseline and trend: "
+                    + o.suite() + "/baseline, " + o.suite() + "/history (kept by the pipeline's cache).");
+            if (o.provider() == CiPipelines.Provider.GITLAB) {
+                out.println("Add to .gitlab-ci.yml:  include: { local: .gitlab-ci.loadtest.yml }");
+            }
+            return 0;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** The performance history of a suite; {@code --record} first adds the newest report. */
+    private int trend(CliArgs a) {
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        Path history = a.get("history") != null ? Path.of(a.get("history")) : suite.resolve("history/trend.jsonl");
+        String mode = a.get("mode");
+        if (a.flag("record")) {
+            LoadTestReport latest = LoadTestReport.latest(suite, mode).orElseThrow(() -> new IllegalArgumentException(
+                    "no report in " + suite.resolve("reports") + (mode == null ? "" : " for " + mode)));
+            boolean added = TrendHistory.record(history, latest, TrendHistory.commitFrom(System.getenv()), java.time.Instant.now());
+            out.println(added ? "Recorded " + latest.file().getFileName() + " in " + history
+                    : latest.file().getFileName() + " is already in " + history);
+        }
+        List<TrendHistory.Point> points = TrendHistory.read(history, mode, Integer.parseInt(a.get("last", "20")));
+        if (points.isEmpty()) {
+            out.println("No runs recorded in " + history + " (run with --ci or --record).");
+            return 0;
+        }
+        out.println(TrendHistory.toMarkdown(points));
+        Double drift = TrendHistory.p95Drift(points);
+        return drift != null && a.get("max-drift") != null && drift > Double.parseDouble(a.get("max-drift")) ? 3 : 0;
     }
 
     /** Imports production traffic (Prometheus metrics, access logs) into a suite: endpoint mix, rate, sessions. */
@@ -757,6 +862,16 @@ public final class LoadTestCli {
                                             common/combined or JSON-lines access log: mix, rate, peak, sessions
                   [--apply-slo [--slo-headroom 1.5]]  turn observed p95/error rate into thresholds; [--rate n] overrides
                                             the observed rate. Then: ./run.sh mixed-production | session-load
+
+                CI
+                  init-ci --provider github|gitlab|jenkins [--project .] [--suite load-tests] [--mode smoke]
+                          [--nightly-mode mixed-load] [--build cmd] [--start cmd] [--health-url url] [--force]
+                                            writes the pipeline: build, start, run, baseline gate, PR comment, trend
+                  compare --baseline reports/base.json [--ci] [--history f.jsonl] [--update-baseline]
+                                            --ci: reports/pr-comment.md + $GITHUB_STEP_SUMMARY + trend; a missing
+                                            baseline is the first run. run takes --ci/--history too (with --baseline)
+                  trend --suite <dir> [--mode m] [--last 20] [--record] [--max-drift 25]   the history; exit 3 when the
+                                            newest p95 drifted more than --max-drift % above the recent median
 
                 Resilience (faults injected under load, Toxiproxy)
                   resilience-init --suite <dir> [--listen-port 8666] [--upstream host.docker.internal:8080]

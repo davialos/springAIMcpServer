@@ -143,6 +143,22 @@ final class SuiteReadme {
                 .append("exercised — a `down` toxic on the database proxy shows whether the pool fails fast and the ")
                 .append("service heals.\n\n");
 
+        md.append("## CI: pipeline, baseline gate, pull-request comment, trend\n\n")
+                .append("```bash\n")
+                .append("loadtest init-ci --provider github|gitlab|jenkins --project .   # writes the pipeline\n")
+                .append("```\n\n")
+                .append("The pipeline builds and starts the application, runs the suite on every pull request and push ")
+                .append("(`smoke`) and nightly (`mixed-load`), and fails when thresholds fail or when an API regressed against ")
+                .append("the baseline (`compare`: p95 +20%, errors +1 pp). The baseline (`baseline/<mode>.json`) and the ")
+                .append("trend (`history/<mode>.jsonl`) are kept between builds by the CI cache and refreshed by the main ")
+                .append("branch; the first run on main becomes the baseline. `loadtest compare --ci` (or `loadtest run ")
+                .append("--ci --baseline …`) writes `reports/pr-comment.md` — verdict, per-API comparison, a p95 / req/s / ")
+                .append("error trend with a note when the newest p95 sits well above the median of the recent runs ")
+                .append("(a slow drift no single comparison flags) — appends it to the job summary (`$GITHUB_STEP_SUMMARY`) ")
+                .append("and the GitHub workflow posts it as one comment per pull request, updated in place. ")
+                .append("`loadtest trend [--record] [--max-drift 25]` prints the history and can gate on drift. Maven: ")
+                .append("`mvn …loadtest-maven-plugin:compare -Dloadtest.ci=true`; Gradle: `loadtestCompare -Ploadtest.ci`.\n\n");
+
         long uploads = catalog.endpoints().stream().filter(e -> "multipart".equals(e.bodyType())).count();
         long forms = catalog.endpoints().stream().filter(e -> "form".equals(e.bodyType())).count();
         long graphQl = catalog.endpoints().stream().filter(e -> e.isGraphQl()).count();

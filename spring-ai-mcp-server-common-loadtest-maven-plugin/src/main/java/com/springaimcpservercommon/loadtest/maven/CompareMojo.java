@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.loadtest.maven;
 
+import com.springaimcpservercommon.loadtest.api.CiReport;
 import com.springaimcpservercommon.loadtest.api.LoadTestReport;
 import com.springaimcpservercommon.loadtest.api.ReportComparison;
 import org.apache.maven.plugin.AbstractMojo;
@@ -27,9 +28,21 @@ public class CompareMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project.basedir}/load-tests", property = "loadtest.suite")
     protected @Nullable File suite;
 
-    /** Baseline report file. */
+    /** Baseline report file. With {@code ci}, a missing file is the first run: nothing to compare with yet. */
     @Parameter(property = "loadtest.baseline", required = true)
     protected @Nullable File baseline;
+
+    /** Load mode whose newest report is judged when there is no baseline yet. */
+    @Parameter(defaultValue = "smoke", property = "loadtest.mode")
+    protected String mode = "smoke";
+
+    /** CI outputs: {@code reports/pr-comment.md}, the job summary ({@code $GITHUB_STEP_SUMMARY}) and the trend history. */
+    @Parameter(defaultValue = "false", property = "loadtest.ci")
+    protected boolean ci;
+
+    /** The trend history ({@code .jsonl}) the run is added to; default {@code <suite>/history/trend.jsonl} with {@code ci}. */
+    @Parameter(property = "loadtest.history")
+    protected @Nullable File history;
 
     /** Report to judge (default: the newest report of the baseline's mode). */
     @Parameter(property = "loadtest.current")
@@ -65,25 +78,36 @@ public class CompareMojo extends AbstractMojo {
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
-        if (baseline == null || !baseline.isFile()) {
+        boolean firstRun = ci && baseline != null && !baseline.isFile();
+        if (baseline == null || !baseline.isFile() && !firstRun) {
             throw new MojoFailureException("baseline report not found: " + baseline);
         }
         Path dir = (suite == null ? new File("load-tests") : suite).toPath();
         LoadTestReport base;
         LoadTestReport now;
         try {
-            base = LoadTestReport.read(baseline.toPath());
+            base = firstRun ? null : LoadTestReport.read(baseline.toPath());
+            String judged = base == null ? mode : base.mode();
             now = current != null ? LoadTestReport.read(current.toPath())
-                    : LoadTestReport.latest(dir, base.mode()).orElseThrow(() -> new IllegalArgumentException(
-                    "no " + base.mode() + " report in " + dir.resolve("reports")));
+                    : LoadTestReport.latest(dir, judged).orElseThrow(() -> new IllegalArgumentException(
+                    "no " + judged + " report in " + dir.resolve("reports")));
         } catch (IllegalArgumentException e) {
             throw new MojoFailureException(e.getMessage(), e);
         }
-        ReportComparison c = ReportComparison.compare(base, now,
+        ReportComparison c = base == null ? null : ReportComparison.compare(base, now,
                 new ReportComparison.Rules(maxP95Increase, minP95DeltaMs, maxFailedIncrease, minRequests));
-        RunMojo.writeComparison(dir, c);
-        c.toMarkdown().lines().forEach(getLog()::info);
-        if (!c.passed()) {
+        if (c != null) {
+            RunMojo.writeComparison(dir, c);
+            c.toMarkdown().lines().forEach(getLog()::info);
+        } else {
+            getLog().info("loadtest: no baseline at " + baseline + " yet - nothing to compare with");
+        }
+        if (ci || history != null) {
+            Path trend = history != null ? history.toPath() : dir.resolve("history/trend.jsonl");
+            CiReport.Published p = CiReport.publish(dir, now, c, trend, System.getenv());
+            getLog().info("loadtest: CI report " + p.comment() + (p.summary() ? " (also in the job summary)" : ""));
+        }
+        if (c != null && !c.passed()) {
             String message = "load test regression: " + c.regressions().stream()
                     .map(ch -> ch.api() + " (" + ch.reason() + ")").toList();
             if (failOnRegression) {
@@ -94,6 +118,9 @@ public class CompareMojo extends AbstractMojo {
         }
         if (updateBaseline && !now.file().toAbsolutePath().equals(baseline.toPath().toAbsolutePath())) {
             try {
+                if (baseline.toPath().toAbsolutePath().getParent() != null) {
+                    Files.createDirectories(baseline.toPath().toAbsolutePath().getParent());
+                }
                 Files.copy(now.file(), baseline.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 getLog().info("loadtest: baseline updated from " + now.file().getFileName());
             } catch (IOException e) {

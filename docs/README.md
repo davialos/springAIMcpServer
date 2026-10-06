@@ -35,6 +35,7 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 17 | [integration/host-integration-guide.md](integration/host-integration-guide.md) — how a host app adopts the starter | control-plane-designer | Draft v1 |
 | 18b | [integration/guardrails-integration-guide.md](integration/guardrails-integration-guide.md) — prompt validation (malicious content, business scope), PII redaction and backend-controlled structured answers: configuration, client contract, extension SPIs, testing, rollout | agent-runtime-designer | v1 |
 | 18 | [integration/annotation-best-practices.md](integration/annotation-best-practices.md) — `@Ai*` annotation best practices, centralized configuration, per-annotation scenarios | metadata-extraction-designer | Draft v1 |
+| 18c | [integration/spring-ai-annotations-mcp-streaming-guide.md](integration/spring-ai-annotations-mcp-streaming-guide.md) — how Spring AI, the `@Ai*` annotations, the MCP server and SSE streaming fit together: features used / not used, tool path, advisors, known gaps | agent-runtime-designer | v1 |
 | — | [../scripts/db/postgresql/](../scripts/db/postgresql/) — DBA scripts: roles, database, schema, grants, verification | — | v1 |
 | — | [tools/jfr-analyzer.md](tools/jfr-analyzer.md) — JFR recording analyzer (developer tool) | — | v1 |
 | — | [tools/perf-test.md](tools/perf-test.md) — universal performance test: k6 load + JFR profile of any running service (`scripts/perf-test.sh`) | — | v1 |

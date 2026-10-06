@@ -5,7 +5,7 @@
 #   scripts/rule-engine/dev.sh up        generate .env on first run, build, start, seed, wait until everything answers
 #   scripts/rule-engine/dev.sh down      stop (data volumes are kept)
 #   scripts/rule-engine/dev.sh reset     stop and DELETE all data volumes (next `up` starts from a clean database)
-#   scripts/rule-engine/dev.sh ps | logs [service] | seed | smoke | dashboards | e2e | config | urls
+#   scripts/rule-engine/dev.sh ps | logs [service] | seed | smoke | dashboards | e2e | e2e-angular | config | urls
 #
 # Needs: Docker with the compose plugin, bash, curl, python3. Nothing else is installed on the host.
 set -euo pipefail
@@ -34,7 +34,7 @@ ensure_env() {
 val() { local v; v="$(grep -E "^$1=" "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"; echo "${v:-$2}"; }
 
 ports() {
-  UI="$(val RE_UI_PORT 8080)"; AUTH="$(val RE_AUTH_PORT 8091)"; RULES="$(val RE_RULES_PORT 8092)"
+  UI="$(val RE_UI_PORT 8080)"; UING="$(val RE_UI_NG_PORT 8081)"; AUTH="$(val RE_AUTH_PORT 8091)"; RULES="$(val RE_RULES_PORT 8092)"
   GRAFANA="$(val RE_GRAFANA_PORT 3000)"; PROM="$(val RE_PROMETHEUS_PORT 9090)"; LOKI="$(val RE_LOKI_PORT 3100)"; PG="$(val RE_PG_PORT 55433)"
 }
 
@@ -44,6 +44,7 @@ urls() {
 
   Console      http://localhost:$UI        admin / $(val SEED_ADMIN_PASSWORD admin123)   (ADMIN: rules, groups, logs)
                                           user  / $(val SEED_USER_PASSWORD user123)   (USER: rules and groups of own organization)
+  Angular UI   http://localhost:$UING        same logins, plus the AI assistant (offline templates unless ANTHROPIC_API_KEY is set in .env)
   Grafana      http://localhost:$GRAFANA        $(val GRAFANA_ADMIN_USER admin) / $(val GRAFANA_ADMIN_PASSWORD admin)   dashboard "Rule engine — operations"
   Prometheus   http://localhost:$PROM        Loki http://localhost:$LOKI        PostgreSQL localhost:$PG (user postgres, password in $env_file)
   Auth API     http://localhost:$AUTH        Rule-engine API http://localhost:$RULES   (the console reaches both through :$UI)
@@ -73,6 +74,7 @@ cmd_up() {
   wait_for "auth service" 120 curl -fsS "http://127.0.0.1:$AUTH/actuator/health/readiness"
   wait_for "seed" 180 seed_done || { dc logs seed | tail -20; exit 1; }
   wait_for "console" 60 curl -fsS "http://127.0.0.1:$UI/healthz"
+  wait_for "Angular console" 60 curl -fsS "http://127.0.0.1:$UING/healthz"
   wait_for "Grafana" 90 curl -fsS "http://127.0.0.1:$GRAFANA/api/health"
   urls
 }
@@ -91,6 +93,7 @@ cmd_smoke() {
 
   echo "services:"
   check "console health"                curl -fsS "http://127.0.0.1:$UI/healthz"
+  check "Angular console health"        curl -fsS "http://127.0.0.1:$UING/healthz"
   check "auth readiness"                curl -fsS "http://127.0.0.1:$AUTH/actuator/health/readiness"
   check "rule-engine readiness"         curl -fsS "http://127.0.0.1:$RULES/actuator/health/readiness"
 
@@ -117,6 +120,16 @@ cmd_smoke() {
   [ "$(code /api/v1/admin/logs/summary "")" = 401 ] && ok "no token is refused (401)" || bad "no token is refused (401)"
   check "rule groups are listed for the user" curl -fsS -H "Authorization: Bearer $ut" "http://127.0.0.1:$UI/api/v1/rule-groups"
 
+  echo "AI assistant (Angular console origin):"
+  assistant_json="$(curl -fsS -H "Authorization: Bearer $at" "http://127.0.0.1:$UING/api/v1/assistant")"
+  slug="$(echo "$assistant_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("agentSlug") or "")')"
+  [ -n "$slug" ] && ok "assistant provisioned for the tenant ($slug)" || bad "assistant provisioned for the tenant"
+  turn="$(curl -sN -m 40 -X POST -H "Authorization: Bearer $at" -H 'Content-Type: application/json' -d '{"message":"list the active rules"}' \
+          "http://127.0.0.1:$UING/dynamic-ai/api/agents/$slug/chat/stream" || true)"
+  echo "$turn" | grep -q 'event:text.delta' && echo "$turn" | grep -q 'event:turn.end' && ok "chat streams text and ends the turn" || bad "chat streams text and ends the turn"
+  [ "$(code /api/v1/assistant "")" = 401 ] && ok "assistant info needs a token" || bad "assistant info needs a token"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$UING/dynamic-ai/admin/api/v1/me")" = 404 ] && ok "the library's admin API is not reachable from the browser origin" || bad "the library's admin API is not reachable from the browser origin"
+
   echo "observability:"
   check "Prometheus targets up"   bash -c "curl -fsS 'http://127.0.0.1:$PROM/api/v1/targets' | python3 -c 'import json,sys; t=json.load(sys.stdin)[\"data\"][\"activeTargets\"]; sys.exit(0 if t and all(x[\"health\"]==\"up\" for x in t) else 1)'"
   # Loki reports ready ~15 s after it starts, and promtail needs a moment to ship the first lines: retry for up to a minute
@@ -130,6 +143,13 @@ cmd_smoke() {
   check "Grafana dashboard provisioned" bash -c "$(declare -f grafana_get val); env_file='$env_file' GRAFANA=$GRAFANA; grafana_get /api/dashboards/uid/rule-engine-ops"
 
   if [ $fail -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILED"; return 1; fi
+}
+
+cmd_e2e_angular() {
+  ensure_env; ports
+  (cd "$dir/ui-angular" && npm ci --no-audit --no-fund && npx playwright install chromium && \
+     E2E_BASE_URL="http://127.0.0.1:$UING" E2E_ADMIN_PASSWORD="$(val SEED_ADMIN_PASSWORD admin123)" \
+     E2E_USER_PASSWORD="$(val SEED_USER_PASSWORD user123)" npx playwright test)
 }
 
 cmd_e2e() {
@@ -149,6 +169,7 @@ case "${1:-up}" in
   seed)   ensure_env; dc run --rm seed ;;
   smoke)  cmd_smoke ;;
   e2e)    cmd_e2e ;;
+  e2e-angular) cmd_e2e_angular ;;
   dashboards) ensure_env; ports; GRAFANA_URL="http://127.0.0.1:$GRAFANA" GRAFANA_USER="$(val GRAFANA_ADMIN_USER admin)" \
             GRAFANA_PASSWORD="$(val GRAFANA_ADMIN_PASSWORD admin)" python3 "$root/scripts/rule-engine/check-dashboard.py" ;;
   config) ensure_env; dc config ;;

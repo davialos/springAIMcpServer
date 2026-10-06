@@ -7,3 +7,6 @@ ui/playwright-report
 ui/e2e/screenshots
 ui/src/proto/gen
 .env
+**/.angular
+ui-angular/src/app/core/proto/gen
+ui-angular/e2e

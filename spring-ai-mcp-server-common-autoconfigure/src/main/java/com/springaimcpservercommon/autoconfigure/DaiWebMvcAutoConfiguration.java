@@ -10,6 +10,7 @@ import com.springaimcpservercommon.core.json.CanonicalJson;
 import com.springaimcpservercommon.security.authz.AuthorizationEngine;
 import com.springaimcpservercommon.security.principal.AuthorityMapper;
 import com.springaimcpservercommon.webmvc.endpoint.AgentChatController;
+import com.springaimcpservercommon.webmvc.endpoint.ChatUiController;
 import com.springaimcpservercommon.webmvc.endpoint.DispatchingBackingExecutor;
 import com.springaimcpservercommon.webmvc.endpoint.DynamicEndpointRegistrar;
 import com.springaimcpservercommon.webmvc.endpoint.EndpointLookup;
@@ -421,6 +422,36 @@ public class DaiWebMvcAutoConfiguration {
         return new AgentChatController(agentResolver, agentInvoker, principalResolver,
                 authorizationEngine, rateLimiter, killSwitchChecker,
                 turnEventBufferProvider.getIfAvailable(), budgetCheckerProvider.getIfAvailable(),
+                new AgentChatController.Settings(chat.streamIdleTimeout(), chat.maxMessageChars()));
+    }
+
+    /**
+     * Supporting APIs of the embeddable chat interface: chat config, UI state for reloads, choice answers and
+     * like/dislike feedback (LLD-13 §3). Registered next to the chat controller, under the same conditions.
+     *
+     * @param agentResolver       looks up the published agent by slug
+     * @param principalResolver   maps the request to the caller
+     * @param authorizationEngine authorizes {@code agent:invoke}
+     * @param chatUi              chat-interface defaults and state
+     * @param redactor            PII redactor for typed answers and comments
+     * @param props               framework properties (chat limits)
+     * @return the controller
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatUiController.class)
+    @ConditionalOnBean({AuthorizationEngine.class, GenericDynamicHandler.DaiPrincipalResolver.class,
+                        AgentInvoker.class})
+    public ChatUiController chatUiController(
+            AgentChatController.AgentResolver agentResolver,
+            GenericDynamicHandler.DaiPrincipalResolver principalResolver,
+            AuthorizationEngine authorizationEngine,
+            ObjectProvider<com.springaimcpservercommon.ai.chat.ChatUiRuntime> chatUi,
+            ObjectProvider<com.springaimcpservercommon.core.guard.PiiRedactor> redactor,
+            DaiProperties props) {
+        DaiProperties.Chat chat = props.chat();
+        return new ChatUiController(agentResolver, principalResolver, authorizationEngine,
+                chatUi.getIfAvailable(() -> com.springaimcpservercommon.ai.chat.ChatUiRuntime.OFF),
+                redactor.getIfAvailable(com.springaimcpservercommon.core.guard.PiiRedactor::defaults),
                 new AgentChatController.Settings(chat.streamIdleTimeout(), chat.maxMessageChars()));
     }
 

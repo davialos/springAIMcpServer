@@ -413,9 +413,6 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                 String convKey = convKey(principal, agent, conversationId);
                 ChatUiSpec ui = chatUi.effective(agent);
                 TurnEvents sideEvents = new TurnEvents(true);
-                if (ui != null && ui.steps()) {
-                    sideEvents.emit(new StreamEvent.Step("check", "Checked your request", "done", null));
-                }
                 List<ToolCallback> callbacks = withChatUi(agent, principal, turnId, convKey, sideEvents,
                         buildToolCallbacks(agent, principal, authentication, request, turnId, modelCallId, turnObservation));
                 ChatClient client = buildChatClient(agent, principal, resolved);
@@ -507,18 +504,22 @@ public final class DefaultAgentInvoker implements AgentInvoker {
                     return Flux.fromIterable(events);
                 });
 
-                StreamEvent turnStart = new StreamEvent.TurnStart(
-                        turnId, conversationId, agent.slug(), agent.revision(),
-                        StreamEvent.TurnStart.PROTOCOL, ui);
+                List<StreamEvent> opening = new ArrayList<>(2);
+                opening.add(new StreamEvent.TurnStart(turnId, conversationId, agent.slug(), agent.revision(),
+                        StreamEvent.TurnStart.PROTOCOL, ui));
+                if (ui != null && ui.steps()) {
+                    // the input checks have passed by now, so this step is known before the model starts
+                    opening.add(new StreamEvent.Step("check", "Checked your request", "done", null));
+                }
 
                 // step, tool and component events from tool threads join the text stream as they happen; the side
                 // channel closes when the model's stream does, so usage and turn.end always come last
-                Flux<StreamEvent> live = Flux.merge(content.doFinally(signal -> sideEvents.complete()),
-                        sideEvents.flux());
+                Flux<StreamEvent> live = Flux.merge(sideEvents.flux(),
+                        content.doFinally(signal -> sideEvents.complete()));
 
                 AtomicBoolean recorded = new AtomicBoolean(false);
                 return Flux.concat(
-                        Flux.just(turnStart),
+                        Flux.fromIterable(opening),
                         live.concatWith(ending)
                 ).onErrorResume(e -> {
                     LOG.error("Agent {} stream error for principal {}",

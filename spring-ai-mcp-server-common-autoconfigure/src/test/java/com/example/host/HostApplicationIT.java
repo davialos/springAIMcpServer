@@ -844,4 +844,83 @@ class HostApplicationIT {
         assertThat(jdbc.queryForList("select content from dynamic_ai.dai_chat_memory_message").toString())
                 .doesNotContain("jane.doe").doesNotContain("4111");
     }
+
+    /** Reads a streamed chat turn: the async body is written while the stream runs, so wait for turn.end. */
+    private static String stream(String slug, String user, Map<String, Object> body) throws Exception {
+        var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/dynamic-ai/api/agents/" + slug + "/chat/stream")
+                        .header("Authorization", bearer(user)).contentType("application/json")
+                        .accept("text/event-stream").content(JSON.writeValueAsString(body)))
+                .andReturn().getResponse();
+        for (int i = 0; i < 100 && !response.getContentAsString().contains("event:turn.end")
+                && !response.getContentAsString().contains("event:error"); i++) {
+            Thread.sleep(100);
+        }
+        return response.getContentAsString();
+    }
+
+    @Test
+    void theChatUiStreamsStepsAsksWithChoicesAndKeepsAnswersAndFeedback() throws Exception {
+        String ws = workspaceWithTeam("chat-ui-ws");
+        String agent = publish(ws, "AGENT", "chat-ui-agent", JSON.writeValueAsString(Map.of(
+                "displayName", "Order helper", "systemPrompt", "You help.",
+                "model", Map.of("providerId", "openai", "modelName", "scripted"),
+                "output", Map.of("mode", "text", "ui", Map.of("choices", true)))));
+        call("POST", "/dynamic-ai/admin/api/v1/workspaces/" + ws + "/members", "admin",
+                Map.of("principalId", principalId("dave"), "role", "CONSUMER"), 201);
+        String base = "/dynamic-ai/api/agents/chat-ui-agent";
+        // default deny: the supporting APIs need agent:invoke like the chat itself
+        call("GET", base + "/chat/config", "dave", null, 403);
+        grant(ws, "dave", "agent:invoke", agent);
+
+        var config = call("GET", base + "/chat/config", "dave", null, 200);
+        assertThat(config.get("ui").toString()).isEqualTo(
+                "{\"choices\":true,\"copy\":true,\"feedback\":true,\"steps\":true}");
+        assertThat(config.get("persistentState").asBoolean()).isTrue();
+
+        // the stream announces the features and shows the step details
+        String sse = stream("chat-ui-agent", "dave", Map.of("message", "hello"));
+        assertThat(sse).contains("event:turn.start", "\"ui\":{\"choices\":true", "event:step",
+                "Checked your request", "event:turn.end");
+
+        // the model asks with options; the sync result carries the component
+        var asked = call("POST", base + "/chat", "dave", Map.of("message", "calltool present_choices "
+                + "{\"question\":\"Which order, jane@x.io?\",\"options\":[{\"value\":\"o1\",\"label\":\"Order 1\"},"
+                + "{\"value\":\"o2\",\"label\":\"Order 2\"}]}"), 200);
+        String conversation = asked.get("conversationId").asString();
+        String turn = asked.get("turnId").asString();
+        var component = asked.get("components").get(0);
+        assertThat(component.get("componentType").asString()).isEqualTo("choice");
+        assertThat(component.get("payload").asString()).contains("[redacted email]").doesNotContain("jane@x.io");
+        String answerPath = base + "/conversations/" + conversation + "/turns/" + turn + "/components/"
+                + component.get("componentId").asString() + "/answer";
+
+        call("POST", answerPath, "dave", Map.of("values", List.of("o9")), 400);
+        call("POST", answerPath, "erin", Map.of("values", List.of("o2")), 403);
+        var answered = call("POST", answerPath, "dave", Map.of("values", List.of("o2")), 200);
+        assertThat(answered.get("message").asString()).contains("Order 2");
+        call("POST", answerPath, "dave", Map.of("values", List.of("o1")), 409);
+
+        String feedback = base + "/conversations/" + conversation + "/turns/" + turn + "/feedback";
+        call("PUT", feedback, "dave", Map.of("rating", "down", "reason", "inaccurate", "comment", "mail me a@b.io"),
+                204);
+        call("PUT", feedback, "dave", Map.of("rating", "sideways"), 400);
+
+        var state = call("GET", base + "/conversations/" + conversation + "/ui-state", "dave", null, 200);
+        assertThat(state.get("components").get(0).get("answer").get("values").get(0).asString()).isEqualTo("o2");
+        assertThat(state.get("feedback").get(0).get("rating").asString()).isEqualTo("down");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class));
+        assertThat(jdbc.queryForList("select comment from dynamic_ai.dai_turn_feedback").toString())
+                .contains("[redacted email]").doesNotContain("a@b.io");
+
+        // another user sees nothing of dave's conversation, even with its ids
+        grant(ws, "erin", "agent:invoke", agent);
+        var foreign = call("GET", base + "/conversations/" + conversation + "/ui-state", "erin", null, 200);
+        assertThat(foreign.get("components")).isEmpty();
+        call("POST", answerPath, "erin", Map.of("values", List.of("o1")), 404);
+
+        call("DELETE", feedback, "dave", null, 204);
+        assertThat(call("GET", base + "/conversations/" + conversation + "/ui-state", "dave", null, 200)
+                .get("feedback")).isEmpty();
+    }
 }

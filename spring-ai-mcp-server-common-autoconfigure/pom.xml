@@ -156,6 +156,13 @@
             <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- the host-level IT checks that a host serves the chat UI assets through the library's chain -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-chat-ui</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
             <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>

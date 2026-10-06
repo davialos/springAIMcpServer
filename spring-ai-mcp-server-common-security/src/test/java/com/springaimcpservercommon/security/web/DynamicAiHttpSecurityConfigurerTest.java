@@ -62,12 +62,12 @@ class DynamicAiHttpSecurityConfigurerTest {
 
     @RestController
     static class PingController {
-        @GetMapping({"/dynamic-ai/api/ping", "/dynamic-ai/admin/ping", "/dynamic-ai/mcp"})
+        @GetMapping({"/dynamic-ai/api/ping", "/dynamic-ai/admin/ping", "/dynamic-ai/mcp", "/dynamic-ai/ui/chat/x.js"})
         String ping() {
             return "pong";
         }
 
-        @PostMapping("/dynamic-ai/admin/ping")
+        @PostMapping({"/dynamic-ai/admin/ping", "/dynamic-ai/ui/chat/x.js"})
         String change() {
             return "changed";
         }
@@ -162,6 +162,15 @@ class DynamicAiHttpSecurityConfigurerTest {
 
         mvc.perform(get("/dynamic-ai/api/ping").header("Authorization", "ApiKey " + key.plaintext()))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void chatUiAssetsAreReadableAnonymouslyButNothingElseIs() throws Exception {
+        mvc.perform(get("/dynamic-ai/ui/chat/x.js"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"));
+        mvc.perform(post("/dynamic-ai/ui/chat/x.js")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/dynamic-ai/api/ping")).andExpect(status().isUnauthorized());
     }
 
     @Test

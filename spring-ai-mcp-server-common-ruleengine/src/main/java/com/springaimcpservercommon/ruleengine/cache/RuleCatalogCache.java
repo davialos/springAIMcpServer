@@ -103,6 +103,34 @@ public final class RuleCatalogCache {
         }
     }
 
+    /**
+     * The current parameter library (what expressions are checked against), refreshed when its change marker moved.
+     * Used by the authoring services so an author sees a new parameter as soon as any node has loaded it.
+     *
+     * @return the library
+     * @throws RuleCatalogUnavailableException if it was never loaded and the store fails
+     */
+    public ParameterLibrary library() {
+        synchronized (refreshLock) {
+            try {
+                long pv = store.changeMarker(Scope.PARAMETERS);
+                ParametersEntry p = parameters;
+                if (p == null || p.version() != pv) {
+                    Versioned<java.util.List<com.springaimcpservercommon.ruleengine.model.Parameter>> loaded = store.loadParameters();
+                    p = new ParametersEntry(loaded.version(), new ParameterLibrary(loaded.value()));
+                    parameters = p;
+                }
+                return p.library();
+            } catch (RuntimeException e) {
+                ParametersEntry last = parameters;
+                if (last != null) {
+                    return last.library();
+                }
+                throw new RuleCatalogUnavailableException("parameter library unavailable", e);
+            }
+        }
+    }
+
     /** Drops every snapshot so the next call reloads (admin "refresh now"; local, other nodes follow the markers). */
     public void invalidate() {
         synchronized (refreshLock) {

@@ -89,4 +89,26 @@ class DaiControllerRegistrarTest {
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         org.assertj.core.api.Assertions.assertThat(reset).contains("\"id\":\"openai\"", "\"reason\":\"recovered\"");
     }
+
+    /**
+     * With Actuator on the class path a second {@code RequestMappingHandlerMapping} (its {@code controllerEndpointHandlerMapping})
+     * exists next to Spring MVC's own. The mapping that receives the library's routes is MVC's, picked by name: a host with
+     * Actuator used to fail to start because a bean method asked for "the" mapping.
+     */
+    @Test
+    void theHostsMainMappingIsChosenByNameWhenActuatorAddsASecondOne() {
+        GenericWebApplicationContext context = new GenericWebApplicationContext(new MockServletContext());
+        org.springframework.context.annotation.AnnotationConfigUtils.registerAnnotationConfigProcessors(context);
+        context.registerBean(Mvc.class);
+        context.registerBean("controllerEndpointHandlerMapping",
+                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class);
+        context.refresh();
+
+        var chosen = DaiControllerRegistrar.hostMapping(context.getBeanProvider(
+                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class), context);
+
+        org.assertj.core.api.Assertions.assertThat(context.getBeansOfType(
+                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class)).hasSize(2);
+        org.assertj.core.api.Assertions.assertThat(chosen).isSameAs(context.getBean("requestMappingHandlerMapping"));
+    }
 }

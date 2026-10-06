@@ -70,6 +70,12 @@ final class DaiControllerRegistrar implements SmartInitializingSingleton {
      * endpoints, which must not receive ours).
      */
     private @org.jspecify.annotations.Nullable RequestMappingHandlerMapping hostMapping() {
+        return hostMapping(mapping, beans);
+    }
+
+    /** Shared by every bean that must register routes: the host's main mapping, never Actuator's. */
+    static @org.jspecify.annotations.Nullable RequestMappingHandlerMapping hostMapping(
+            ObjectProvider<RequestMappingHandlerMapping> mapping, ListableBeanFactory beans) {
         RequestMappingHandlerMapping unique = mapping.getIfUnique();
         if (unique != null) {
             return unique;

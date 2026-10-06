@@ -34,6 +34,7 @@ Status: **Research & LLD phase (no implementation yet)** · Started 2026-09-27
 | 16c | [data/schema-usecase-map.md](data/schema-usecase-map.md) — what each table is for: writers/readers, business flows, CRUD matrix, feature/requirement traceability, findings | schema-usecase-mapper | v1 (evidence 2026-10-01) |
 | 17 | [integration/host-integration-guide.md](integration/host-integration-guide.md) — how a host app adopts the starter | control-plane-designer | Draft v1 |
 | 18b | [integration/guardrails-integration-guide.md](integration/guardrails-integration-guide.md) — prompt validation (malicious content, business scope), PII redaction and backend-controlled structured answers: configuration, client contract, extension SPIs, testing, rollout | agent-runtime-designer | v1 |
+| 18c | [integration/chat-ui-guide.md](integration/chat-ui-guide.md) — embeddable chat window `<saimcp-chat>`: Markdown/tables/code/Mermaid, steps, choices, feedback, copy; attributes, events, stream flags, supporting APIs, custom components, theming, CSP | agent-runtime-designer | v1 |
 | 18 | [integration/annotation-best-practices.md](integration/annotation-best-practices.md) — `@Ai*` annotation best practices, centralized configuration, per-annotation scenarios | metadata-extraction-designer | Draft v1 |
 | — | [../scripts/db/postgresql/](../scripts/db/postgresql/) — DBA scripts: roles, database, schema, grants, verification | — | v1 |
 | — | [tools/jfr-analyzer.md](tools/jfr-analyzer.md) — JFR recording analyzer (developer tool) | — | v1 |

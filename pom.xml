@@ -35,6 +35,8 @@
         <module>spring-ai-mcp-server-common-loadtest-maven-plugin</module>
         <module>spring-ai-mcp-server-common-loadtest-junit</module>
         <module>spring-ai-mcp-server-common-loadtest-mcp</module>
+        <!-- Embeddable chat interface (Web Component, static resources only; opt-in, not in the starter) -->
+        <module>spring-ai-mcp-server-common-chat-ui</module>
         <!-- Developer tool, not part of the starter: JFR recording analyzer (docs/tools/jfr-analyzer.md) -->
         <module>spring-ai-mcp-server-common-jfr-analyzer</module>
     </modules>

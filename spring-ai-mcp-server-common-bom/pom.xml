@@ -66,6 +66,11 @@
             </dependency>
             <dependency>
                 <groupId>com.springaimcpservercommon</groupId>
+                <artifactId>spring-ai-mcp-server-common-chat-ui</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.springaimcpservercommon</groupId>
                 <artifactId>spring-ai-mcp-server-common-spring-boot-starter</artifactId>
                 <version>${project.version}</version>
             </dependency>

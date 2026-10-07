@@ -133,7 +133,7 @@ public final class LoadTestCli {
         err.println("[loadtest] " + line);
     }
 
-    // ── discover ───────────────────────────────────────────────────────────────────────────────────────
+    // ── discover ───────────────────────────────────────────────────────────────────────────────
 
     /** The generator configured from the discovery and generation options. */
     private LoadTestGenerator generator(CliArgs a) {
@@ -189,7 +189,7 @@ public final class LoadTestCli {
         for (String bind : a.all("bind")) {
             int eq = bind.indexOf('=');
             if (eq <= 0) {
-                throw new IllegalArgumentException("--bind expects key=table.column: " + bind);
+                throw new IllegalArgumentException("--bind expects key=table.column or key=sql:SELECT …: " + bind);
             }
             b.bind(bind.substring(0, eq), bind.substring(eq + 1));
         }
@@ -241,7 +241,7 @@ public final class LoadTestCli {
         return 0;
     }
 
-    // ── generate ───────────────────────────────────────────────────────────────────────────────────────
+    // ── generate ───────────────────────────────────────────────────────────────────────────────
 
     private int generate(CliArgs a) {
         LoadTestGenerator.GenerationResult r = generator(a).generate();
@@ -252,7 +252,7 @@ public final class LoadTestCli {
         return 0;
     }
 
-    // ── schema ─────────────────────────────────────────────────────────────────────────────────────────
+    // ── schema ───────────────────────────────────────────────────────────────────────────────
 
     /** Prints the current structure of the configured database as DDL (stdout, or {@code --out}). */
     private int schema(CliArgs a) {
@@ -371,7 +371,7 @@ public final class LoadTestCli {
         }
     }
 
-    // ── run / modes ────────────────────────────────────────────────────────────────────────────────────
+    // ── run / modes ───────────────────────────────────────────────────────────────────────────────
 
     private int run(CliArgs a) {
         Path suite = Path.of(a.get("suite", "load-tests"));
@@ -541,7 +541,8 @@ public final class LoadTestCli {
                   --harvest                 also fill real pools from the running API's collection endpoints
                   --user-data <file>        JSON/YAML {fields, payloads, bindings} or CSV (header = field keys)
                   --value key=v1,v2         user values for a field (repeatable)
-                  --bind key=table.column   force a field to draw real values from a column (repeatable)
+                  --bind key=table.column   force a field to draw real values from a column (repeatable);
+                                    key=sql:SELECT id FROM t WHERE …  uses a read-only query instead (first column)
                   --interactive             prompt for user values, API by API
                   --drop-unverified         drop user values of id/FK fields that are not in the database
                   --auth <type>             none | bearer | basic | apiKey | login   (--login-path /api/auth/login)

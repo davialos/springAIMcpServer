@@ -68,6 +68,12 @@
             <artifactId>spring-ai-mcp-server-common-ruleengine</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- Opt-in, plain Java: context-aware validation (ADR-0027) -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-validation</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-jdbc</artifactId>

@@ -220,7 +220,7 @@ else:
 |---|---|---|---|
 | admin | `/dynamic-ai/admin/**` | your session login, bearer tokens | CSRF for session requests, exempt for requests with credentials in a header |
 | mcp | `/dynamic-ai/mcp` | bearer tokens | stateless; 401 carries the RFC 9728 challenge when `mcp.resource-uri` is set |
-| api | every other `/dynamic-ai/**` | bearer tokens | stateless, no CSRF |
+| api | every other `/dynamic-ai/**` | bearer tokens | stateless, no CSRF; anonymous `GET /dynamic-ai/ui/**` (static chat UI assets) |
 
 Bearer tokens are validated with **your** `JwtDecoder` (or `OpaqueTokenIntrospector`) bean and converted with your
 `JwtAuthenticationConverter` if you have one, so claims and authorities look exactly as in the rest of your app.
@@ -787,6 +787,31 @@ PiiDetector employeeNumbers() {                 // your own identifier formats
 Validators and detectors must be thread-safe, fast and must not log the text they see; one that throws rejects the
 prompt / withholds the answer (fail closed). Replace the whole pipeline with your own `TurnSafety` or `PiiRedactor`
 bean if you need to.
+
+### Chat window for your users (`<saimcp-chat>`)
+
+Add `spring-ai-mcp-server-common-chat-ui` and put one element on a page. It gives you a resizable chat window over
+the agent stream, with:
+
+- Markdown, tables, highlighted code (CEL included) and Mermaid;
+- step details;
+- like/dislike and copy buttons;
+- questions with options that stay answered after a reload.
+
+```html
+<script type="module" src="/dynamic-ai/ui/chat/saimcp-chat.js"></script>
+<saimcp-chat agent="order-helper" width="420" height="640"></saimcp-chat>
+<script type="module">
+  document.querySelector('saimcp-chat').tokenProvider = async () => auth.getAccessToken();
+</script>
+```
+
+The backend decides which features the window offers, through `dynamic.ai.agent.chat.ui.*` or the agent's
+`output.ui`. Choices are off until `dynamic.ai.agent.chat.ui.choices=true`. The API chain lets browsers `GET`
+`/dynamic-ai/ui/**` without a token. Everything the component calls is authenticated.
+
+> **Full guide:** [chat-ui-guide.md](chat-ui-guide.md) covers attributes, events, the stream flags, the supporting
+> APIs, custom components, theming, CSP and Mermaid self-hosting.
 
 ## 10. Operations
 

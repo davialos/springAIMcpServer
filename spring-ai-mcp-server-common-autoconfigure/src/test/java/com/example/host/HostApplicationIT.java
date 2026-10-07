@@ -242,6 +242,16 @@ class HostApplicationIT {
     }
 
     @Test
+    void theChatUiAssetsAreServedToAnAnonymousBrowserFromTheChatUiJar() throws Exception {
+        var js = mvc.perform(get("/dynamic-ai/ui/chat/saimcp-chat.js")).andExpect(status().isOk())
+                .andReturn().getResponse();
+        assertThat(js.getContentType()).contains("javascript");
+        assertThat(js.getContentAsString()).contains("customElements.define('saimcp-chat'");
+        // the assets are public, the API they call is not
+        mvc.perform(get("/dynamic-ai/api/agents/helper/chat/config")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void theHostsOwnEndpointsKeepTheHostsProtection() throws Exception {
         mvc.perform(get("/host/ping")).andExpect(status().isUnauthorized());
         mvc.perform(get("/host/ping").header("Authorization", bearer("alice"))).andExpect(status().isOk());

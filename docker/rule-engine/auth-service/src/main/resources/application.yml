@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: rule-engine-auth-service
+  datasource:
+    url: ${AUTH_DB_URL:jdbc:postgresql://localhost:5432/dai_store}
+    username: ${AUTH_DB_USER:re_auth}
+    password: ${AUTH_DB_PASSWORD:re_auth_secret}
+    hikari:
+      schema: re_auth
+      maximum-pool-size: 8
+      connection-timeout: 5000
+  flyway:
+    locations: classpath:db/auth/migration
+    schemas: re_auth
+    default-schema: re_auth
+    create-schemas: true
+    table: re_auth_schema_history
+
+server:
+  port: ${SERVER_PORT:8091}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # latency heat-maps and p95/p99 in Grafana come from the histogram buckets
+      percentiles-histogram:
+        http.server.requests: true
+
+ecosystem:
+  auth:
+    # HMAC key (>= 32 bytes) that signs access tokens; the rule-engine service verifies with the same value.
+    # The default is for the local stack ONLY; compose passes it from .env.
+    jwt-secret: ${JWT_SECRET:local-dev-only-secret-change-me-0123456789abcdef}
+    token-ttl: ${TOKEN_TTL:PT8H}
+    max-failures: 5
+    lockout-window: PT15M
+    seed:
+      enabled: ${AUTH_SEED_ENABLED:true}
+      admin-password: ${SEED_ADMIN_PASSWORD:admin123}
+      user-password: ${SEED_USER_PASSWORD:user123}

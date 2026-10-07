@@ -22,6 +22,10 @@ import static com.springaimcpservercommon.security.permission.Permission.ENDPOIN
 import static com.springaimcpservercommon.security.permission.Permission.ENDPOINT_PUBLISH;
 import static com.springaimcpservercommon.security.permission.Permission.GRANT_MANAGE;
 import static com.springaimcpservercommon.security.permission.Permission.OPS_KILLSWITCH;
+import static com.springaimcpservercommon.security.permission.Permission.RULES_AUTHOR;
+import static com.springaimcpservercommon.security.permission.Permission.RULES_LIBRARY;
+import static com.springaimcpservercommon.security.permission.Permission.RULES_PUBLISH;
+import static com.springaimcpservercommon.security.permission.Permission.RULES_READ;
 import static com.springaimcpservercommon.security.permission.Permission.QUERY_AUTHOR;
 import static com.springaimcpservercommon.security.permission.Permission.QUERY_EXPLAIN;
 import static com.springaimcpservercommon.security.permission.Permission.QUERY_PREVIEW;
@@ -43,6 +47,7 @@ import static com.springaimcpservercommon.security.permission.Permission.WORKSPA
 public final class RolePermissionBundles {
 
     private static final Set<Permission> AUTHORING = EnumSet.of(ENDPOINT_AUTHOR, QUERY_AUTHOR, AGENT_AUTHOR, TOOL_AUTHOR);
+    private static final Set<Permission> RULES_ALL = EnumSet.of(RULES_READ, RULES_AUTHOR, RULES_PUBLISH, RULES_LIBRARY);
     private static final Set<Permission> PUBLISHING = EnumSet.of(ENDPOINT_PUBLISH, QUERY_PUBLISH, AGENT_PUBLISH, TOOL_PUBLISH);
 
     private static final RolePermissionBundles DEFAULTS = new RolePermissionBundles(defaultMap());
@@ -140,6 +145,7 @@ public final class RolePermissionBundles {
         Set<Permission> platformAdmin = EnumSet.of(CATALOG_READ, CATALOG_ANNOTATE, CATALOG_DECLASSIFY, WORKSPACE_ADMIN,
                 QUERY_EXPLAIN, GRANT_MANAGE, BUDGET_MANAGE, OPS_KILLSWITCH);
         platformAdmin.addAll(PUBLISHING);
+        platformAdmin.addAll(RULES_ALL);
         map.put(FrameworkRole.PLATFORM_ADMIN, platformAdmin);
 
         map.put(FrameworkRole.SECURITY_ADMIN, EnumSet.of(ROLEMAPPING_MANAGE, SERVICEACCOUNT_MANAGE, AUDIT_READ));
@@ -150,14 +156,17 @@ public final class RolePermissionBundles {
                 QUERY_EXPLAIN, GRANT_MANAGE, SERVICEACCOUNT_MANAGE, BUDGET_MANAGE, OPS_KILLSWITCH, AUDIT_READ);
         owner.addAll(AUTHORING);
         owner.addAll(PUBLISHING);
+        owner.addAll(EnumSet.of(RULES_READ, RULES_AUTHOR, RULES_PUBLISH));
         map.put(FrameworkRole.WORKSPACE_OWNER, owner);
 
         Set<Permission> author = EnumSet.of(CATALOG_READ, QUERY_PREVIEW, AGENT_PLAYGROUND, QUERY_EXPLAIN);
         author.addAll(AUTHORING);
+        author.addAll(EnumSet.of(RULES_READ, RULES_AUTHOR));
         map.put(FrameworkRole.AUTHOR, author);
 
         Set<Permission> approver = EnumSet.of(CATALOG_READ, QUERY_PREVIEW, AGENT_PLAYGROUND, REVIEW_APPROVE, DATA_WRITE_APPROVE);
         approver.addAll(PUBLISHING);
+        approver.addAll(EnumSet.of(RULES_READ, RULES_PUBLISH));
         map.put(FrameworkRole.APPROVER, approver);
 
         map.put(FrameworkRole.OPERATOR, EnumSet.of(OPS_KILLSWITCH));

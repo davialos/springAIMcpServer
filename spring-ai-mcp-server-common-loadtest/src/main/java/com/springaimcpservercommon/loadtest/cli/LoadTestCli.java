@@ -22,6 +22,7 @@ import com.springaimcpservercommon.loadtest.model.ArraySchema;
 import com.springaimcpservercommon.loadtest.model.ObjectSchema;
 import com.springaimcpservercommon.loadtest.model.RefSchema;
 import com.springaimcpservercommon.loadtest.model.Schema;
+import com.springaimcpservercommon.loadtest.schema.SchemaSnapshot;
 import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedReader;
@@ -59,6 +60,7 @@ import java.util.Set;
  * loadtest discover --project ../shop [--openapi URL|file] [--actuator URL|file]
  * loadtest generate --project ../shop [--openapi …] [--db-url jdbc:…] [--harvest] [--user-data values.json]
  *                   [--value email=a@b.test,c@d.test] [--bind '*.customerId=customers.id'] [--interactive]
+ * loadtest schema   --db-url jdbc:… | --project ../shop [--db-schema public] [--row-counts] [--out schema.sql]
  * loadtest run      --suite ../shop/load-tests --mode mixed-spike [--data-mode mixed] [--api getUser] [-- k6 args]
  * loadtest report   --suite ../shop/load-tests [--mode smoke]
  * loadtest compare  --baseline reports/base.json [--current reports/new.json] [--max-p95-increase 20]
@@ -70,7 +72,8 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks", "resilience", "ci", "update-baseline", "record");
+            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks", "resilience", "ci", "update-baseline", "record",
+            "row-counts", "no-schema-snapshot");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -117,6 +120,7 @@ public final class LoadTestCli {
             return switch (a.command()) {
                 case "discover" -> discover(a);
                 case "generate" -> generate(a);
+                case "schema" -> schema(a);
                 case "run" -> run(a);
                 case "report" -> report(a);
                 case "compare" -> compare(a);
@@ -218,6 +222,7 @@ public final class LoadTestCli {
             b.bind(bind.substring(0, eq), bind.substring(eq + 1));
         }
         b.dropUnverified(a.flag("drop-unverified"));
+        b.schemaSnapshot(!a.flag("no-schema-snapshot"));
         b.auth(a.get("auth", "auto"), a.get("login-path"));
         if (a.flag("interactive")) {
             b.prompt(this::interactive);
@@ -272,6 +277,52 @@ public final class LoadTestCli {
         out.println("  " + r.apis() + " APIs, " + r.fields() + " fields, " + r.pools() + " real-data pools");
         out.println("  next: cd " + r.outDir() + " && ./run.sh smoke     (or: loadtest run --suite "
                 + r.outDir() + " --mode mixed-load)");
+        return 0;
+    }
+
+    // ── schema ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /** Prints the current structure of the configured database as DDL (stdout, or {@code --out}). */
+    private int schema(CliArgs a) {
+        if (a.get("db-url") == null && a.get("project") == null) {
+            throw new IllegalArgumentException("give --db-url, or --project to use its spring.datasource.url");
+        }
+        LoadTestGenerator.Builder b = LoadTestGenerator.builder().log(this::log);
+        if (a.get("project") != null) {
+            Path project = Path.of(a.get("project"));
+            if (!Files.isDirectory(project)) {
+                throw new IllegalArgumentException("--project " + project + " is not a directory");
+            }
+            b.project(project);
+        }
+        if (a.get("db-url") != null) {
+            b.database(a.get("db-url"), a.get("db-user"), a.get("db-password"));
+        }
+        if (a.get("db-schema") != null) {
+            b.databaseSchema(a.get("db-schema"));
+        }
+        LoadTestGenerator generator = b.build();
+        SchemaSnapshot snapshot;
+        try {
+            snapshot = generator.readSchema(a.flag("row-counts"));
+        } catch (SQLException e) {
+            throw new IllegalStateException("database error: " + e.getMessage(), e);
+        }
+        String ddl = generator.ddl(snapshot);
+        if (a.get("out") == null) {
+            out.print(ddl);
+            return 0;
+        }
+        Path file = Path.of(a.get("out"));
+        try {
+            if (file.toAbsolutePath().getParent() != null) {
+                Files.createDirectories(file.toAbsolutePath().getParent());
+            }
+            Files.writeString(file, ddl);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        log("wrote " + file.toAbsolutePath().normalize());
         return 0;
     }
 
@@ -818,6 +869,7 @@ public final class LoadTestCli {
                 Commands
                   discover   list the APIs and fields found in a project
                   generate   write a k6 suite (APIs, data providers, modes) for a project
+                  schema     print the current structure of the configured database as DDL
                   run        run a generated suite with k6
                   report     print the newest report of a suite (exit 1 when thresholds failed)
                   compare    compare a report with a baseline report (exit 3 on regression)
@@ -885,6 +937,14 @@ public final class LoadTestCli {
                                             adds config → resilience (slow network, narrow bandwidth, connection
                                             resets, outage; latency + outage per dependency) and
                                             resilience/docker-compose.yml. Then: docker compose up -d; run --resilience
+
+                  --no-schema-snapshot      do not write data/schema.sql (the database structure, as DDL)
+
+                Schema (the database's current state as DDL; read-only, structure only, never row data)
+                  --db-url <jdbc-url> | --project <dir>   database (default: the project's spring.datasource.url)
+                  --db-user, --db-password  credentials (or LOADTEST_DB_PASSWORD); --db-schema narrows to one schema
+                  --row-counts              add an exact row count per table as a comment (can be slow)
+                  --out <file>              write the DDL there instead of stdout (progress goes to stderr)
 
                 Run
                   --suite <dir> --mode <mode> [--data-mode <mode>] [--api id1,id2] [--vus n] [--rate n]

@@ -36,6 +36,36 @@ class LoadTestCliTest {
     }
 
     @Test
+    void schemaNeedsADatabaseSource() {
+        assertThat(run("", "schema")).isEqualTo(2);
+        assertThat(err()).contains("give --db-url, or --project");
+    }
+
+    @Test
+    void schemaWithoutADatasourceInTheProjectFailsClearly(@TempDir Path dir) throws IOException {
+        Files.createDirectories(dir.resolve("src/main/resources"));
+        Files.writeString(dir.resolve("src/main/resources/application.properties"), "server.port=8181\n");
+        assertThat(run("", "schema", "--project", dir.toString())).isEqualTo(1);
+        assertThat(err()).contains("no database configured");
+    }
+
+    @Test
+    void schemaReportsAnUnreachableDatabaseWithoutLeakingItsPassword() {
+        int code = run("", "schema", "--db-url", "jdbc:postgresql://127.0.0.1:1/none", "--db-user", "u",
+                "--db-password", "hunter2");
+        assertThat(code).isEqualTo(1);
+        assertThat(err()).contains("database error").doesNotContain("hunter2");
+        assertThat(out()).isEmpty();
+    }
+
+    @Test
+    void usageDocumentsTheSchemaCommand() {
+        assertThat(run("", "help")).isZero();
+        assertThat(out()).contains("schema     print the current structure").contains("--row-counts")
+                .contains("--no-schema-snapshot");
+    }
+
+    @Test
     void discoverListsApisAndFieldPlans() {
         int code = run("", "discover", "--project", Fixtures.sampleShop().toString(), "--json");
         assertThat(code).as(err()).isZero();

@@ -485,6 +485,8 @@ to be part of any unique index on a partitioned table.
 | `dai_mcp_session` | Stateful Streamable-HTTP MCP session; **not partitioned** (bounded — one row per connection, closed sessions are small) | `id` | `session_id_hash` (UK, SHA-256 — the raw `Mcp-Session-Id` is never stored), `transport`, `end_reason` | `mcp_client_id → dai_mcp_client`, `workspace_id → dai_workspace`, `principal_id → dai_principal` | `ix_mcp_session_principal`; `ix_mcp_session_open (last_seen_at) WHERE ended_at IS NULL` — the idle-timeout sweep |
 | `dai_mcp_request` | Every MCP JSON-RPC call, stateful or stateless | `(id, received_at)` | `jsonrpc_method`, `tool_name`, `status` | `mcp_client_id → dai_mcp_client`, `principal_id → dai_principal`, `workspace_id → dai_workspace` | `ix_mcp_request_session WHERE mcp_session_id IS NOT NULL`; `ix_mcp_request_principal`; `ix_mcp_request_denied (received_at DESC) WHERE status IN ('DENIED','RATE_LIMITED')` — security dashboard; `ix_mcp_request_workspace (workspace_id, received_at DESC)` (V7); `ix_mcp_request_trace (trace_id) WHERE trace_id IS NOT NULL` (V8) — jump from a trace id to the request |
 | `dai_chat_memory_message` | The message window the model reads for a conversation (V9, OQ-45): shared by all replicas, redacted, sliding TTL | `id` | `memory_key` (`sha256:` of workspace:agent:principal:conversation), `seq`, `role`, `expires_at` | none (key is a hash, not a foreign key) | `uq_chat_memory_message_seq (memory_key, seq)`; `ix_chat_memory_message_expiry` — purge |
+| `dai_chat_interaction` | Interactive chat components (e.g. `choice`) shown to a user and their answer (V13, LLD-13 §3): restores answered choices on reload, on any replica; the answer is validated against the stored payload and written once | `id` | `conversation_key` (`sha256:` of workspace:agent:principal:conversation), `turn_id`, `component_id`, `component_type`, `payload` (jsonb, redacted), `answer` (jsonb), `answered_at`, `expires_at` | none (key is a hash; workspace/agent/principal kept as plain columns for reporting) | `uq_chat_interaction_component (conversation_key, turn_id, component_id)`; `ix_chat_interaction_conversation (conversation_key, created_at)` — reload; `ix_chat_interaction_expiry` — purge |
+| `dai_turn_feedback` | Like/dislike per agent answer (V13): one row per (conversation, turn), upserted when the user changes it, deleted when withdrawn | `id` | `conversation_key`, `turn_id`, `rating`, `reason`, `comment` (≤ 2000, redacted), `updated_at`, `expires_at` | none (as above) | `uq_turn_feedback_turn (conversation_key, turn_id)`; `ix_turn_feedback_agent (workspace_id, agent_id, updated_at DESC)` — per-agent feedback reporting; `ix_turn_feedback_expiry` — purge |
 | `dai_tool_invocation` | Central "what did the AI do, on whose behalf" record — every host action or query executed or proposed via AI/MCP | `(id, started_at)` | `channel`, `tool_name`, `element_ref`, `access_mode`, `status`, `args_hash`, `result_hash`, `write_violation`, `proposal_id` | `workspace_id → dai_workspace`, `principal_id → dai_principal`, `binding_revision_id → dai_resource_revision` | `ix_tool_invocation_turn/_mcp_request` (origin lookup); `ix_tool_invocation_principal`; `ix_tool_invocation_tool (workspace_id, tool_name, started_at DESC)` — per-tool usage dashboards; `ix_tool_invocation_violation (started_at DESC) WHERE write_violation` — feeds the write-guard auto-disable counter (LLD-07 §4a); `ix_tool_invocation_proposal WHERE proposal_id IS NOT NULL` |
 | `dai_v_turn_usage` (view) | Per-turn token/cost rollup, derived from `dai_model_call` (single owner of token facts) | — | `GROUP BY` turn | — | inherits base-table indexes |
 
@@ -674,6 +676,7 @@ is non-empty, and this should be wired into routine monitoring, not just run ad 
 | Table.column | Allowed values |
 |---|---|
 | `dai_environment.tier` | `DEV`, `TEST`, `STAGE`, `PROD` |
+| `dai_turn_feedback.rating` | `UP`, `DOWN` |
 | `dai_principal.subject_type` | `USER`, `GROUP`, `SERVICE_ACCOUNT`, `MCP_CLIENT` |
 | `dai_principal.status` | `ACTIVE`, `DISABLED` |
 | `dai_workspace.classification_clearance` | `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, `RESTRICTED` |
@@ -741,6 +744,9 @@ is non-empty, and this should be wired into routine monitoring, not just run ad 
 | `dai_audit_event.action` | `^[A-Z][A-Z0-9_]{2,63}$` | Audit event catalog constant (LLD-10 §4) |
 | `dai_audit_chain.chain_id` | `^[a-z0-9-]{3,64}$` | Workspace UUID text, or `system`/`global-admin` |
 | `dai_job_run.job_name` | `^[a-z][a-z0-9-]{2,63}$` | e.g. `partition-maintenance`, `retention-purge` |
+| `dai_chat_interaction.component_id` / `.component_type` | `^[A-Za-z0-9_.:-]{1,64}$` / `^[a-z][a-z0-9-]{0,63}$` | Component id within a turn (`choice-1`) / type (`choice`) |
+| `dai_turn_feedback.reason` | `^[a-z][a-z0-9_]{0,39}$` | Reason code chosen in the UI (`inaccurate`, `incomplete`, …) |
+| `dai_chat_interaction.conversation_key`, `dai_turn_feedback.conversation_key` | `^sha256:[0-9a-f]{64}$` | Hash of workspace:agent:principal:conversation |
 | `dai_model_call.currency`, `dai_model_price.currency`, `dai_budget.currency`, `dai_usage_hourly.currency` | `^[A-Z]{3}$` | ISO 4217 |
 
 ## 12. Configuration (`dynamic.ai.agent.*`)
@@ -876,3 +882,20 @@ per-deployment decision), OQ-31 (retention defaults and who runs partition maint
 as "built-in job, advisory-locked, any node"; still open whether a deploying team may disable the built-in job
 entirely and run 100% DBA-driven maintenance — resolved: `store.maintenance.enabled=false` turns the runner off;
 the DBA then owns partitions, retention and the sweeps).
+
+## Rule-engine tables (V11, V14)
+
+Migration `V11__rule_engine.sql` adds the `dai_re_*` tables of the CEL rule engine (parameter library, bundles, rules,
+rule groups, channels, trigger points, evaluation log, change markers). `V14__rule_engine_lifecycle_outbox.sql` adds
+`dai_re_revision` (rule/group revision history), `dai_re_dispatch` (delivery outbox) and makes `dai_re_evaluation` /
+`dai_re_evaluation_result` monthly partitions registered in `dai_partitioned_table` (13 months). They have no JPA entities; the `ruleengine`
+module reads and writes them with plain JDBC, so Hibernate schema validation is unaffected. Their columns, constraints
+and meaning are documented in [LLD-18 §2](18-rule-engine.md) (ADR-0025); `tenant_id`/`organization_id` are opaque host
+ids without foreign keys (ADR-0005).
+
+## Rule-engine audit trail (V12)
+
+Migration `V12__rule_engine_audit_log.sql` adds `dai_re_audit_log` (who changed or evaluated what: actor, scope, action,
+entity, value-free `details` jsonb; indexes by tenant+time and entity). Written by the rule-engine service in the same
+transaction as the change it records ([LLD-18 §12](18-rule-engine.md), ADR-0026). Like `dai_re_evaluation` it has no
+retention job yet (OQ-68).

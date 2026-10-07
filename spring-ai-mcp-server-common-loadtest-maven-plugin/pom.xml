@@ -11,7 +11,7 @@
     </parent>
 
     <!--
-      Maven plugin over the load-test generator's public API (ADR-0022, LLD-16): mvn loadtest:discover | generate |
+      Maven plugin over the load-test generator's public API (ADR-0022, LLD-16): mvn loadtest:discover | generate | schema |
       run | compare in a Spring Boot project. Runs inside Maven's JVM, so Maven must run on JDK 25 (the generator's
       release). Developer tool: not part of the starter or the BOM.
     -->

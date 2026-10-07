@@ -64,6 +64,14 @@ public enum Permission {
     DATA_WRITE_APPROVE("data:write-approve", Kind.ROLE),
     /** Read the audit log (workspace roles: own workspace only). */
     AUDIT_READ("audit:read", Kind.ROLE),
+    /** Read rules, rule groups, messages, channels, triggers and the evaluation log of the rule engine (LLD-18). */
+    RULES_READ("rules:read", Kind.ROLE),
+    /** Edit rule and group drafts, submit them for review, and maintain a workspace's messages, templates, endpoints, channels and triggers. */
+    RULES_AUTHOR("rules:author", Kind.ROLE),
+    /** Approve, reject, publish, roll back and retire rules and groups; retry dead deliveries. */
+    RULES_PUBLISH("rules:publish", Kind.ROLE),
+    /** Maintain the platform-wide parameter library (modules, sys objects, attributes, platform messages). Global only. */
+    RULES_LIBRARY("rules:library", Kind.ROLE),
 
     /** Let an agent/endpoint create write proposals for the caller (grant only). */
     DATA_WRITE_PROPOSE("data:write-propose", Kind.GRANT),

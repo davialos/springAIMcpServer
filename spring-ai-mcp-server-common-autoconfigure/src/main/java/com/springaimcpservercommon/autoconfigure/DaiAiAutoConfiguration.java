@@ -9,6 +9,9 @@ import com.springaimcpservercommon.ai.runtime.ConversationRecorder;
 import com.springaimcpservercommon.ai.runtime.DefaultAgentInvoker;
 import com.springaimcpservercommon.ai.runtime.TurnRecorder;
 import com.springaimcpservercommon.ai.safety.TurnSafety;
+import com.springaimcpservercommon.ai.agent.ChatUiSpec;
+import com.springaimcpservercommon.ai.chat.ChatUiRuntime;
+import com.springaimcpservercommon.ai.chat.ChatUiState;
 import com.springaimcpservercommon.core.guard.CompositePromptValidator;
 import com.springaimcpservercommon.core.guard.InputValidationPolicy;
 import com.springaimcpservercommon.core.guard.PiiDetector;
@@ -382,7 +385,8 @@ public class DaiAiAutoConfiguration {
             ObjectProvider<JsonSchemaValidationPort> schemaValidatorProvider,
             TurnSafety turnSafety,
             ObjectProvider<com.springaimcpservercommon.ai.knowledge.KnowledgeStore> knowledgeStore,
-            ObjectProvider<DaiKnowledgeProperties> knowledgeProperties) {
+            ObjectProvider<DaiKnowledgeProperties> knowledgeProperties,
+            ChatUiRuntime chatUi) {
         return new DefaultAgentInvoker(
                 modelRouter,
                 toolBridgeProvider.getIfAvailable(),
@@ -398,7 +402,25 @@ public class DaiAiAutoConfiguration {
                 turnSafety,
                 knowledgeStore.getIfAvailable(),
                 knowledgeProperties.getIfAvailable(() -> new DaiKnowledgeProperties(true, null, 6000,
-                        new DaiKnowledgeProperties.Index(false, null, null, null, 1200, false))).maxContextChars());
+                        new DaiKnowledgeProperties.Index(false, null, null, null, 1200, false))).maxContextChars(),
+                chatUi);
+    }
+
+    /**
+     * Chat-interface defaults and state (LLD-13 §3): {@code dynamic.ai.agent.chat.ui.*} for agents without their own
+     * {@code output.ui}, and the {@link ChatUiState} bean (store-backed when the {@code dynamic_ai} store exists,
+     * otherwise nothing is kept).
+     *
+     * @param props framework properties
+     * @param state optional state store
+     * @return the runtime settings
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatUiRuntime.class)
+    public ChatUiRuntime daiChatUiRuntime(DaiProperties props, ObjectProvider<ChatUiState> state) {
+        DaiProperties.Chat.Ui ui = props.chat().ui();
+        ChatUiSpec defaults = ui.enabled() ? new ChatUiSpec(ui.steps(), ui.feedback(), ui.copy(), ui.choices()) : null;
+        return new ChatUiRuntime(defaults, state.getIfAvailable(() -> ChatUiState.NONE));
     }
 
     /**

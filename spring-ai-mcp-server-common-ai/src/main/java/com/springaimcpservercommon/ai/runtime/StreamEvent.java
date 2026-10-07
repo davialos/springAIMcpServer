@@ -1,5 +1,6 @@
 package com.springaimcpservercommon.ai.runtime;
 
+import com.springaimcpservercommon.ai.agent.ChatUiSpec;
 import com.springaimcpservercommon.core.json.CanonicalJson;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -27,7 +28,8 @@ public sealed interface StreamEvent
                 StreamEvent.ProposalApplied,
                 StreamEvent.UsageEvent,
                 StreamEvent.TurnEnd,
-                StreamEvent.ErrorEvent {
+                StreamEvent.ErrorEvent,
+                StreamEvent.Step {
 
     /** SSE event type name, also present as the {@code type} field in the JSON payload. */
     String type();
@@ -45,12 +47,27 @@ public sealed interface StreamEvent
      * @param agent          agent slug
      * @param revision       agent revision being executed
      * @param protocol       always {@link #PROTOCOL}
+     * @param ui             chat-interface features the client should offer for this turn; {@code null} omits the
+     *                       {@code ui} field (clients then assume plain text)
      */
-    record TurnStart(UUID turnId, UUID conversationId, String agent, int revision, String protocol)
-            implements StreamEvent {
+    record TurnStart(UUID turnId, UUID conversationId, String agent, int revision, String protocol,
+                     @Nullable ChatUiSpec ui) implements StreamEvent {
 
         /** Current stream protocol version. */
         public static final String PROTOCOL = "dai-stream/1";
+
+        /**
+         * Stream start without chat-interface flags.
+         *
+         * @param turnId         unique turn id
+         * @param conversationId conversation of the turn
+         * @param agent          agent slug
+         * @param revision       agent revision
+         * @param protocol       always {@link #PROTOCOL}
+         */
+        public TurnStart(UUID turnId, UUID conversationId, String agent, int revision, String protocol) {
+            this(turnId, conversationId, agent, revision, protocol, null);
+        }
 
         @Override
         public String type() { return "turn.start"; }
@@ -64,6 +81,14 @@ public sealed interface StreamEvent
             m.put("agent", agent);
             m.put("revision", revision);
             m.put("protocol", protocol);
+            if (ui != null) {
+                Map<String, Object> flags = new LinkedHashMap<>();
+                flags.put("steps", ui.steps());
+                flags.put("feedback", ui.feedback());
+                flags.put("copy", ui.copy());
+                flags.put("choices", ui.choices());
+                m.put("ui", flags);
+            }
             return CanonicalJson.write(m);
         }
     }
@@ -138,10 +163,24 @@ public sealed interface StreamEvent
     /**
      * A UI component payload (LLD-11 §7). Always a complete JSON object, never split.
      *
-     * @param componentType component type identifier
+     * @param componentType component type identifier ({@code structured-response}, {@code choice}, or a host type)
      * @param payload       complete component JSON payload
+     * @param componentId   stable id within the turn, used to answer interactive components; {@code null} for
+     *                      display-only components
+     * @param copyable      whether the client offers a copy button for this component
      */
-    record UiComponent(String componentType, String payload) implements StreamEvent {
+    record UiComponent(String componentType, String payload, @Nullable String componentId, boolean copyable)
+            implements StreamEvent {
+
+        /**
+         * A display-only component without a copy button.
+         *
+         * @param componentType component type identifier
+         * @param payload       complete component JSON payload
+         */
+        public UiComponent(String componentType, String payload) {
+            this(componentType, payload, null, false);
+        }
 
         @Override
         public String type() { return "ui.component"; }
@@ -152,6 +191,12 @@ public sealed interface StreamEvent
             m.put("type", type());
             m.put("componentType", componentType);
             m.put("payload", payload);
+            if (componentId != null) {
+                m.put("componentId", componentId);
+            }
+            if (copyable) {
+                m.put("copyable", true);
+            }
             return CanonicalJson.write(m);
         }
     }
@@ -293,6 +338,34 @@ public sealed interface StreamEvent
             m.put("code", code);
             m.put("retryable", retryable);
             m.put("turnId", turnId.toString());
+            return CanonicalJson.write(m);
+        }
+    }
+
+    /**
+     * Progress of a step of the turn that is not a tool call, for the client's step details (LLD-13 §3). A step is
+     * sent when it starts ({@code running}) and again with the same {@code stepId} when it ends.
+     *
+     * @param stepId stable id within the turn
+     * @param title  short, user-facing description ("Checked your request")
+     * @param status {@code running|done|error}
+     * @param detail optional longer, user-facing detail (never prompt content, secrets or row data)
+     */
+    record Step(String stepId, String title, String status, @Nullable String detail) implements StreamEvent {
+
+        @Override
+        public String type() { return "step"; }
+
+        @Override
+        public String toJson() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("type", type());
+            m.put("stepId", stepId);
+            m.put("title", title);
+            m.put("status", status);
+            if (detail != null) {
+                m.put("detail", detail);
+            }
             return CanonicalJson.write(m);
         }
     }

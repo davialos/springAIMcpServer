@@ -76,6 +76,24 @@ scripts/loadtest.sh generate --project ../shop \
   key=v1,v2`, or `--interactive` to be asked API by API. Field keys are listed in the suite README.
 - **Bindings:** `--bind 'createOrder.body.customerId=customers.id'` forces a field onto a column.
 
+### The database's current state as DDL
+
+```
+scripts/loadtest.sh schema --project ../shop                      # DDL to stdout (progress on stderr)
+scripts/loadtest.sh schema --db-url jdbc:postgresql://localhost:5432/shop --db-schema public \
+    --row-counts --out shop-schema.sql
+```
+
+Reads the **live** structure of the configured database (the project's `spring.datasource.*` or `--db-url`):
+tables, columns with defaults / identity / generated columns, primary, unique, check and foreign keys, indexes,
+partitions, views, sequences, enum types and comments — what the database really is now, not what the migrations
+intended. Read-only and structure only: no row data (`--row-counts` adds a row count per table as a comment). The
+script replays on an empty database. `generate` also writes it to `data/schema.sql` whenever it reached a database
+(`--no-schema-snapshot` turns that off). The same is available as `mvn loadtest:schema` (`-Dloadtest.schemaFile`,
+`-Dloadtest.dbSchema`, `-Dloadtest.rowCounts`), `./gradlew loadtestSchema` and the MCP tool `loadtest_schema`.
+PostgreSQL 12+ gives exact definitions; other databases are read through JDBC metadata (no check constraints or
+view queries, noted in the script header).
+
 Output (default `<project>/load-tests/`): `main.js`, `apis/<id>.js` (request builder per API),
 `providers/schemas.js` (data provider per request DTO), `lib/` runtime, `loadtest.config.json`, `data/`,
 `hooks.js`, `README.md`, `run.sh`. Commit it next to the project; regenerate after API changes — your config,
@@ -197,7 +215,7 @@ Commit a good run's report as `load-tests/baseline.json` and gate every build on
 ```
 
 `mvn loadtest:generate` writes the suite; with `spring-boot:start`/`spring-boot:stop` around `integration-test`,
-`mvn verify` smoke-tests the started app and fails on failed thresholds or a regression. Goals: `discover`,
+`mvn verify` smoke-tests the started app and fails on failed thresholds or a regression. Goals: `discover`, `schema`,
 `generate`, `run`, `compare`; every option also as `-Dloadtest.<name>` (`-Dloadtest.mode=mixed-load`).
 
 **Gradle**: `loadtest init-gradle --project .` writes `gradle/loadtest.gradle`; add
@@ -232,7 +250,7 @@ Without k6 the tests are skipped (`requireK6 = true` to fail instead); they are 
 ## 3e. With a coding agent
 
 `scripts/loadtest-mcp.sh --root <workspace>` is an MCP server (stdio) with the tools `loadtest_discover`,
-`loadtest_generate`, `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`:
+`loadtest_generate`, `loadtest_schema`, `loadtest_run`, `loadtest_report`, `loadtest_compare`, `loadtest_modes`:
 
 ```
 claude mcp add spring-loadtest -- /path/to/springAIMcpServer/scripts/loadtest-mcp.sh --root "$PWD"

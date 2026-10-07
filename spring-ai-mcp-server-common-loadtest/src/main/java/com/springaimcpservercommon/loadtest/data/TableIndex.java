@@ -212,6 +212,39 @@ public final class TableIndex {
         return found.size() == 1 ? Optional.of(found.values().iterator().next()) : Optional.empty();
     }
 
+    /**
+     * A field filled from one column of a composite (multi-column) foreign key: all of the key's fields must come
+     * from the same parent row, so they share a tuple pool and each takes its position in the tuple.
+     *
+     * @param pool      tuple pool (the referenced table, columns joined with commas)
+     * @param component position of this field's column in the tuple
+     */
+    public record TupleReference(PoolRef pool, int component) {
+    }
+
+    /**
+     * The composite foreign key a request field of a resource maps to, if any.
+     *
+     * @param t     the resource's table
+     * @param field request field name ({@code lineNo}, {@code line_no})
+     * @return the tuple pool and the field's position in it
+     */
+    public Optional<TupleReference> tupleReference(TableRef t, String field) {
+        if (t.db() == null || t.db().compositeForeignKeys().isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<String> column = column(t, field);
+        if (column.isEmpty()) {
+            for (String c : t.db().columns().keySet()) {
+                if (Names.normalize(c).equals(Names.normalize(field))) {
+                    column = Optional.of(c);
+                }
+            }
+        }
+        return column.flatMap(c -> t.db().compositeKeyOf(c))
+                .map(e -> new TupleReference(e.getKey().target(), e.getValue()));
+    }
+
     private static Optional<PoolRef> foreignKey(DbTable db, String column) {
         for (var e : db.foreignKeys().entrySet()) {
             if (Names.normalize(e.getKey()).equals(Names.normalize(column))) {

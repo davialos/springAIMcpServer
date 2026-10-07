@@ -17,6 +17,49 @@ export function pick(list) {
   return list && list.length ? list[Math.floor(Math.random() * list.length)] : undefined;
 }
 
+const ZIPF_CACHE = {};
+
+/**
+ * A list element with a skewed popularity, like real traffic: a few hot rows take most requests.
+ *   zipf: rank r (list order) has weight 1 / r^s (default s = 1.1)
+ *   hot:  `hotFraction` of the list (default 5%) takes `hotShare` of the requests (default 80%)
+ * Anything else (or a one-element list) is a uniform pick.
+ */
+export function pickSkewed(list, skew) {
+  const n = list ? list.length : 0;
+  if (n < 2 || !skew || !skew.mode || skew.mode === 'uniform') return pick(list);
+  if (skew.mode === 'hot') {
+    const hot = Math.max(1, Math.round(n * (skew.hotFraction !== undefined ? skew.hotFraction : 0.05)));
+    const share = skew.hotShare !== undefined ? skew.hotShare : 0.8;
+    if (hot >= n || Math.random() < share) return list[Math.floor(Math.random() * Math.min(hot, n))];
+    return list[hot + Math.floor(Math.random() * (n - hot))];
+  }
+  if (skew.mode === 'zipf') {
+    const s = skew.s !== undefined ? skew.s : 1.1;
+    const key = `${n}|${s}`;
+    let cumulative = ZIPF_CACHE[key];
+    if (!cumulative) {
+      cumulative = new Array(n);
+      let total = 0;
+      for (let i = 0; i < n; i++) {
+        total += 1 / Math.pow(i + 1, s);
+        cumulative[i] = total;
+      }
+      ZIPF_CACHE[key] = cumulative;
+    }
+    const r = Math.random() * cumulative[n - 1];
+    let lo = 0;
+    let hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cumulative[mid] < r) lo = mid + 1;
+      else hi = mid;
+    }
+    return list[lo];
+  }
+  return pick(list);
+}
+
 export function bool(p = 0.5) {
   return Math.random() < p;
 }
@@ -273,6 +316,7 @@ function randomString(schema) {
     case 'uri': return `https://example.com/${alnum(8).toLowerCase()}`;
     case 'ipv4': return `${int(1, 223)}.${int(0, 255)}.${int(0, 255)}.${int(1, 254)}`;
     case 'byte': return encodeBase64(alnum(int(4, 24)));
+    case 'binary': return { $file: { name: `upload-${alnum(6).toLowerCase()}.txt`, contentType: 'text/plain', data: alnum(int(64, 512)) } };
     default:
       break;
   }

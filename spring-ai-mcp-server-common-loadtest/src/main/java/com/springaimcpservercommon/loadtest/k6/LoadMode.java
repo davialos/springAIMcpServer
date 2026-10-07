@@ -28,7 +28,9 @@ public enum LoadMode {
     /** Long steady run: leaks, pool exhaustion, slow degradation. */
     SOAK("Soak: base VUs for 1 hour — memory leaks, connection-pool exhaustion, slow drift"),
     /** Open-model ramp of arrival rate until a threshold fails (test aborts there). */
-    BREAKPOINT("Breakpoint: arrival rate ramps to 20x base rate; aborts at the first failed threshold");
+    BREAKPOINT("Breakpoint: arrival rate ramps to 20x base rate; aborts at the first failed threshold"),
+    /** The observed production arrival rate (open model), average then peak, after a warm-up. */
+    PRODUCTION("Production replay: the arrival rate seen in production (open model) — average, then peak — after a warm-up");
 
     private final String description;
 
@@ -55,7 +57,7 @@ public enum LoadMode {
     }
 
     /**
-     * Every {@code MODE} value the suite accepts: each profile, its {@code mixed-} and {@code journey-} forms,
+     * Every {@code MODE} value the suite accepts: each profile, its {@code mixed-}, {@code journey-} and {@code lifecycle-} forms,
      * {@code preview} and {@code journey-preview}.
      *
      * @return mode names
@@ -71,8 +73,18 @@ public enum LoadMode {
         for (LoadMode m : values()) {
             out.add("journey-" + m.id());
         }
+        for (LoadMode m : values()) {
+            out.add("lifecycle-" + m.id());
+        }
+        for (LoadMode m : values()) {
+            out.add("channels-" + m.id());
+        }
+        for (LoadMode m : values()) {
+            out.add("session-" + m.id());
+        }
         out.add("preview");
         out.add("journey-preview");
+        out.add("lifecycle-preview");
         return out;
     }
 
@@ -91,21 +103,42 @@ public enum LoadMode {
                 p.put("iterations", 3);
                 p.put("maxDuration", "2m");
             }
-            case LOAD -> ramping(p, 10, new Object[][]{{"1m", 1}, {"5m", 1}, {"1m", 0}});
+            case LOAD -> {
+                ramping(p, 10, new Object[][]{{"1m", 1}, {"5m", 1}, {"1m", 0}});
+                p.putObject("warmup").put("duration", "30s").put("fraction", 0.3); // JIT, caches and pools before measuring
+            }
             case STRESS -> {
                 ramping(p, 10, new Object[][]{{"2m", 1}, {"3m", 1}, {"2m", 2}, {"3m", 2}, {"2m", 3}, {"3m", 3},
                         {"2m", 4}, {"3m", 4}, {"2m", 0}});
                 thresholds(p, "rate<0.05", "p(95)<2000");
                 p.put("maxErrorRate", 0.05);
+                p.put("allowDropped", true); // in the open model, dropped iterations are the signal
+                p.putObject("warmup").put("duration", "60s").put("fraction", 0.3);
             }
             case SPIKE -> {
                 ramping(p, 5, new Object[][]{{"30s", 1}, {"1m", 1}, {"10s", 10}, {"1m", 10}, {"10s", 1},
                         {"2m", 1}, {"10s", 0}});
                 thresholds(p, "rate<0.10", "p(95)<3000");
                 p.put("maxErrorRate", 0.10);
+                p.put("allowDropped", true);
             }
-            case SOAK -> ramping(p, 10, new Object[][]{{"2m", 1}, {"1h", 1}, {"2m", 0}});
+            case SOAK -> {
+                ramping(p, 10, new Object[][]{{"2m", 1}, {"1h", 1}, {"2m", 0}});
+                p.putObject("warmup").put("duration", "60s").put("fraction", 0.3);
+            }
+            case PRODUCTION -> {
+                // baseRate = requests/s at the average; `loadtest traffic` sets it (and the peak stage) from real data
+                p.put("executor", "ramping-arrival-rate");
+                p.put("baseRate", 10);
+                p.put("startRate", 1);
+                p.put("timeUnit", "1s");
+                p.put("preAllocatedVUs", 20);
+                p.put("maxVUs", 500);
+                stages(p, new Object[][]{{"2m", 1}, {"8m", 1}, {"2m", 2}, {"3m", 2}, {"1m", 0}});
+                p.putObject("warmup").put("duration", "60s").put("fraction", 0.3);
+            }
             case BREAKPOINT -> {
+                p.put("allowDropped", true);
                 p.put("executor", "ramping-arrival-rate");
                 p.put("baseRate", 10);
                 p.put("startRate", 1);

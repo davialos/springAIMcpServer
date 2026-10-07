@@ -26,7 +26,10 @@ class SuiteConfigTest {
         assertThat(c.path("apis").path("createOrder").path("weight").asInt()).isEqualTo(2);
         assertThat(c.path("apis").path("deleteCustomer").path("enabled").asBoolean()).isFalse();
         assertThat(c.path("modes").propertyNames())
-                .containsExactly("smoke", "load", "stress", "spike", "soak", "breakpoint");
+                .containsExactly("smoke", "load", "stress", "spike", "soak", "breakpoint", "production");
+        assertThat(c.path("modes").path("load").path("warmup").path("duration").asString()).isEqualTo("30s");
+        assertThat(c.path("modes").path("stress").path("allowDropped").asBoolean()).isTrue();
+        assertThat(c.path("model").asString()).isEqualTo("closed");
         assertThat(c.path("modes").path("breakpoint").path("abortOnFail").asBoolean()).isTrue();
         assertThat(c.toString()).doesNotContain("AUTH_TOKEN\":\"").doesNotContainIgnoringCase("password\":\"p");
     }

@@ -74,6 +74,13 @@ final class JsEmitter {
         meta.put("id", e.id());
         meta.put("method", e.method().name());
         meta.put("path", e.path());
+        if (e.bodyType() != null) {
+            meta.put("bodyType", e.bodyType()); // form | multipart (default: JSON)
+        }
+        if (e.isGraphQl()) {
+            meta.put("graphql", true); // a 200 with "errors" is a failure
+            meta.put("safe", e.tags().contains("graphql:query")); // queries change nothing: allowed when READ_ONLY
+        }
         if (e.summary() != null) {
             meta.put("summary", e.summary());
         }
@@ -225,6 +232,9 @@ final class JsEmitter {
         spec.set("schema", schema);
         if (f != null && f.pool() != null) {
             spec.put("real", f.pool().key());
+            if (f.component() >= 0) {
+                spec.put("component", f.component()); // one tuple (parent row) per request for the whole key
+            }
         }
         return spec;
     }
@@ -283,7 +293,8 @@ final class JsEmitter {
                 import { SharedArray } from 'k6/data';
                 import * as data from './lib/data.js';
                 import { buildOptions, parseMode, pickWeighted } from './lib/modes.js';
-                import { prepare, call, replay, seed, cleanup, setupAuth, preview as previewRequests, previewJourney as printJourney } from './lib/http.js';
+                import { prepare, call, warmupCall, session as walkSession, replay, lifecycle as walkLifecycle, seed, cleanup, setupAuth, prepareResilience, fault as injectFault, cleanupResilience, preview as previewRequests, previewJourney as printJourney, previewLifecycle as printLifecycle } from './lib/http.js';
+                import { runChannels } from './lib/channels.js';
                 import { summary } from './lib/report.js';
                 import * as grafana from './lib/grafana.js';
                 import * as hooks from './hooks.js';
@@ -311,25 +322,42 @@ final class JsEmitter {
                 // Recorded browser flow (generate --har): replayed by MODE=journey-<profile>.
                 const JOURNEY = new SharedArray('journey', () => JSON.parse(open('./data/journey.json')));
 
+                // Business flows generated from the code (create → read → update → status → delete per resource):
+                // MODE=lifecycle-<profile>.
+                const LIFECYCLE = new SharedArray('lifecycle', () => JSON.parse(open('./data/lifecycle.json')));
+
+                // Production traffic model (loadtest traffic): endpoint mix, arrival rate, session transitions.
+                const TRAFFIC = JSON.parse(open('./data/traffic.json'));
+                const SESSIONS = TRAFFIC.transitions && Object.keys(TRAFFIC.transitions).length;
+
+                // WebSocket, STOMP and SSE endpoints (MODE=channels-<profile>).
+                const CHANNELS = new SharedArray('channels', () => JSON.parse(open('./data/channels.json')));
+
                 // Test data created in setup through the application's create endpoints, parents before children
                 // (entity relationships); see README "Seeding".
                 const SEED = JSON.parse(open('./data/seed.json'));
 
+                // What a successful response of each API must look like (checked on a sample of responses).
+                const RESPONSE_SCHEMAS = JSON.parse(open('./data/response-schemas.json'));
+
                 const MODULES = [
                 %s];
-                const RUNTIME = prepare(CONFIG, MODULES, SEED);
-                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length);
+                const RUNTIME = prepare(CONFIG, MODULES, SEED, RESPONSE_SCHEMAS);
+                export const options = buildOptions(CONFIG, RUNTIME, JOURNEY.length, LIFECYCLE.length, CHANNELS.length, SESSIONS);
 
                 export function setup() {
                   if (parseMode(__ENV.MODE).profile === 'preview') return { headers: {}, seeded: {} };
                   const annotation = grafana.start(parseMode(__ENV.MODE).mode, RUNTIME.dataMode, RUNTIME.baseUrl);
+                  prepareResilience(RUNTIME);
                   const auth = setupAuth(CONFIG);
                   auth.seeded = seed(RUNTIME, SEED, auth, hooks);
                   auth.annotation = annotation;
+                  auth.t0 = Date.now(); // the scenarios' clock starts here (resilience windows)
                   return auth;
                 }
 
                 export function teardown(data) {
+                  cleanupResilience(RUNTIME);
                   cleanup(RUNTIME, SEED, data, hooks);
                   if (data) grafana.end(data.annotation);
                 }
@@ -344,6 +372,31 @@ final class JsEmitter {
 
                 export function journey(auth) {
                   replay(RUNTIME, JOURNEY, auth, hooks);
+                }
+
+                export function lifecycle(auth) {
+                  walkLifecycle(RUNTIME, LIFECYCLE, auth, hooks);
+                }
+
+                export function warmup(auth) {
+                  warmupCall(RUNTIME, auth, hooks, pickWeighted);
+                }
+
+                // Resilience experiment: injects the faults of one config.resilience experiment (Toxiproxy), then removes them.
+                export function fault() {
+                  injectFault(RUNTIME);
+                }
+
+                export function session(auth) {
+                  walkSession(RUNTIME, TRAFFIC, auth, hooks);
+                }
+
+                export async function channels(auth) {
+                  await runChannels(RUNTIME, CHANNELS, auth);
+                }
+
+                export function previewLifecycle() {
+                  printLifecycle(RUNTIME, LIFECYCLE, hooks);
                 }
 
                 export function preview() {

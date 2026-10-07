@@ -4,6 +4,7 @@ import com.springaimcpservercommon.loadtest.data.ApiHarvester;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.DatabaseSampler;
 import com.springaimcpservercommon.loadtest.data.DbTable;
+import com.springaimcpservercommon.loadtest.data.LifecyclePlan;
 import com.springaimcpservercommon.loadtest.data.PoolRef;
 import com.springaimcpservercommon.loadtest.data.RealDataBinder;
 import com.springaimcpservercommon.loadtest.data.RealDataCollector;
@@ -13,16 +14,21 @@ import com.springaimcpservercommon.loadtest.data.TableIndex;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.ActuatorMappingsReader;
 import com.springaimcpservercommon.loadtest.discovery.CatalogMerger;
+import com.springaimcpservercommon.loadtest.discovery.ChannelScanner;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.GraphQlSchemaReader;
 import com.springaimcpservercommon.loadtest.discovery.HarCapture;
 import com.springaimcpservercommon.loadtest.discovery.HarReader;
 import com.springaimcpservercommon.loadtest.discovery.OpenApiReader;
 import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
+import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
+import com.springaimcpservercommon.loadtest.discovery.SecurityScanner;
 import com.springaimcpservercommon.loadtest.discovery.SpringSourceScanner;
 import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
 import com.springaimcpservercommon.loadtest.k6.GrafanaStack;
 import com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
+import com.springaimcpservercommon.loadtest.model.Channel;
 import com.springaimcpservercommon.loadtest.schema.DdlWriter;
 import com.springaimcpservercommon.loadtest.schema.SchemaReader;
 import com.springaimcpservercommon.loadtest.schema.SchemaSnapshot;
@@ -99,14 +105,26 @@ public final class LoadTestGenerator {
      * @param recordings  browser recordings read ({@code --har})
      * @param basePath    servlet context path of the target, if known
      * @param discovered  number of APIs before include/exclude filters
+     * @param security    the project's Spring Security setup (authentication style, request matchers, roles)
+     * @param channels    WebSockets, STOMP endpoints, SSE streams and Kafka topics (run by {@code channels-<profile>})
      */
     public record DiscoveryResult(ApiCatalog catalog, DataPlan plan, SeedPlan seed, ProjectSettings settings,
                                   @Nullable Path project, List<HarCapture> recordings, @Nullable String basePath,
-                                  int discovered) {
+                                  int discovered, SecurityModel security, List<Channel> channels) {
 
         /** Compact constructor: defensive copy. */
         public DiscoveryResult {
             recordings = List.copyOf(recordings);
+            channels = List.copyOf(channels);
+        }
+
+        /**
+         * The business flows the code implies (create → read → update → status → delete per resource).
+         *
+         * @return the flows; empty when no resource has more than a create endpoint
+         */
+        public LifecyclePlan lifecycle() {
+            return LifecyclePlan.build(catalog, plan, seed);
         }
 
         /**
@@ -165,8 +183,16 @@ public final class LoadTestGenerator {
             ApiCatalog c = new OpenApiReader(this::log).read(Documents.text(spec, s.headers));
             catalogs.add(projectDir == null ? c : relativeToContext(c, settings.contextPath()));
         }
+        if (s.runtime != null) {
+            // what the running application serves, as the framework resolved it (spring-ai-mcp-server-common-loadtest-runtime)
+            catalogs.add(new OpenApiReader(this::log).read(runtimeModel(s.runtime)));
+        }
         if (projectDir != null) {
             catalogs.add(new SpringSourceScanner(this::log).scan(projectDir));
+            ApiCatalog graphQl = new GraphQlSchemaReader(this::log).read(projectDir, settings);
+            if (graphQl != null) {
+                catalogs.add(graphQl);
+            }
         }
         String basePath = basePath(settings, catalogs);
         List<HarCapture> recordings = new ArrayList<>();
@@ -184,9 +210,13 @@ public final class LoadTestGenerator {
             catalogs.add(new ActuatorMappingsReader(this::log).read(Documents.text(s.actuator, s.headers)));
         }
         if (catalogs.isEmpty()) {
-            throw new IllegalArgumentException("give at least one of project, openApi, har, actuator");
+            throw new IllegalArgumentException("give at least one of project, openApi, har, actuator, runtime");
         }
         ApiCatalog merged = CatalogMerger.merge(catalogs);
+        SecurityModel security = projectDir == null ? SecurityModel.none()
+                : new SecurityScanner(this::log).scan(projectDir, settings);
+        merged = new ApiCatalog(merged.project(), merged.basePath(), security.annotate(merged.endpoints()),
+                merged.schemas(), merged.entities());
         List<String> excludes = new ArrayList<>(s.exclude);
         if (s.defaultExcludes) {
             excludes.addAll(CatalogMerger.DEFAULT_EXCLUDES);
@@ -196,8 +226,9 @@ public final class LoadTestGenerator {
         TableIndex index = scriptIndex(filtered, projectDir);
         DataPlan plan = DataPlan.build(filtered, new RealDataBinder(index, Map.of()));
         SeedPlan seed = SeedPlan.build(filtered, plan, index, this::log);
+        List<Channel> channels = new ChannelScanner(this::log).scan(projectDir, settings, filtered.endpoints());
         return new DiscoveryResult(filtered, plan, seed, settings, projectDir, recordings, basePath,
-                merged.endpoints().size());
+                merged.endpoints().size(), security, channels);
     }
 
     /**
@@ -303,9 +334,15 @@ public final class LoadTestGenerator {
             ApiHarvester harvester = s.harvest ? new ApiHarvester(baseUrl, s.headers, this::log) : null;
             RealDataCollector.Result real = new RealDataCollector(this::log, seed.pools()).collect(catalog, plan,
                     index, db, harvester, user, s.sampleSize, s.dropUnverified);
+            String authType = s.authType.equals("auto") ? switch (d.security().style()) {
+                case BASIC -> "basic";
+                case FORM -> "form";
+                case BEARER -> "bearer";
+                case NONE -> "none";
+            } : s.authType;
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
-                    journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, s.authType,
-                            s.loginPath));
+                    journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, authType, s.loginPath,
+                            d.security(), d.channels()));
             GrafanaStack.write(r.outDir(), catalog.project(),
                     GrafanaStack.scrape(baseUrl, d.settings().properties()));
             if (db != null && s.schemaSnapshot) {
@@ -426,11 +463,29 @@ public final class LoadTestGenerator {
         s.log.accept(line);
     }
 
+    /** The runtime model document: from a URL ({@code /actuator/loadtest} appended to a base URL) or a file. */
+    private String runtimeModel(String location) {
+        String where = location;
+        if (location.startsWith("http://") || location.startsWith("https://")) {
+            where = location.replaceAll("/+$", "");
+            if (!where.endsWith("/actuator/loadtest")) {
+                where += "/actuator/loadtest";
+            }
+        }
+        try {
+            return Documents.text(where, s.headers);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("cannot read the runtime model at " + where + " (" + e.getMessage()
+                    + "). The application needs the spring-ai-mcp-server-common-loadtest-runtime dependency, "
+                    + "loadtest.runtime.enabled=true and management.endpoints.web.exposure.include=loadtest", e);
+        }
+    }
+
     // ── configuration ──────────────────────────────────────────────────────────────────────────────────
 
     /** Immutable snapshot of a builder. */
     private record Settings(@Nullable Path project, List<String> openApi, boolean bundledOpenApi,
-                            @Nullable String actuator, List<String> har, List<String> harHosts, boolean harValues,
+                            @Nullable String actuator, @Nullable String runtime, List<String> har, List<String> harHosts, boolean harValues,
                             List<String> include, List<String> exclude, boolean defaultExcludes,
                             Map<String, String> headers, @Nullable Path outDir, @Nullable String baseUrl,
                             String dataMode, boolean useDatabase, @Nullable String dbUrl, @Nullable String dbUser,
@@ -448,6 +503,7 @@ public final class LoadTestGenerator {
         private final List<String> openApi = new ArrayList<>();
         private boolean bundledOpenApi = true;
         private @Nullable String actuator;
+        private @Nullable String runtime;
         private final List<String> har = new ArrayList<>();
         private final List<String> harHosts = new ArrayList<>();
         private boolean harValues = true;
@@ -469,7 +525,7 @@ public final class LoadTestGenerator {
         private final Map<String, List<Object>> values = new LinkedHashMap<>();
         private final Map<String, String> bindings = new LinkedHashMap<>();
         private boolean dropUnverified;
-        private String authType = "none";
+        private String authType = "auto";
         private @Nullable String loginPath;
         private @Nullable UserDataPrompt prompt;
         private boolean schemaSnapshot = true;
@@ -509,6 +565,20 @@ public final class LoadTestGenerator {
          */
         public Builder bundledOpenApi(boolean on) {
             this.bundledOpenApi = on;
+            return this;
+        }
+
+        /**
+         * The runtime model of the running app: {@code /actuator/loadtest} of a host that has the
+         * {@code spring-ai-mcp-server-common-loadtest-runtime} dependency and {@code loadtest.runtime.enabled=true}
+         * — the routes it really serves with their Jackson shapes, validation constraints and method-security access.
+         * Given the application's base URL, {@code /actuator/loadtest} is appended.
+         *
+         * @param urlOrFile the app's base URL, the endpoint's URL, or a saved copy of its answer
+         * @return this
+         */
+        public Builder runtime(String urlOrFile) {
+            this.runtime = urlOrFile;
             return this;
         }
 
@@ -798,7 +868,7 @@ public final class LoadTestGenerator {
         public LoadTestGenerator build() {
             Map<String, List<Object>> copiedValues = new LinkedHashMap<>();
             values.forEach((k, v) -> copiedValues.put(k, List.copyOf(v)));
-            return new LoadTestGenerator(new Settings(project, List.copyOf(openApi), bundledOpenApi, actuator,
+            return new LoadTestGenerator(new Settings(project, List.copyOf(openApi), bundledOpenApi, actuator, runtime,
                     List.copyOf(har), List.copyOf(harHosts), harValues, List.copyOf(include), List.copyOf(exclude),
                     defaultExcludes, Map.copyOf(headers), outDir, baseUrl, dataMode, useDatabase, dbUrl, dbUser,
                     dbPassword, dbSchema, sampleSize, harvest, List.copyOf(userDataFiles), Map.copyOf(copiedValues),

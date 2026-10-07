@@ -40,7 +40,18 @@ class OpenApiReaderTest {
                 },
                 "/pets/{petId}/photo": {
                   "post": {"operationId": "uploadPhoto",
-                           "requestBody": {"content": {"multipart/form-data": {"schema": {"type": "object"}}}}}
+                           "requestBody": {"content": {"multipart/form-data": {"schema": {"type": "object",
+                             "required": ["file"], "properties": {"file": {"type": "string", "format": "binary"},
+                             "caption": {"type": "string"}}}}}}}
+                },
+                "/pets/{petId}/raw": {
+                  "put": {"operationId": "rawBytes",
+                          "requestBody": {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
+                },
+                "/pets/search": {
+                  "post": {"operationId": "searchPets",
+                           "requestBody": {"content": {"application/x-www-form-urlencoded": {"schema": {"type": "object",
+                             "properties": {"q": {"type": "string"}, "limit": {"type": "integer"}}}}}}}
                 }
               },
               "components": {
@@ -76,7 +87,7 @@ class OpenApiReaderTest {
         assertThat(catalog.project()).isEqualTo("pets");
         assertThat(catalog.basePath()).isEqualTo("/petstore");
         assertThat(catalog.endpoints()).extracting(ApiEndpoint::id)
-                .containsExactly("getPet", "updatePet", "getPets", "createPet");
+                .containsExactly("getPet", "updatePet", "getPets", "createPet", "uploadPhoto", "searchPets");
         assertThat(op("getPet").params()).singleElement().satisfies(p -> {
             assertThat(p.in()).isEqualTo(ParamLocation.PATH);
             assertThat(((ScalarSchema) p.schema()).format()).isEqualTo("uuid");
@@ -91,7 +102,18 @@ class OpenApiReaderTest {
             assertThat(p.defaultValue()).isEqualTo("20");
             assertThat(((ScalarSchema) p.schema()).constraints().maximum()).isEqualTo(new BigDecimal("100"));
         });
-        assertThat(log).anyMatch(l -> l.contains("/pets/{petId}/photo") && l.contains("multipart"));
+        assertThat(log).anyMatch(l -> l.contains("/pets/{petId}/raw") && l.contains("application/octet-stream"));
+        assertThat(catalog.endpoints()).extracting(ApiEndpoint::id).doesNotContain("rawBytes");
+    }
+
+    @Test
+    void readsMultipartAndFormBodiesWithBinaryFileFields() {
+        assertThat(op("uploadPhoto").bodyType()).isEqualTo("multipart");
+        ObjectSchema upload = (ObjectSchema) op("uploadPhoto").body();
+        assertThat(((ScalarSchema) upload.properties().get("file").schema()).format()).isEqualTo("binary");
+        assertThat(upload.properties().get("file").required()).isTrue();
+        assertThat(op("searchPets").bodyType()).isEqualTo("form");
+        assertThat(op("createPet").bodyType()).as("JSON stays the default").isNull();
     }
 
     @Test

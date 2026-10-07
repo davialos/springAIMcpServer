@@ -80,6 +80,7 @@ public final class FieldKindClassifier {
             case "uri", "url", "uri-reference", "iri" -> FieldKind.URL;
             case "ipv4", "ipv6" -> FieldKind.IP;
             case "password" -> FieldKind.PASSWORD;
+            case "binary" -> FieldKind.FILE;
             case "currency" -> FieldKind.CURRENCY;
             case "locale" -> FieldKind.LANGUAGE;
             case "timezone" -> FieldKind.TIMEZONE;

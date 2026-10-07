@@ -2,9 +2,13 @@ package com.springaimcpservercommon.loadtest.k6;
 
 import com.springaimcpservercommon.loadtest.data.DataPlan;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
+import com.springaimcpservercommon.loadtest.data.LifecyclePlan;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.ResponseSchemas;
+import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
+import com.springaimcpservercommon.loadtest.model.Channel;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import org.jspecify.annotations.Nullable;
@@ -37,6 +41,9 @@ import java.util.stream.Stream;
  * data/plan.json         every field: kind and real-data binding
  * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
+ * data/lifecycle.json    per-resource business flows from the code, MODE=lifecycle-&lt;profile&gt;
+ * data/response-schemas.json  what a successful response of each API looks like (validated under load)
+ * data/traffic.json      production traffic model (endpoint mix, rate, session transitions); written by `loadtest traffic`
  * hooks.js               user hooks (created once, never overwritten)
  * grafana/               Prometheus + Grafana stack and dashboard (written by GrafanaStack)
  * README.md              how to run; API and field tables
@@ -46,7 +53,7 @@ public final class K6SuiteGenerator {
 
     private static final List<String> RUNTIME_FILES = List.of(
             "lib/data.js", "lib/dummy.js", "lib/random.js", "lib/modes.js", "lib/http.js", "lib/report.js",
-            "lib/grafana.js", "lib/dictionaries.json");
+            "lib/grafana.js", "lib/validate.js", "lib/auth.js", "lib/channels.js", "lib/resilience.js", "lib/dictionaries.json");
 
     /**
      * Generation options.
@@ -54,10 +61,46 @@ public final class K6SuiteGenerator {
      * @param outDir    suite directory
      * @param baseUrl   target base URL (with context path)
      * @param dataMode  default data mode
-     * @param authType  none, bearer, basic, apiKey or login
+     * @param authType  none, bearer, basic, apiKey, login, form or oauth2
      * @param loginPath login path for {@code login} auth, or {@code null}
+     * @param security  the project's Spring Security setup (roles, CSRF, login page), or {@code null}
+     * @param channels  WebSockets, STOMP endpoints, SSE streams and Kafka topics
      */
-    public record Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+    public record Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath,
+                          @Nullable SecurityModel security, List<Channel> channels) {
+
+        /** Compact constructor: defensive copy. */
+        public Options {
+            channels = List.copyOf(channels);
+        }
+
+        /**
+         * Options without channels.
+         *
+         * @param outDir    suite directory
+         * @param baseUrl   target base URL
+         * @param dataMode  default data mode
+         * @param authType  authentication type
+         * @param loginPath login path, or {@code null}
+         * @param security  security model, or {@code null}
+         */
+        public Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath,
+                       @Nullable SecurityModel security) {
+            this(outDir, baseUrl, dataMode, authType, loginPath, security, List.of());
+        }
+
+        /**
+         * Options without a security model.
+         *
+         * @param outDir    suite directory
+         * @param baseUrl   target base URL
+         * @param dataMode  default data mode
+         * @param authType  authentication type
+         * @param loginPath login path, or {@code null}
+         */
+        public Options(Path outDir, String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+            this(outDir, baseUrl, dataMode, authType, loginPath, null, List.of());
+        }
     }
 
     /**
@@ -139,7 +182,7 @@ public final class K6SuiteGenerator {
             Path configFile = out.resolve("loadtest.config.json");
             ObjectNode config = SuiteConfig.merge(
                     SuiteConfig.defaults(catalog, new SuiteConfig.Settings(o.baseUrl(), o.dataMode(), o.authType(),
-                            o.loginPath())),
+                            o.loginPath(), o.security(), o.channels())),
                     readIfExists(configFile));
             writeJson(configFile, config);
 
@@ -157,14 +200,55 @@ public final class K6SuiteGenerator {
                 writeJson(journeyFile, Documents.json().createArrayNode());
             }
 
+            LifecyclePlan lifecycle = seed == null ? new LifecyclePlan(List.of())
+                    : LifecyclePlan.build(catalog, plan, seed);
+            writeJson(out.resolve("data/lifecycle.json"), lifecycle.toJson());
+            writeJson(out.resolve("data/response-schemas.json"), responseSchemas(catalog));
+            writeJson(out.resolve("data/channels.json"), channelsJson(o.channels()));
+            if (!Files.exists(out.resolve("data/traffic.json"))) {
+                writeJson(out.resolve("data/traffic.json"), Documents.json().createObjectNode()); // see `loadtest traffic`
+            }
+            if (o.channels().stream().anyMatch(c -> c.kind() == Channel.Kind.KAFKA)) {
+                Files.writeString(out.resolve("kafka.js"), KafkaScript.render(o.channels()));
+            }
+
             Files.writeString(out.resolve("README.md"),
-                    SuiteReadme.render(catalog, plan, realPools, user, config, seed));
+                    SuiteReadme.render(catalog, plan, realPools, user, config, seed, lifecycle));
             Files.writeString(out.resolve("run.sh"), runScript());
             out.resolve("run.sh").toFile().setExecutable(true);
             return new Result(out, catalog.endpoints().size(), plan.fields().size(), realPools.size());
         } catch (IOException e) {
             throw new UncheckedIOException("cannot write suite to " + out, e);
         }
+    }
+
+    static ArrayNode channelsJson(List<Channel> channels) {
+        ArrayNode out = Documents.json().createArrayNode();
+        for (Channel c : channels) {
+            ObjectNode n = out.addObject();
+            n.put("id", c.id());
+            n.put("kind", c.kind().name().toLowerCase(java.util.Locale.ROOT));
+            if (c.path() != null) {
+                n.put("path", c.path());
+            }
+            ArrayNode send = n.putArray("send");
+            c.send().forEach(send::add);
+            ArrayNode subscribe = n.putArray("subscribe");
+            c.subscribe().forEach(subscribe::add);
+            n.put("source", c.source());
+        }
+        return out;
+    }
+
+    /** API id → response schema, for the APIs whose success response shape is known. */
+    static ObjectNode responseSchemas(ApiCatalog catalog) {
+        ObjectNode out = Documents.json().createObjectNode();
+        for (ApiEndpoint e : catalog.endpoints()) {
+            if (!ResponseSchemas.isEmpty(e.responseSchema())) {
+                out.set(e.id(), e.responseSchema());
+            }
+        }
+        return out;
     }
 
     private static void removeStaleGenerated(Path apis, ApiCatalog catalog) throws IOException {
@@ -257,6 +341,8 @@ public final class K6SuiteGenerator {
                 #   API=getUser ./run.sh stress dummy  one API, stress profile, dummy data
                 #   ./run.sh preview random            print generated requests, send nothing
                 #   ./run.sh journey-load              replay the recorded browser flow (generate --har) under load
+                #   ./run.sh lifecycle-load            walk every resource through create → read → update → status → delete
+                #   SKEW=zipf ./run.sh mixed-load      hot rows take most requests (SKEW=hot, SKEW_S); PARTITION=vu: own rows per VU
                 # Env (k6 reads it directly): BASE_URL, VUS, RATE, DURATION_SCALE, API, PER_API, READ_ONLY,
                 #   AUTH_TOKEN, AUTH_USER, AUTH_PASSWORD, API_KEY, ALLOW_PROD, PREVIEW_COUNT, SEED, SEED_PER_TABLE,
                 #   SEED_CLEANUP

@@ -3,17 +3,27 @@
 //   smoke | load | stress | spike | soak | breakpoint           each API on its own (sequential scenarios)
 //   mixed-smoke | mixed-load | mixed-stress | mixed-spike | …    all APIs together, weighted traffic mix
 //   journey-smoke | journey-load | journey-spike | …            replay the recorded browser flow (data/journey.json)
+//   lifecycle-smoke | lifecycle-load | …                          walk each resource through create → read → update → status → delete (data/lifecycle.json)
+//   session-load | …                                               walk sessions with the endpoint-to-endpoint transitions seen in production logs (data/traffic.json)
+//   channels-smoke | channels-load | …                           WebSocket, STOMP and SSE endpoints (data/channels.json)
 //   preview | journey-preview                                   build requests and print them, send nothing
-// Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), DURATION_SCALE (e.g. 0.1),
+// Scaling without editing config: VUS (base VUs), RATE (base arrival rate/s), ITERATIONS (per VU, smoke), DURATION_SCALE (e.g. 0.1),
 // API=getUser,createOrder (restrict APIs), PER_API=parallel (per-API scenarios at once instead of in turn).
+// MODEL=open turns closed (VU) profiles into arrival-rate ones (RATE = requests/s at multiplier 1); WARMUP=60s adds a warm-up
+// phase (JIT, caches, pools) whose requests are tagged apart and excluded from thresholds and reports (WARMUP=off disables).
 
 export function parseMode(raw) {
   const mode = (raw || 'smoke').toLowerCase();
   if (mode === 'preview') return { mode, profile: 'preview', mixed: false, journey: false };
   if (mode === 'journey-preview') return { mode, profile: 'preview', mixed: false, journey: true };
+  if (mode === 'lifecycle-preview') return { mode, profile: 'preview', mixed: false, journey: false, lifecycle: true };
   const mixed = mode.startsWith('mixed-');
   const journey = mode.startsWith('journey-');
-  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : mode, mixed, journey };
+  const lifecycle = mode.startsWith('lifecycle-');
+  const channels = mode.startsWith('channels-');
+  const session = mode.startsWith('session-');
+  return { mode, profile: mixed ? mode.slice(6) : journey ? mode.slice(8) : lifecycle ? mode.slice(10) : channels ? mode.slice(9) : session ? mode.slice(8) : mode, mixed,
+    journey, lifecycle, channels, session };
 }
 
 const UNITS = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 };
@@ -45,6 +55,42 @@ function envNumber(name, fallback) {
   return v !== undefined && v !== '' ? parseFloat(v) : fallback;
 }
 
+/** Whether closed (VU) profiles run as arrival-rate (open model) ones: MODEL=open, profile.model or config.model. */
+function openModel(config, profile) {
+  return (__ENV.MODEL || profile.model || config.model || 'closed') === 'open';
+}
+
+/**
+ * The open-model form of a closed profile: stage targets stay multipliers, now of the base rate (requests/s) instead
+ * of the base VUs. Users arrive on schedule whatever the response time — the way production traffic does — so a slow
+ * service builds up in-flight requests (and drops iterations when the VUs run out) instead of slowing the load down.
+ */
+function asOpen(profile) {
+  if (profile.executor === 'ramping-vus') {
+    return Object.assign({}, profile, { executor: 'ramping-arrival-rate', baseRate: profile.baseRate || profile.baseVus || 10,
+      preAllocatedVUs: profile.preAllocatedVUs || Math.max(10, 2 * (profile.baseVus || 10)), maxVUs: profile.maxVUs || 10 * (profile.baseVus || 10) + 50 });
+  }
+  if (profile.executor === 'constant-vus') {
+    return Object.assign({}, profile, { executor: 'constant-arrival-rate', baseRate: profile.baseRate || profile.vus || 10,
+      preAllocatedVUs: profile.preAllocatedVUs || Math.max(10, 2 * (profile.vus || 10)), maxVUs: profile.maxVUs || 10 * (profile.vus || 10) + 50 });
+  }
+  return profile;
+}
+
+/**
+ * The warm-up phase of a profile — { seconds, fraction, readOnly } — or null. profile.warmup / config.warmup:
+ * { duration: "60s", fraction: 0.3 (of base VUs / rate), readOnly: false }; WARMUP=<duration> | off overrides.
+ */
+export function warmupFor(config, profileName) {
+  const profile = (config.modes || {})[profileName] || {};
+  if (profile.executor === 'per-vu-iterations') return null; // smoke: a handful of iterations, nothing to warm
+  const cfg = Object.assign({}, config.warmup || {}, profile.warmup || {});
+  const raw = __ENV.WARMUP !== undefined ? __ENV.WARMUP : cfg.duration;
+  if (!raw || raw === 'off' || raw === '0' || raw === 'false') return null;
+  const secs = seconds(raw) * (__ENV.DURATION_SCALE ? parseFloat(__ENV.DURATION_SCALE) : 1);
+  return secs > 0 ? { seconds: secs, fraction: cfg.fraction || 0.3, readOnly: cfg.readOnly === true } : null;
+}
+
 /** One scenario for a profile; `share` divides VUs/rate (parallel per-API runs), `multiplier` scales iterations. */
 function scenario(profile, exec, startTime, multiplier) {
   const base = envNumber('VUS', profile.baseVus || profile.vus || 1);
@@ -54,7 +100,7 @@ function scenario(profile, exec, startTime, multiplier) {
   switch (profile.executor) {
     case 'per-vu-iterations':
       s.vus = Math.max(1, Math.round(base));
-      s.iterations = (profile.iterations || 1) * (multiplier || 1);
+      s.iterations = envNumber('ITERATIONS', profile.iterations || 1) * (multiplier || 1); // per VU
       s.maxDuration = scaled(profile.maxDuration || '10m');
       break;
     case 'constant-vus':
@@ -93,21 +139,76 @@ function scenarioSeconds(s) {
   return seconds(s.maxDuration || '1m');
 }
 
+function warmupScenario(profile, warm) {
+  const base = envNumber('VUS', profile.baseVus || profile.vus || 1);
+  const rate = envNumber('RATE', profile.baseRate || 10);
+  const open = profile.executor.indexOf('arrival-rate') >= 0;
+  const s = { exec: 'warmup', gracefulStop: '10s' };
+  if (open) {
+    Object.assign(s, { executor: 'constant-arrival-rate', rate: Math.max(1, Math.round(rate * warm.fraction)), timeUnit: profile.timeUnit || '1s',
+      preAllocatedVUs: profile.preAllocatedVUs || 10, maxVUs: profile.maxVUs || 200 });
+  } else {
+    Object.assign(s, { executor: 'constant-vus', vus: Math.max(1, Math.round(base * warm.fraction)) });
+  }
+  s.duration = formatDuration(warm.seconds);
+  return s;
+}
+
+function shiftStart(s, extraSeconds) {
+  s.startTime = formatDuration(seconds(s.startTime || '0s') + extraSeconds);
+  return s;
+}
+
+/** The sub-metric filter of "requests that count": measured (not warm-up) and outside every injected fault. */
+function counted(runtime) {
+  const tags = [];
+  if (runtime.warmup) tags.push('phase:measure');
+  if (runtime.resilience) tags.push('fault:none');
+  return tags.join(',');
+}
+
 function thresholds(config, profile, runtime, mixed) {
   const t = {};
   const base = Object.assign({}, config.thresholds || {}, profile.thresholds || {});
-  for (const [metric, rules] of Object.entries(base)) t[metric] = rules.slice();
+  const baseKeys = [];
+  const filter = counted(runtime);
+  for (const [metric, rules] of Object.entries(base)) {
+    // with a warm-up or injected faults, the run-wide thresholds only count requests outside them
+    const qualify = filter && (metric === 'http_req_duration' || metric === 'http_req_failed');
+    // the status checks of requests under an injected fault fail by design: they are judged per experiment instead
+    const key = qualify ? `${metric}{${filter}}` : metric === 'checks' && runtime.resilience ? 'checks{fault:none}' : metric;
+    t[key] = rules.slice();
+    baseKeys.push(key);
+  }
   const defaults = config.defaults || {};
   for (const api of runtime.apis) {
     const c = (config.apis || {})[api.id] || {};
     const p95 = profile.thresholds && profile.thresholds.http_req_duration ? null : c.p95Ms || defaults.p95Ms;
-    t[`http_req_duration{api:${api.id}}`] = p95 ? [`p(95)<${p95}`] : ['max>=0'];
     const errorRate = profile.maxErrorRate !== undefined ? profile.maxErrorRate : c.maxErrorRate !== undefined ? c.maxErrorRate : defaults.maxErrorRate;
-    t[`http_req_failed{api:${api.id}}`] = errorRate !== undefined ? [`rate<${errorRate}`] : ['rate>=0'];
+    const apiFilter = runtime.resilience ? `api:${api.id},fault:none` : `api:${api.id}`;
+    if (runtime.resilience) {
+      t[`http_req_duration{api:${api.id}}`] = ['max>=0']; // still tracked for the report, judged outside the faults
+      t[`http_req_failed{api:${api.id}}`] = ['rate>=0'];
+    }
+    t[`http_req_duration{${apiFilter}}`] = p95 ? [`p(95)<${p95}`] : ['max>=0'];
+    t[`http_req_failed{${apiFilter}}`] = errorRate !== undefined ? [`rate<${errorRate}`] : ['rate>=0'];
     t[`http_reqs{api:${api.id}}`] = ['count>=0']; // keeps a per-API request count in the summary
   }
+  // resilience: each experiment is judged on its own phase — during the fault, and after it (the service must recover)
+  for (const e of (runtime.resilience ? runtime.resilience.experiments : [])) {
+    const x = e.expect || {};
+    t[`http_req_failed{fault:${e.name}}`] = [`rate<${x.maxErrorRate !== undefined ? x.maxErrorRate : 1.01}`];
+    t[`http_req_duration{fault:${e.name}}`] = x.p95Ms ? [`p(95)<${x.p95Ms}`] : ['max>=0'];
+    t[`http_req_failed{fault:recover_${e.name}}`] = [`rate<${x.recoveryMaxErrorRate !== undefined ? x.recoveryMaxErrorRate : defaults.maxErrorRate !== undefined ? defaults.maxErrorRate : 0.01}`];
+    const recoveryP95 = x.recoveryP95Ms || defaults.p95Ms;
+    t[`http_req_duration{fault:recover_${e.name}}`] = recoveryP95 ? [`p(95)<${recoveryP95}`] : ['max>=0'];
+  }
+  const v = runtime.validation || {};
+  if (v.mode === 'check') t.response_schema_violations = [`count<=${v.maxViolations || 0}`];
+  if (v.readAfterWrite) t.read_after_write_mismatches = [`count<=${v.maxMismatches || 0}`];
+  if (runtime.open && !profile.allowDropped) t.dropped_iterations = ['count<=0']; // the arrival rate could not be kept up
   if (profile.abortOnFail) {
-    for (const metric of Object.keys(base)) {
+    for (const metric of baseKeys) {
       t[metric] = t[metric].map((r) => ({ threshold: r, abortOnFail: true, delayAbortEval: profile.delayAbortEval || '30s' }));
     }
   }
@@ -115,25 +216,38 @@ function thresholds(config, profile, runtime, mixed) {
 }
 
 /** k6 options for the selected mode. */
-export function buildOptions(config, runtime, journeySteps) {
-  const { mode, profile: profileName, mixed, journey } = parseMode(__ENV.MODE);
+export function buildOptions(config, runtime, journeySteps, lifecycleFlows, channelList, sessionModel) {
+  const { mode, profile: profileName, mixed, journey, lifecycle, channels, session } = parseMode(__ENV.MODE);
   const common = {
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
     insecureSkipTLSVerify: config.http && config.http.insecureSkipTLSVerify === true,
     userAgent: `k6-loadtest/${config.project || 'suite'}`,
   };
   if (profileName === 'preview') {
-    const exec = journey ? 'previewJourney' : 'preview';
+    const exec = lifecycle ? 'previewLifecycle' : journey ? 'previewJourney' : 'preview';
     return Object.assign(common, { scenarios: { preview: { executor: 'per-vu-iterations', vus: 1, iterations: 1, exec } } });
   }
-  const profile = (config.modes || {})[profileName];
+  let profile = (config.modes || {})[profileName];
+  if (profile && openModel(config, profile)) profile = asOpen(profile);
+  if (runtime) runtime.open = !!profile && profile.executor.indexOf('arrival-rate') >= 0;
   if (!profile) {
     const known = Object.keys(config.modes || {});
     throw new Error(`MODE=${mode}: unknown profile "${profileName}". Use one of ${known.join(', ')} (or mixed-<profile>, preview)`);
   }
+  if (channels) {
+    if (!channelList) throw new Error(`MODE=${mode}: data/channels.json is empty — the project has no WebSocket, STOMP, SSE or Kafka endpoint`);
+    return Object.assign(common, { scenarios: { [`channels_${profileName}`]: scenario(profile, 'channels', null, 1) },
+      thresholds: { checks: ['rate>0.95'] } });
+  }
   if (!runtime.apis.length) throw new Error('No API is enabled (check loadtest.config.json → apis, API and READ_ONLY)');
   const scenarios = {};
-  if (journey) {
+  if (lifecycle) {
+    if (!lifecycleFlows) throw new Error(`MODE=${mode}: data/lifecycle.json has no flow — the project needs a create endpoint plus a read, update or delete endpoint of the same resource`);
+    scenarios[`lifecycle_${profileName}`] = scenario(profile, 'lifecycle', null, 1);
+  } else if (session) {
+    if (!sessionModel) throw new Error(`MODE=${mode}: data/traffic.json has no sessions — import production access logs with: loadtest traffic --suite . --access-log <file>`);
+    scenarios[`session_${profileName}`] = scenario(profile, 'session', null, 1);
+  } else if (journey) {
     if (!journeySteps) throw new Error(`MODE=${mode}: data/journey.json is empty — generate with --har <recording.har>`);
     scenarios[`journey_${profileName}`] = scenario(profile, 'journey', null, 1);
   } else if (mixed) {
@@ -150,6 +264,17 @@ export function buildOptions(config, runtime, journeySteps) {
       scenarios[`${profileName}_${api.id}`] = s;
       offset += scenarioSeconds(s) + gap;
     }
+  }
+  if (runtime.resilience) {
+    runtime.resilience.experiments.forEach((e, i) => {
+      scenarios[`fault_${e.name}`] = { executor: 'per-vu-iterations', vus: 1, iterations: 1, maxDuration: `${Math.ceil(seconds(e.duration || '60s') + 30)}s`,
+        startTime: formatDuration(runtime.resilience.windows[i].start), exec: 'fault', env: { FAULT: e.name }, gracefulStop: '5s' };
+    });
+  }
+  const warm = runtime.warmup;
+  if (warm) {
+    for (const name of Object.keys(scenarios)) if (name.indexOf('fault_') !== 0) shiftStart(scenarios[name], warm.seconds + 5); // faults already count the shift
+    scenarios.warmup = warmupScenario(profile, warm);
   }
   return Object.assign(common, { scenarios, thresholds: thresholds(config, profile, runtime, mixed) });
 }

@@ -14,7 +14,7 @@
       Developer tool, not part of the starter (ADR-0022): points at a Spring Boot project (source tree, OpenAPI
       document, actuator mappings, database), discovers its REST APIs and generates a Grafana k6 load-test suite
       with per-API data providers. No Spring dependency: it reads the host, it never runs inside it.
-      Every dependency below is already vendored in offline-repo/ (no refresh needed).
+      Dependencies are vendored in offline-repo/ (docs/offline-build.md).
     -->
     <artifactId>spring-ai-mcp-server-common-loadtest</artifactId>
     <packaging>jar</packaging>
@@ -49,6 +49,27 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- real-data sampling is verified on MySQL and SQL Server too (CrossDatabaseSamplerIT) -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mssqlserver</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.sqlserver</groupId>
+            <artifactId>mssql-jdbc</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

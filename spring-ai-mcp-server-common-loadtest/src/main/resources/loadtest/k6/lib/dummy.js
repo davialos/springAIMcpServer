@@ -5,6 +5,12 @@ import exec from 'k6/execution';
 import * as R from './random.js';
 
 let DICT = {};
+let FILE_KB = 4;
+
+/** Size of generated upload files, in KB (config.data.files.sizeKb). */
+export function setFileSize(kb) {
+  if (kb > 0) FILE_KB = kb;
+}
 
 export function setDictionaries(dictionaries) {
   DICT = dictionaries;
@@ -83,6 +89,7 @@ const GENERATORS = {
   timezone: () => R.pick(d('timezones')),
   creditCard: () => R.pick(d('testCardNumbers')),
   token: () => R.alnum(32),
+  file: (s, ctx, spec) => fileValue(spec),
   slug: () => `${R.pick(d('words'))}-${R.pick(d('words'))}-${uniqueSuffix()}`,
   version: () => `${R.int(0, 5)}.${R.int(0, 20)}.${R.int(0, 50)}`,
   rating: (s) => (s.type === 'integer' ? R.int(1, 5) : R.float(1, 5, 1)),
@@ -96,6 +103,27 @@ const GENERATORS = {
   integer: (s) => (s.example !== undefined ? Number(s.example) : R.int(1, 1000)),
   number: (s) => (s.example !== undefined ? Number(s.example) : R.float(1, 1000, 2)),
 };
+
+const FILE_TYPES = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  csv: 'text/csv', json: 'application/json', xml: 'application/xml', txt: 'text/plain', zip: 'application/zip',
+};
+
+/**
+ * An upload: a marker object that lib/http.js turns into a multipart file part. The extension follows the field name
+ * (`avatar` → png, `report`/`document` → pdf, `data` → csv), the content is filler text of data.files.sizeKb.
+ */
+export function fileValue(spec) {
+  const name = String((spec && spec.name) || 'file').toLowerCase();
+  const ext = /(avatar|photo|image|picture|logo|icon)/.test(name) ? 'png'
+    : /(report|document|invoice|contract|resume|cv|pdf)/.test(name) ? 'pdf'
+    : /(csv|data|import|sheet)/.test(name) ? 'csv'
+    : /(json|config)/.test(name) ? 'json' : 'txt';
+  const size = FILE_KB * 1024;
+  let data = '';
+  while (data.length < size) data += `${words(8)}\n`;
+  return { $file: { name: `${name.replace(/[^a-z0-9]+/g, '-')}-${uniqueSuffix()}.${ext}`, contentType: FILE_TYPES[ext], data: data.slice(0, size) } };
+}
 
 /** "name" fields get a value that reads like the thing they name: productName → "Smart Lamp". */
 function named(spec) {
@@ -115,6 +143,7 @@ function named(spec) {
  * Falls back to a constraint-driven random value when the kind's value cannot satisfy the schema.
  */
 export function generate(kind, schema, ctx, spec) {
+  if (kind === 'file' || schema.format === 'binary') return fileValue(spec);
   if (schema.enum && schema.enum.length) return R.pick(schema.enum);
   const g = GENERATORS[kind] || GENERATORS.text;
   let v = g(schema, ctx, spec || {});

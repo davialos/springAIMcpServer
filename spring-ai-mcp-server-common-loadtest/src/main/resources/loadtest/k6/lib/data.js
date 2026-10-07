@@ -7,6 +7,13 @@
 //   real    real values > user > dummy
 //   user    user values > dummy
 //   mixed   weighted pick per field per request among the sources available (config.data.mix)
+// Which real value is used (config.data.pick / PICK env):
+//   random     any sampled value (default)
+//   partition  each VU walks its own slice of the pool (VU n takes n-1, n-1+K, n-1+2K, …; K = config.data.partitions
+//              or the VUS env, default 100): no two VUs hit the same row, so updates/deletes do not contend or 404
+//   sequence   every VU walks the pool in order from its own start, wrapping around
+// Real values of one table that were sampled together (spec.group) come from the same row: one request that carries
+// an order id and its customer id sends a pair that exists, not two unrelated rows.
 // In every mode except user/real, identifier fields (ids, foreign keys) keep using real values when
 // config.data.realIdentifiersInAllModes is true (default), so lookups hit existing rows instead of 404-ing.
 import * as R from './random.js';
@@ -36,7 +43,7 @@ export function dataMode() {
 
 /** A fresh per-request context. `complete`: send every optional field too (seeding creates whole rows). */
 export function context(apiId, seeded, complete) {
-  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, seeded: seeded || {}, complete: complete === true };
+  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, rows: {}, seeded: seeded || {}, complete: complete === true };
 }
 
 function cfg() {
@@ -79,6 +86,39 @@ export function remember(pool, id) {
   list.push(id);
 }
 
+const PICKS = ['random', 'partition', 'sequence'];
+const CURSOR = {};
+
+function pickStrategy() {
+  const p = (__ENV.PICK || cfg().pick || 'random').toLowerCase();
+  if (PICKS.indexOf(p) < 0) throw new Error(`PICK must be one of ${PICKS.join(', ')} (got ${p})`);
+  return p;
+}
+
+/** Index into a pool of `len` values according to the pick strategy. */
+function pickIndex(spec, len) {
+  const strategy = pickStrategy();
+  if (strategy === 'random' || len <= 1) return R.int(0, len - 1);
+  const slot = `${spec.group || spec.real || spec.key}:${len}`;
+  const n = CURSOR[slot] || 0;
+  CURSOR[slot] = n + 1;
+  const vu = (typeof __VU === 'number' && __VU > 0 ? __VU : 1) - 1;
+  if (strategy === 'sequence') return (vu + n) % len;
+  const k = Math.max(1, Number(cfg().partitions || __ENV.VUS || 100));
+  return ((vu % k) + k * n) % len;
+}
+
+/**
+ * A real value: values of one `group` (table) share the row chosen first in this request, provided the pools have the
+ * same length (pools sampled together do; seeded/harvested ones usually do not and are picked independently).
+ */
+function pickReal(ctx, spec, list) {
+  if (!spec.group) return list[pickIndex(spec, list.length)];
+  const slot = `${spec.group}:${list.length}`;
+  if (ctx.rows[slot] === undefined) ctx.rows[slot] = pickIndex(spec, list.length);
+  return list[ctx.rows[slot]];
+}
+
 function choose(ctx, spec, user, real) {
   const identifier = spec.kind === 'id' || spec.kind === 'uuid';
   const realIds = cfg().realIdentifiersInAllModes !== false;
@@ -119,7 +159,8 @@ function weighted(options) {
 
 /**
  * The value of one scalar field.
- * spec: { key, name, owner, kind, schema: {type, format, enum, minLength, …}, real: 'table.column' | null }
+ * spec: { key, name, owner, kind, schema: {type, format, enum, minLength, …}, real: 'table.column' | 'sql:<id>' | null,
+ *         group: 'table' | undefined }
  */
 export function field(ctx, spec) {
   const user = userValues(Object.assign({ api: ctx.api }, spec));
@@ -132,7 +173,7 @@ export function field(ctx, spec) {
       value = R.pick(user);
       break;
     case 'real':
-      value = R.pick(real);
+      value = pickReal(ctx, spec, real);
       break;
     case 'random':
       value = R.scalar(spec.schema);

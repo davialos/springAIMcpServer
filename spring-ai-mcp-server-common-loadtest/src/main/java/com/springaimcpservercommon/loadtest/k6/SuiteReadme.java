@@ -63,7 +63,8 @@ final class SuiteReadme {
         md.append("| `mixed` | per field and request, weighted by `data.mix` |\n\n");
         md.append("`data/user.json`: `fields` (key → values; key = full field key, `<api|Schema>.<field>` or ")
                 .append("bare field name), `payloads` (api id → whole bodies), `bindings` (field key → ")
-                .append("`table.column`, applied at the next generation).\n\n");
+                .append("`table.column` or `sql:SELECT …`, applied at the next generation). `data/bindings.md` shows what ")
+                .append("is bound to what; `PICK=random|partition|sequence` chooses how a real value is picked.\n\n");
 
         md.append("## Seeding (test data from the entity relationships)\n\n");
         if (seed == null || seed.steps().isEmpty()) {

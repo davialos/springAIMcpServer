@@ -205,4 +205,17 @@ public final class Dtos {
                              long conversations, List<Bucket> series, List<GroupLoad> topGroups,
                              Map<String, Long> auditByAction) {
     }
+
+    /** The answer to "does this CEL expression compile against the parameter library?". Never contains values. */
+    public record ExpressionCheck(boolean valid, @Nullable String error, List<String> parameters) {
+    }
+
+    /** Request of {@code POST /api/v1/expressions/check}. */
+    public record CheckExpression(String expression) {
+    }
+
+    /** What the assistant panel needs to know before it opens. */
+    public record AssistantInfo(boolean available, @Nullable String agentSlug, @Nullable String provider,
+                                @Nullable String note) {
+    }
 }

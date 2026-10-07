@@ -636,7 +636,7 @@ as that user and returns `APPLIED`, `CONFLICT` (the record changed since, see `e
 
 | Symptom | Likely cause |
 |---|---|
-| Operation not in the catalog list | method not `public` or `static`, the class is not a Spring bean, `@AiExposedAction` missing, an invalid or duplicate tool name (the scan reports it as an issue), or the host was not restarted |
+| Operation not in the catalog list | the class is in `com.springaimcpservercommon.*` (the scan excludes the library's own package: put host operations in your own package and, if it is not under your `@SpringBootApplication` package, set `dynamic.ai.agent.scan.base-packages`), method not `public` or `static`, the class is not a Spring bean, `@AiExposedAction` missing, an invalid or duplicate tool name (the scan reports it as an issue), or the host was not restarted |
 | 403 `capability-disabled` on create/publish/browse | environment tier is PROD or unset (§8) |
 | 403 on `:approve` | you approved your own revision; use a second user |
 | 428 / 412 on submit | missing or stale `If-Match`; re-read the revision and use its current `ETag` |

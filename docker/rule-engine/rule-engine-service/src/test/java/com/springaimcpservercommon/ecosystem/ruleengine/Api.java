@@ -95,10 +95,21 @@ final class Api {
             b.method(method, json == null ? HttpRequest.BodyPublishers.noBody()
                     : HttpRequest.BodyPublishers.ofString(json));
             HttpResponse<String> r = HTTP.send(b.build(), HttpResponse.BodyHandlers.ofString());
-            return new Resp(r.statusCode(), r.body() == null || r.body().isBlank() ? JSON.nullNode()
-                    : JSON.readTree(r.body()), r.body());
+            return new Resp(r.statusCode(), parse(r.body()), r.body());
         } catch (IOException | InterruptedException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /** The JSON of a body; an event stream or any other non-JSON body has none (the raw text stays in the response). */
+    private static JsonNode parse(String body) {
+        if (body == null || body.isBlank()) {
+            return JSON.nullNode();
+        }
+        try {
+            return JSON.readTree(body);
+        } catch (RuntimeException e) {
+            return JSON.nullNode();
         }
     }
 

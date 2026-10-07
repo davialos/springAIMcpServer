@@ -33,6 +33,14 @@ Validator v = Validator.builder().rule(coupon)
 v.validateOrThrow(order, ValidationContext.of("SERVICE", "DRAFT", "POST /orders", "SUBMIT"));
 ```
 
+## Spring integration
+- `dynamic.ai.agent.validation.overrides[n]` (rule, stage/state/endpoint/action, order or skip) adds overrides from
+  configuration; `...validation.enabled=false` removes the bean.
+- Opt-in `...validation.web.enabled=true`: `ValidatingRequestBodyAdvice` validates every host `@RequestBody` at stage
+  `CONTROLLER` (endpoint = `METHOD pattern`, action = handler method name, replaceable via a
+  `ValidationContextResolver` bean; `/dynamic-ai/**` skipped) and `ValidationProblemAdvice` answers 422 problem+json
+  with rule/field/code/message only (no values). Off by default because it touches the host's MVC pipeline (LLD-12).
+
 ## Consequences
-Pure-Java core is testable without Spring and callable from any layer. Overrides are in-memory beans for now;
+Pure-Java core is testable without Spring and callable from any layer. Overrides come from beans or configuration;
 persisting them in `dynamic_ai` for runtime admin edits is a possible follow-up (not decided).

@@ -30,9 +30,9 @@ this document (OQ-74). Out of scope: a group-level test bench (OQ-75).
 | `dai_re_api_endpoint` | HTTP endpoint with `environment` DEV/QA/PROD/EXTERNAL; EXTERNAL requires `external_confirmed_by/at` (CHECK). Secrets are referenced (`auth_secret_ref`), never stored. |
 | `dai_re_outcome_channel` | "When rule/group X yields TRUE/FALSE/ERROR/ANY → EMAIL (template) / PUSH (title+body bundles) / API (endpoint)", with a CEL `recipient_expression` (e.g. `customer.email`). CHECK keeps the columns consistent with the channel type. |
 | `dai_re_trigger_point` | Binds `(application, form, action[, field])` to a rule group: `FORM_ACTION` (SUBMIT, APPROVE, ADD, BUY…) and `FORM_FIELD` (ON_CHANGE of one field). Several groups per trigger run in `sequence` order. |
-| `dai_re_evaluation` / `dai_re_evaluation_result` | Value-free log: group, policy, decision, language, duration, and per rule outcome/action/error code. **Monthly range partitions** on `evaluated_at` (V13), registered in `dai_partitioned_table` (13 months retention, V13) so the existing maintenance job creates future partitions and drops old ones; override with `dynamic.ai.agent.store.retention.dai_re_evaluation`. |
-| `dai_re_revision` | Revision history of every rule and group (V13): `kind` RULE/GROUP, `revision_no`, `state` DRAFT/SUBMITTED/APPROVED/REJECTED/PUBLISHED/SUPERSEDED, the whole definition as `content jsonb`, `rollback_of`, who created/submitted/reviewed/published and when. At most one open revision per subject (partial unique index); a CHECK forbids `reviewed_by = submitted_by`. |
-| `dai_re_dispatch` | Delivery outbox (V13): `channel_type`, `payload jsonb`, `status` PENDING/DELIVERED/DEAD, `attempts`/`max_attempts`, `next_attempt_at`, lease (`locked_until`, `locked_by`), `last_error` (a short code). |
+| `dai_re_evaluation` / `dai_re_evaluation_result` | Value-free log: group, policy, decision, language, duration, and per rule outcome/action/error code. **Monthly range partitions** on `evaluated_at` (V14), registered in `dai_partitioned_table` (13 months retention, V14) so the existing maintenance job creates future partitions and drops old ones; override with `dynamic.ai.agent.store.retention.dai_re_evaluation`. |
+| `dai_re_revision` | Revision history of every rule and group (V14): `kind` RULE/GROUP, `revision_no`, `state` DRAFT/SUBMITTED/APPROVED/REJECTED/PUBLISHED/SUPERSEDED, the whole definition as `content jsonb`, `rollback_of`, who created/submitted/reviewed/published and when. At most one open revision per subject (partial unique index); a CHECK forbids `reviewed_by = submitted_by`. |
+| `dai_re_dispatch` | Delivery outbox (V14): `channel_type`, `payload jsonb`, `status` PENDING/DELIVERED/DEAD, `attempts`/`max_attempts`, `next_attempt_at`, lease (`locked_until`, `locked_by`), `last_error` (a short code). |
 | `dai_re_change_marker` | One row per scope (PARAMETERS, BUNDLES, RULES), bumped by statement triggers on every write. |
 
 Tenancy: `tenant_id` and `organization_id` are opaque host ids (ADR-0005, no foreign keys). `organization_id NULL` =
@@ -178,7 +178,7 @@ Implemented outside the library in `docker/rule-engine/` (not part of the starte
 | Service | Port | Role |
 |---------|------|------|
 | `auth-service` | 8091 | Users, tenants, organizations (`re_auth_*`); `POST /auth/login` (protobuf or JSON); signs the access token |
-| `rule-engine-service` | 8092 | Resource server over the library: setup, authoring, evaluation, admin logs; runs V1–V13 migrations |
+| `rule-engine-service` | 8092 | Resource server over the library: setup, authoring, evaluation, admin logs; runs V1–V14 migrations |
 | `ui` (nginx) | 8080 | Console; proxies `/auth` and `/api` (one origin) |
 
 ### 12.2 Identity and scope

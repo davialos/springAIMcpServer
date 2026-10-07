@@ -1,5 +1,5 @@
 -- =====================================================================================================
--- Migration V13: rule-engine lifecycle, outbox and evaluation-log partitioning (OQ-66, OQ-67, OQ-68; LLD-18).
+-- Migration V14: rule-engine lifecycle, outbox and evaluation-log partitioning (OQ-66, OQ-67, OQ-68; LLD-18).
 --   1. dai_re_evaluation / dai_re_evaluation_result become monthly range partitions registered with the
 --      maintenance job (creation of future partitions, retention drop).                       (OQ-68)
 --   2. dai_re_revision: draft -> submitted -> approved -> published history of every rule and rule group,

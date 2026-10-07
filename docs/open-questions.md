@@ -91,7 +91,7 @@ Deployment criticality:
 | OQ-65 | Authoring surface for the rule engine | REST authoring API with permissions, environment capability gate and audit → LLD-18 §13, ADR-0025 addendum (UI: OQ-74; the ecosystem console of ADR-0026 is a second front end, OQ-78) |
 | OQ-66 | Rule lifecycle / versioning | Revisions with draft → review (four eyes) → publish, rollback, retire, impact checks → LLD-18 §14 |
 | OQ-67 | Async delivery / outbox for channels | PostgreSQL outbox, SKIP LOCKED + lease, back-off, dead letters, DB-clock → LLD-18 §6.1 |
-| OQ-68 | Partitioning/retention of `dai_re_evaluation` | Monthly partitions registered with the maintenance job (13 months) → V13, LLD-18 §2 |
+| OQ-68 | Partitioning/retention of `dai_re_evaluation` | Monthly partitions registered with the maintenance job (13 months) → V14, LLD-18 §2 |
 | OQ-02 | Product name, artifactIds | springAIMcpServerCommon, `spring-ai-mcp-server-common-*` → ADR-0010 |
 | OQ-03 | Config store technology | JPA entities in an **isolated persistence unit** (own EMF/TM/Flyway, not beans) → ADR-0019 |
 | OQ-04 | Kotlin hosts | Runtime annotations work unchanged → ADR-0013 |

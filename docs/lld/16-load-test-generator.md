@@ -98,7 +98,7 @@ never on a host's runtime classpath; the JUnit extension is test scope only).
 | `loadtest.config.json` | team | merged — team values win; new APIs/profiles added; removed APIs dropped |
 | `data/user.json` | team | merged — new values appended |
 | `data/real.json` | generator | pools re-sampled; pools not re-sampled this time are kept |
-| `data/plan.json`, `README.md`, `run.sh` | generator | yes |
+| `data/plan.json`, `data/bindings.md`, `README.md`, `run.sh` | generator | yes |
 | `data/journey.json` | generator | replaced when generated with `--har`, otherwise kept |
 | `data/seed.json` | generator | yes — seeding steps (`SeedPlan.toJson()`) |
 | `data/schema.sql` | generator | yes — DDL of the database structure the data was planned against; only when a database was reached (`--no-schema-snapshot` skips it) |
@@ -121,7 +121,7 @@ never on a host's runtime classpath; the JUnit extension is test scope only).
   `DbTable(schema, name, columns, primaryKey, foreignKeys, columnSizes, uniqueColumns)` (from JDBC metadata or
   DDL), `SeedPlan(steps)` with `Step(api, table, pool, idField, idFromRequest, dependsOn, deleteApi, captures,
   deletePool)`.
-- `data/user.json`: `{"fields": {key: [values]}, "payloads": {apiId: [bodies]}, "bindings": {key: "table.column"}}`;
+- `data/user.json`: `{"fields": {key: [values]}, "payloads": {apiId: [bodies]}, "bindings": {key: "table.column" | "sql:SELECT …"}}`;
   a field key may be the full key, `<apiId|Schema>.<field>` or the bare field name. CSV: header = keys.
 
 ## 5. Key flows
@@ -205,6 +205,33 @@ endpoints of the same table (array, page wrappers `content/items/data/results/�
 values are checked in the database when one is configured; user values of bound fields are checked
 (`WHERE col IN (…)`, chunks of 500, values typed by column type) and, with `--drop-unverified`, filtered.
 
+**Row-coherent values.** Pools of one table that the plan binds more than once (an order's `id` and its
+`customer_id`, a customer's `id` and `email`) are sampled together by `DatabaseSampler.sampleRows` — one
+`SELECT DISTINCT c1, c2 … WHERE c1 IS NOT NULL AND c2 IS NOT NULL` in random order — so index *i* of every pool of the
+table is the same row. Each emitted field spec carries `group` (the table key); `data.js` picks one index per request
+and table, so a request that carries several fields of one table sends values that belong together instead of
+unrelated rows. The alignment is used only when the pools have the same length (seeded and harvested pools usually
+do not and are picked independently); a table with no complete row, or a failing query, falls back to per-column
+sampling.
+
+**Query pools.** A binding value `sql:SELECT …` (`--bind "*.orderId=sql:SELECT id FROM orders WHERE status = 'NEW'"`,
+or `user.json → bindings`) fills a pool from a query instead of a column, so a call hits a row in the state the API
+needs (cancel only works on `NEW` orders). The first column is the value; pool key `sql:<8 hex of SHA-256 of the
+normalised text>`. `PoolRef.query` / `DatabaseSampler.requireReadOnlySelect` accept one `SELECT`/`WITH` statement and
+reject anything with a write or locking keyword (`insert`, `update`, `delete`, `into`, `call`, `set`, …; a string
+literal containing one is rejected too), and the statement runs on the read-only connection with the 30 s timeout and
+a row cap — the SQL comes from the developer's own configuration, not from request data. Query pools are not
+verified by column lookup (the query defines validity) and are never harvested from the API.
+
+**Choosing a value.** `config.data.pick` / `PICK`: `random` (default), `partition` (VU *n* takes index
+*n*−1, *n*−1+*K*, … with *K* = `data.partitions` or `VUS`, so no two VUs hit the same row — updates and deletes stop
+contending or 404-ing on a row another VU just removed) or `sequence` (each VU walks the pool in order from its own
+start).
+
+**Binding report.** `data/bindings.md` (`BindingReport`) lists which inputs carry real data and from where (column,
+query, plus rows created by seeding), and — first — the identifier inputs with no values (no table matched, or the
+pool came back empty) with the ways to fix them; `generate` logs the same counts.
+
 **Seeding.** `SeedPlan` maps every `POST` with a body to the table it creates rows in (its resource entity, the
 collection segment, or the body DTO's entity; the plainest endpoint per table wins: fewest path parameters,
 not Data REST) and orders the tables parents first (Kahn; a cycle is broken with a log line). A table depends
@@ -275,6 +302,9 @@ generation). Row data is never read; `--row-counts` adds an exact `count(*)` per
 | Huge schema through MCP | DDL > 200 000 characters | result flagged `truncated`, text cut | use the CLI or `data/schema.sql` |
 | Column missing / sampling error | metadata check / `SQLException` | pool skipped with a log line; fields fall back to user/dummy | `--bind` to the right column |
 | Slow table | statement timeout 30 s, max rows | that pool is skipped | `--sample-size`, `--bind` a smaller column |
+| Row sampling of a table fails or finds no complete row | `SQLException` / empty result | logged; its columns are sampled separately (no row alignment) | fill the nulls, or bind a query pool |
+| Query pool is not read-only / has several statements | `IllegalArgumentException` at generation | generation stops with the offending statement (shortened) | rewrite as one `SELECT`/`WITH` |
+| Query pool returns no rows | empty sample | logged `has no values`; listed in `data/bindings.md`; fields fall back to user/dummy data | loosen the `WHERE`, or seed matching rows |
 | Harvest endpoint fails | HTTP status / timeout 15 s | logged; pool stays empty | start the app, `--header` for auth |
 | Unparseable source file | javac still yields a tree | best effort; missing types become free-form | add OpenAPI |
 | Unknown `MODE`/`API` | suite init | k6 exits non-zero with the list of valid values | — |

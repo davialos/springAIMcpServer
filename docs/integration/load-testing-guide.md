@@ -74,7 +74,11 @@ scripts/loadtest.sh generate --project ../shop \
 - **API (real data):** `--harvest` fills empty pools from the running app's collection endpoints.
 - **Your data:** `--user-data` (JSON `{fields, payloads, bindings}` or CSV with field keys as header), `--value
   key=v1,v2`, or `--interactive` to be asked API by API. Field keys are listed in the suite README.
-- **Bindings:** `--bind 'createOrder.body.customerId=customers.id'` forces a field onto a column.
+- **Bindings:** `--bind 'createOrder.body.customerId=customers.id'` forces a field onto a column;
+  `--bind "cancelOrder.path.id=sql:SELECT id FROM orders WHERE status = 'NEW'"` fills it from a read-only query
+  (first column), so calls hit rows in the state the API needs. Values of one table in one request come from the same
+  row. `PICK=partition` (or `data.pick`) gives each VU its own slice of the values, so updates and deletes do not
+  contend on one row. `data/bindings.md` lists what is bound to what, and which ids will 404.
 
 ### The database's current state as DDL
 

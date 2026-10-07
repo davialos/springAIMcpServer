@@ -2,6 +2,8 @@ package com.springaimcpservercommon.loadtest.model;
 
 import org.jspecify.annotations.Nullable;
 
+import tools.jackson.databind.JsonNode;
+
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -21,10 +23,19 @@ import java.util.Set;
  * @param resource entity the endpoint operates on, when known (e.g. the controller's {@code @AiContext} or the
  *                 collection segment of the path); used to bind real data
  * @param sources  where the endpoint was discovered ({@code source}, {@code openapi}, {@code actuator})
+ * @param responseSchema what a successful response looks like, as a JSON-Schema subset ({@code type},
+ *                 {@code properties}, {@code required}, {@code items}, {@code enum}; {@code {}} = anything) for response
+ *                 validation, or {@code null} when it is unknown or not JSON. Separate from {@code body}: responses keep
+ *                 ids, read-only fields and nested objects that request schemas leave out.
+ * @param access   who may call it according to the project's Spring Security setup, or {@code null} when unknown
+ * @param bodyType how the request body is encoded: {@code null} = JSON, {@code "form"} =
+ *                 {@code application/x-www-form-urlencoded}, {@code "multipart"} = {@code multipart/form-data}
+ *                 (file fields have format {@code binary})
  */
 public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
                           List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
-                          Set<String> sources) {
+                          Set<String> sources, @Nullable JsonNode responseSchema, @Nullable Access access,
+                          @Nullable String bodyType) {
 
     /** Compact constructor: defensive copies. */
     public ApiEndpoint {
@@ -34,13 +45,116 @@ public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable S
     }
 
     /**
+     * A JSON-bodied endpoint.
+     *
+     * @param id       identifier
+     * @param method   HTTP method
+     * @param path     URI template
+     * @param summary  description
+     * @param tags     tags
+     * @param params   parameters
+     * @param body     request body schema
+     * @param resource entity the endpoint operates on
+     * @param sources  discovery sources
+     * @param responseSchema response schema, or {@code null}
+     * @param access   access rule, or {@code null}
+     */
+    public ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
+                       List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
+                       Set<String> sources, @Nullable JsonNode responseSchema, @Nullable Access access) {
+        this(id, method, path, summary, tags, params, body, resource, sources, responseSchema, access, null);
+    }
+
+    /**
+     * An endpoint whose access is unknown.
+     *
+     * @param id       identifier
+     * @param method   HTTP method
+     * @param path     URI template
+     * @param summary  description
+     * @param tags     tags
+     * @param params   parameters
+     * @param body     request body schema
+     * @param resource entity the endpoint operates on
+     * @param sources  discovery sources
+     * @param responseSchema response schema, or {@code null}
+     */
+    public ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
+                       List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
+                       Set<String> sources, @Nullable JsonNode responseSchema) {
+        this(id, method, path, summary, tags, params, body, resource, sources, responseSchema, null, null);
+    }
+
+    /**
+     * An endpoint whose response shape is unknown.
+     *
+     * @param id       identifier
+     * @param method   HTTP method
+     * @param path     URI template
+     * @param summary  description
+     * @param tags     tags
+     * @param params   parameters
+     * @param body     request body schema
+     * @param resource entity the endpoint operates on
+     * @param sources  discovery sources
+     */
+    public ApiEndpoint(String id, HttpMethod method, String path, @Nullable String summary, List<String> tags,
+                       List<ApiParam> params, @Nullable Schema body, @Nullable String resource,
+                       Set<String> sources) {
+        this(id, method, path, summary, tags, params, body, resource, sources, null, null);
+    }
+
+    /**
+     * Copy with the access rule.
+     *
+     * @param newAccess who may call it, or {@code null}
+     * @return the endpoint
+     */
+    public ApiEndpoint withAccess(@Nullable Access newAccess) {
+        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, responseSchema,
+                newAccess, bodyType);
+    }
+
+    /**
+     * Copy with a body encoding.
+     *
+     * @param type {@code null} (JSON), {@code "form"} or {@code "multipart"}
+     * @return the endpoint
+     */
+    public ApiEndpoint withBodyType(@Nullable String type) {
+        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, responseSchema,
+                access, type);
+    }
+
+    /**
+     * Copy with a response schema.
+     *
+     * @param response response schema, or {@code null}
+     * @return the endpoint
+     */
+    public ApiEndpoint withResponse(@Nullable JsonNode response) {
+        return new ApiEndpoint(id, method, path, summary, tags, params, body, resource, sources, response, access,
+                bodyType);
+    }
+
+    /**
      * Method-and-path key under which endpoints from different sources are merged: path variables are
      * anonymised, so {@code /users/{id}} and {@code /users/{userId}} are the same operation.
      *
      * @return merge key
      */
     public String routeKey() {
-        return routeKey(method, path);
+        // every GraphQL operation is a POST to the same URL: the operation tells them apart
+        return tags.contains("graphql") ? routeKey(method, path) + "#" + id : routeKey(method, path);
+    }
+
+    /**
+     * Whether this is a generated GraphQL operation.
+     *
+     * @return {@code true} for operations read from a GraphQL schema
+     */
+    public boolean isGraphQl() {
+        return tags.contains("graphql");
     }
 
     /**
@@ -87,6 +201,7 @@ public record ApiEndpoint(String id, HttpMethod method, String path, @Nullable S
      * @return the copy
      */
     public ApiEndpoint withId(String newId) {
-        return new ApiEndpoint(newId, method, path, summary, tags, params, body, resource, sources);
+        return new ApiEndpoint(newId, method, path, summary, tags, params, body, resource, sources, responseSchema, access,
+                bodyType);
     }
 }

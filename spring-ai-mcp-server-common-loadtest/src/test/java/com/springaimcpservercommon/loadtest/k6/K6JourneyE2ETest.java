@@ -110,6 +110,7 @@ class K6JourneyE2ETest {
         assumeThat(k6).as("k6 binary (K6_BIN or PATH)").isPresent();
         Map<String, String> env = new LinkedHashMap<>();
         env.put("BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort() + "/shop");
+        env.put("VALIDATE_RESPONSES", "off"); // the stub answers with canned bodies; see K6ResponseValidationE2ETest
         List<String> cmd = K6Runner.command(new K6Runner.Run(suite, mode, dataMode, env, k6.get(), List.of()));
         Process p = new ProcessBuilder(cmd).directory(suite.toFile()).redirectErrorStream(true).start();
         String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);

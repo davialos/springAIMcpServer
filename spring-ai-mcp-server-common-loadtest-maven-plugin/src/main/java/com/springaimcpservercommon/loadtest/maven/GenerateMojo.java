@@ -71,8 +71,8 @@ public class GenerateMojo extends AbstractGeneratorMojo {
     protected boolean dropUnverified;
 
     /** Authentication: none, bearer, basic, apiKey or login. */
-    @Parameter(defaultValue = "none", property = "loadtest.auth")
-    protected String auth = "none";
+    @Parameter(defaultValue = "auto", property = "loadtest.auth")
+    protected String auth = "auto";
 
     /** Login path for {@code auth = login}. */
     @Parameter(property = "loadtest.loginPath")

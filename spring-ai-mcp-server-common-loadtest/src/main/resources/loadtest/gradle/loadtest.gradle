@@ -7,6 +7,7 @@
 //   ./gradlew loadtestSchema [-Ploadtest.schemaFile=…] [-Ploadtest.dbSchema=…] [-Ploadtest.rowCounts]   the database's current structure as DDL
 //   ./gradlew loadtestRun -Ploadtest.mode=mixed-load [-Ploadtest.baseUrl=…] [-Ploadtest.api=…] [-Ploadtest.grafana]
 //   ./gradlew loadtestCompare -Ploadtest.baseline=load-tests/baseline.json      regression gate
+//        CI extras: -Ploadtest.ci -Ploadtest.history=load-tests/history/smoke.jsonl -Ploadtest.updateBaseline
 //
 // The generator needs Java 25: the tasks fork a JVM from a Gradle toolchain, whatever JDK runs Gradle (Gradle
 // finds installed JDKs; enable toolchain download to fetch one). The generator jar comes from Maven local
@@ -102,9 +103,14 @@ loadtestTask('loadtestRun', 'Runs the suite with k6; fails on failed thresholds 
     args
 }
 
-loadtestTask('loadtestCompare', 'Compares the newest report with -Ploadtest.baseline=<report.json>; fails on a regression.') {
+loadtestTask('loadtestCompare', 'Compares the newest report with -Ploadtest.baseline=<report.json>; fails on a regression. CI: -Ploadtest.ci [-Ploadtest.history=f.jsonl] [-Ploadtest.updateBaseline].') {
     if (!prop('baseline')) throw new GradleException('loadtestCompare needs -Ploadtest.baseline=<report.json>')
     def args = ['compare', '--suite', file(loadtest.outDir).path, '--baseline', file(prop('baseline')).path]
     if (prop('maxP95Increase')) args += ['--max-p95-increase', prop('maxP95Increase')]
+    if (prop('mode')) args += ['--mode', prop('mode')]
+    // CI: pull-request comment, job summary and trend history; a missing baseline is the first run
+    if (project.hasProperty('loadtest.ci')) args += ['--ci']
+    if (prop('history')) args += ['--history', file(prop('history')).path]
+    if (project.hasProperty('loadtest.updateBaseline')) args += ['--update-baseline']
     args
 }

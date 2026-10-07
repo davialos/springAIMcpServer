@@ -99,7 +99,7 @@ public final class RealDataCollector {
                 List<Object> values = h.getValue();
                 if (db != null) {
                     PoolRef ref = missing.stream().filter(p -> p.key().equals(h.getKey())).findFirst().orElseThrow();
-                    if (db.has(ref)) {
+                    if (db.has(ref) && !ref.column().contains(",")) {
                         try {
                             values = db.existing(ref, values);
                             log.accept("real: " + h.getKey() + " harvested values checked in database ("
@@ -166,8 +166,8 @@ public final class RealDataCollector {
         UserData out = user;
         for (Map.Entry<String, List<Object>> e : user.fields().entrySet()) {
             PoolRef pool = poolFor(plan, e.getKey());
-            if (pool == null || !db.has(pool) || e.getValue().isEmpty()) {
-                continue;
+            if (pool == null || !db.has(pool) || e.getValue().isEmpty() || pool.column().contains(",")) {
+                continue; // composite keys: a single column's values cannot be checked on their own
             }
             try {
                 List<Object> existing = db.existing(pool, e.getValue());

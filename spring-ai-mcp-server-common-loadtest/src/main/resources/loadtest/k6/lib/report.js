@@ -17,6 +17,25 @@ function pad(s, n) {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
+/** One row per resilience experiment: how the service behaved during the fault and after it. */
+function resilienceRows(data, runtime) {
+  const rows = [];
+  for (const e of runtime.resilience ? runtime.resilience.experiments : []) {
+    const phase = (tag) => {
+      const d = metric(data, `http_req_duration{fault:${tag}}`) || {};
+      const f = metric(data, `http_req_failed{fault:${tag}}`) || {};
+      const failedMetric = data.metrics[`http_req_failed{fault:${tag}}`];
+      const ok = ['http_req_failed', 'http_req_duration'].every((m) => {
+        const t = (data.metrics[`${m}{fault:${tag}}`] || {}).thresholds || {};
+        return Object.values(t).every((x) => x.ok);
+      });
+      return { requests: failedMetric && failedMetric.values ? failedMetric.values.passes + failedMetric.values.fails : 0, failed: f.rate, p95: d['p(95)'], ok };
+    };
+    rows.push({ experiment: e.name, proxy: e.proxy, toxics: (e.toxics || []).map((t) => t.type).join('+'), during: phase(e.name), after: phase(`recover_${e.name}`) });
+  }
+  return rows;
+}
+
 export function summary(data, runtime, mode) {
   if (mode.endsWith('preview')) return { stdout: '' };
   const rows = [];
@@ -46,6 +65,12 @@ export function summary(data, runtime, mode) {
     failedThresholds.length ? `Thresholds FAILED:\n  ${failedThresholds.join('\n  ')}` : 'All thresholds passed.',
     '',
   ];
+  const chaos = resilienceRows(data, runtime);
+  if (chaos.length) {
+    const h = `${pad('experiment', 24)} ${pad('toxics', 22)} ${pad('during: reqs', 13)} ${pad('failed', 8)} ${pad('p95 ms', 9)} ${pad('after: reqs', 12)} ${pad('failed', 8)} ${pad('p95 ms', 9)} verdict`;
+    lines.splice(lines.length - 2, 0, 'Resilience (faults injected through Toxiproxy):', h, '-'.repeat(h.length),
+      ...chaos.map((r) => `${pad(r.experiment, 24)} ${pad(r.toxics, 22)} ${pad(r.during.requests, 13)} ${pad(pct(r.during.failed), 8)} ${pad(ms(r.during.p95), 9)} ${pad(r.after.requests, 12)} ${pad(pct(r.after.failed), 8)} ${pad(ms(r.after.p95), 9)} ${r.during.ok && r.after.ok ? 'PASS' : 'FAIL'}`), '');
+  }
   const md = [
     `# Load test report — ${mode}`,
     '',
@@ -59,11 +84,13 @@ export function summary(data, runtime, mode) {
     '',
     failedThresholds.length ? `**Thresholds failed:**\n\n${failedThresholds.map((t) => `- \`${t}\``).join('\n')}` : 'All thresholds passed.',
     '',
+    ...(chaos.length ? ['## Resilience', '', '| Experiment | Proxy | Toxics | During: requests | failed | p95 ms | After: requests | failed | p95 ms | Verdict |', '|---|---|---|---:|---:|---:|---:|---:|---:|---|',
+      ...chaos.map((r) => `| ${r.experiment} | ${r.proxy} | ${r.toxics} | ${r.during.requests} | ${pct(r.during.failed)} | ${ms(r.during.p95)} | ${r.after.requests} | ${pct(r.after.failed)} | ${ms(r.after.p95)} | ${r.during.ok && r.after.ok ? 'PASS' : 'FAIL'} |`), ''] : []),
   ].join('\n');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const out = { stdout: lines.join('\n') };
   if (mode !== 'preview') {
-    out[`reports/${mode}-${stamp}.json`] = JSON.stringify({ mode, dataMode: runtime.dataMode, baseUrl: runtime.baseUrl, apis: rows, failedThresholds, metrics: data.metrics }, null, 2);
+    out[`reports/${mode}-${stamp}.json`] = JSON.stringify({ mode, dataMode: runtime.dataMode, baseUrl: runtime.baseUrl, apis: rows, resilience: chaos, failedThresholds, metrics: data.metrics }, null, 2);
     out[`reports/${mode}-${stamp}.md`] = md;
   }
   return out;

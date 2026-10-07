@@ -80,13 +80,13 @@ class LoadTestCliTest {
         Files.writeString(values, "{\"payloads\": {\"createOrder\": [{\"customerId\": 1, \"lines\": [{\"productSku\": \"SKU-1\"}]}]}}");
         Path suite = dir.resolve("suite");
         // Interactive: skip every API except getProduct, answer its single field.
-        String answers = "n\n".repeat(8) + "y\nSKU-7, SKU-8\n";
+        String answers = "n\n".repeat(9) + "y\nSKU-7, SKU-8\n";
         int code = run(answers, "generate", "--project", Fixtures.sampleShop().toString(), "--out", suite.toString(),
                 "--no-db", "--user-data", values.toString(), "--value", "email=qa@example.com,qa2@example.com",
                 "--bind", "*.deliveryNotes=orders.status", "--interactive", "--data-mode", "dummy",
                 "--include", "/api/v1/**", "--exclude", "DELETE /**");
         assertThat(code).as(err()).isZero();
-        assertThat(out()).contains("Generated k6 suite").contains("9 APIs");
+        assertThat(out()).contains("Generated k6 suite").contains("10 APIs");
 
         JsonNode user = Documents.parse(Files.readString(suite.resolve("data/user.json")));
         assertThat(user.path("fields").path("email").toString()).contains("qa@example.com", "qa2@example.com");
@@ -184,5 +184,18 @@ class LoadTestCliTest {
         assertThat(run("", "compare", "--suite", dir.toString(), "--baseline", base.toString(),
                 "--max-p95-increase", "500")).isZero();
         assertThat(run("", "compare", "--suite", dir.toString())).isEqualTo(2); // --baseline missing
+    }
+
+    @Test
+    void bulkLoadNeedsExplicitConsentAndTables() {
+        assertThat(run("", "bulk-load", "--db-url", "jdbc:postgresql://localhost:1/none")).isEqualTo(2);
+        assertThat(err()).contains("--rows table=count is required");
+        assertThat(run("", "bulk-load", "--db-url", "jdbc:postgresql://localhost:1/none", "--rows", "orders=1000"))
+                .isEqualTo(2);
+        // without --yes it only says what it would do: no connection is attempted
+        assertThat(out()).contains("Would insert into jdbc:postgresql://localhost:1/none").contains("--yes");
+        assertThat(run("", "bulk-load", "--rows", "orders")).isEqualTo(2);
+        assertThat(run("", "db-snapshot", "--action", "save")).isEqualTo(2); // no database given
+        assertThat(err()).contains("--db-url is required");
     }
 }

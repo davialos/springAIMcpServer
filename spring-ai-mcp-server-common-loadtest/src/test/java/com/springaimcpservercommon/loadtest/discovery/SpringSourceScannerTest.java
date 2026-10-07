@@ -48,7 +48,8 @@ class SpringSourceScannerTest {
         assertThat(catalog.endpoints()).extracting(ApiEndpoint::displayName).containsExactlyInAnyOrder(
                 "GET /api/v1/customers", "GET /api/v1/customers/{id}", "POST /api/v1/customers",
                 "PUT /api/v1/customers/{id}", "DELETE /api/v1/customers/{id}", "GET /api/v1/orders/{orderId}",
-                "GET /api/v1/orders/search", "POST /api/v1/orders", "GET /api/v1/products",
+                "GET /api/v1/orders/search", "POST /api/v1/orders", "POST /api/v1/orders/{orderId}/attachments",
+                "GET /api/v1/products",
                 "GET /api/v1/products/{sku}");
     }
 
@@ -61,9 +62,12 @@ class SpringSourceScannerTest {
     }
 
     @Test
-    void skipsMultipartOperationsAndSaysSo() {
-        assertThat(catalog.endpoints()).noneMatch(e -> e.path().endsWith("/attachments"));
-        assertThat(LOG).anyMatch(l -> l.contains("multipart") && l.contains("upload"));
+    void multipartUploadsBecomeBinaryFieldsOfAMultipartBody() {
+        ApiEndpoint upload = endpoint(HttpMethod.POST, "/api/v1/orders/{orderId}/attachments");
+        assertThat(upload.bodyType()).isEqualTo("multipart");
+        ObjectSchema body = (ObjectSchema) upload.body();
+        assertThat(((ScalarSchema) body.properties().get("file").schema()).format()).isEqualTo("binary");
+        assertThat(upload.params()).extracting(ApiParam::name).containsExactly("orderId");
     }
 
     @Test

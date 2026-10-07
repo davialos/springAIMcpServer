@@ -1,6 +1,9 @@
 package com.springaimcpservercommon.loadtest.k6;
 
 import com.springaimcpservercommon.loadtest.discovery.Documents;
+import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
+import com.springaimcpservercommon.loadtest.model.Access;
+import com.springaimcpservercommon.loadtest.model.Channel;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
 import com.springaimcpservercommon.loadtest.model.HttpMethod;
@@ -33,8 +36,15 @@ final class SuiteConfig {
      * @param dataMode default data mode
      * @param authType none, bearer, basic, apiKey or login
      * @param loginPath login endpoint path for {@code login} auth
+     * @param security  the project's Spring Security setup, or {@code null}
+     * @param channels  WebSockets, STOMP endpoints, SSE streams and Kafka topics
      */
-    record Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+    record Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath,
+                    @Nullable SecurityModel security, List<Channel> channels) {
+
+        Settings(String baseUrl, String dataMode, String authType, @Nullable String loginPath) {
+            this(baseUrl, dataMode, authType, loginPath, null, List.of());
+        }
     }
 
     static ObjectNode defaults(ApiCatalog catalog, Settings s) {
@@ -57,6 +67,32 @@ final class SuiteConfig {
         login.put("path", s.loginPath() != null ? s.loginPath() : "/api/auth/login");
         login.putObject("body").put("username", "${AUTH_USER}").put("password", "${AUTH_PASSWORD}");
         login.put("tokenPath", "token");
+        // Spring Security styles that need a session per caller (see README "Authentication"):
+        // form: login page + CSRF; oauth2: token endpoint (client credentials or password grant, e.g. Keycloak).
+        // users: one identity per role (${ROLE_USER}/${ROLE_PASSWORD}/${ROLE_TOKEN} from the environment; ${VU} in a
+        // user name gives every VU its own login); refresh.afterSeconds renews tokens; a 401 logs in again once.
+        // Endpoints without a role use AUTH_USER/AUTH_PASSWORD/AUTH_TOKEN (or auth.defaultRole, if you set one).
+        SecurityModel sec = s.security();
+        ObjectNode form = auth.putObject("form");
+        form.put("loginPath", sec != null && sec.loginPage() != null ? sec.loginPage() : "/login");
+        form.put("usernameField", "username").put("passwordField", "password");
+        form.put("csrf", sec == null || sec.csrf());
+        form.put("csrfPage", "/");
+        ObjectNode oauth2 = auth.putObject("oauth2");
+        oauth2.put("tokenUrl", "${OAUTH_TOKEN_URL}").put("grant", "client_credentials");
+        oauth2.put("clientId", "${OAUTH_CLIENT_ID}").put("clientSecret", "${OAUTH_CLIENT_SECRET}");
+        oauth2.put("scope", "").put("clientAuth", "basic");
+        auth.putObject("refresh").put("afterSeconds", 0);
+        auth.put("retryOn401", true);
+        auth.put("perVu", false);
+        List<String> roles = sec == null ? List.of() : sec.roles(catalog.endpoints());
+        ObjectNode users = auth.putObject("users");
+        for (String role : roles) {
+            String env = role.toUpperCase(java.util.Locale.ROOT).replaceAll("[^A-Z0-9]", "_");
+            users.putObject(role).put("username", "${" + env + "_USER}").put("password", "${" + env + "_PASSWORD}")
+                    .put("token", "${" + env + "_TOKEN}").put("clientId", "${" + env + "_CLIENT_ID}")
+                    .put("clientSecret", "${" + env + "_CLIENT_SECRET}");
+        }
 
         ObjectNode data = root.putObject("data");
         data.put("mode", s.dataMode());
@@ -66,6 +102,10 @@ final class SuiteConfig {
         data.put("optionalFieldRate", 0.7);
         data.put("maxArrayItems", 3);
         data.put("maxDepth", 4);
+        // real values: uniform | zipf (rank r has weight 1/r^s) | hot (hotFraction of rows take hotShare of requests);
+        // SKEW / SKEW_S override. partition "vu": a VU's writes use its own slice of each pool (PARTITION=vu).
+        data.putObject("skew").put("mode", "uniform").put("s", 1.1).put("hotFraction", 0.05).put("hotShare", 0.8);
+        data.putObject("partition").put("mode", "none").put("slots", 64);
         data.putArray("acceptClientErrorsIn").add("random");
         data.putArray("clientErrorStatuses").add(400).add(404).add(409).add(422);
 
@@ -81,6 +121,55 @@ final class SuiteConfig {
         root.putObject("perApi").put("schedule", "sequential").put("gap", "5s");
         root.putObject("journey").put("pauseScale", 1.0).put("maxPauseMs", 5000);
         root.putObject("seed").put("enabled", true).put("perTable", 5).put("cleanup", false);
+        root.putObject("lifecycle").put("deleteOwnRows", true);
+        // responses: check (a mismatch fails the run) | log (counted and logged) | off. sample: share of responses
+        // validated (parsing costs load-generator CPU). maxViolations: tolerated mismatches before the threshold fails.
+        // readAfterWrite: lifecycle flows compare what a read returns with what the previous write sent.
+        ObjectNode validation = root.putObject("validation");
+        validation.put("responses", "check").put("sample", 0.25).put("maxViolations", 0);
+        validation.putObject("readAfterWrite").put("enabled", true).put("maxMismatches", 0);
+
+        // channels (WebSocket, STOMP, SSE, Kafka): run by MODE=channels-<profile>; hold = how long a connection stays
+        // open, messages/intervalMs = what is sent, expectReply = fail when nothing comes back, message = the payload
+        ObjectNode channels = root.putObject("channels");
+        for (Channel c : s.channels()) {
+            ObjectNode n = channels.putObject(c.id());
+            n.put("enabled", true);
+            n.put("kind", c.kind().name().toLowerCase(java.util.Locale.ROOT));
+            n.put("hold", c.kind() == Channel.Kind.SSE ? "5s" : "3s");
+            if (c.kind() != Channel.Kind.SSE) {
+                n.put("messages", 3).put("intervalMs", 200);
+                n.put("expectReply", c.kind() == Channel.Kind.STOMP && !c.subscribe().isEmpty());
+                if (c.sample() != null) {
+                    n.set("message", c.sample());
+                }
+            } else {
+                n.put("minEvents", 1);
+            }
+        }
+
+        // serverChecks: the target's own Prometheus endpoint is sampled during the run (loadtest run); a check that
+        // trips fails the run (exit 4). url "" = <baseUrl>/actuator/prometheus; every check is skipped when its metric is absent.
+        ObjectNode serverChecks = root.putObject("serverChecks");
+        serverChecks.put("enabled", true).put("url", "").put("intervalSeconds", 5);
+        serverChecks.put("hikariPendingShare", 0.2).put("hikariSaturation", 0.95).put("gcShare", 0.05);
+        serverChecks.put("threadSaturation", 0.95).put("heapUsage", 0.9).put("cpu", 0.9);
+        serverChecks.put("failOnServerErrors", true).put("failOnLogErrors", true);
+
+        // model: closed (VUs, the default) | open (arrival rate: MODEL=open, RATE = requests/s at multiplier 1).
+        // warmup: { duration, fraction, readOnly } runs before measuring (per profile, or here for all; WARMUP=off).
+        root.put("model", "closed");
+        root.putObject("warmup").put("duration", "0s").put("fraction", 0.3).put("readOnly", false);
+
+        // resilience: network faults injected through Toxiproxy while the load runs (loadtest resilience-init, then
+        // run --resilience). baseUrl = the address of the proxy in front of the application (used as BASE_URL);
+        // proxies are created in setup; each experiment injects its toxics `startAfter` into the measured run for
+        // `duration`, then `recovery` is watched. expect: error rate / p95 allowed DURING the fault, and AFTER it
+        // (recoveryMaxErrorRate / recoveryP95Ms, default = the normal thresholds). EXPERIMENT=a,b runs a subset.
+        ObjectNode resilience = root.putObject("resilience");
+        resilience.put("enabled", false).put("toxiproxy", "http://localhost:8474").put("baseUrl", "");
+        resilience.putArray("proxies");
+        resilience.putArray("experiments");
 
         ObjectNode modes = root.putObject("modes");
         for (LoadMode m : LoadMode.values()) {
@@ -91,8 +180,18 @@ final class SuiteConfig {
             ObjectNode a = apis.putObject(e.id());
             a.put("method", e.method().name());
             a.put("path", e.path());
-            a.put("enabled", e.method() != HttpMethod.DELETE && e.method() != HttpMethod.OPTIONS);
-            a.put("weight", weight(e.method()));
+            boolean destructive = e.method() == HttpMethod.DELETE || e.isGraphQl() && e.id().matches("(?i)gql_(delete|remove|purge|clear|drop).*");
+            a.put("enabled", !destructive && e.method() != HttpMethod.OPTIONS
+                    && (e.access() == null || e.access().kind() != Access.Kind.DENIED));
+            a.put("weight", e.isGraphQl() ? (e.tags().contains("graphql:query") ? 6 : destructive ? 0 : 2) : weight(e.method()));
+            if (e.tags().contains("sse")) {
+                a.put("enabled", false); // a stream that never ends would hang the per-API load: see "channels"
+            }
+            if (e.access() != null && e.access().kind() == Access.Kind.PUBLIC) {
+                a.put("auth", "none"); // permitAll: no credentials
+            } else if (e.access() != null && e.access().role() != null) {
+                a.put("auth", e.access().role()); // the identity of the role the endpoint needs
+            }
             ArrayNode statuses = a.putArray("expectedStatuses");
             expected(e.method()).forEach(statuses::add);
         }

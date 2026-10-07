@@ -1,9 +1,11 @@
 // Request execution: URL/query/headers/body assembly, auth, status checks, think time and safety rails.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import encoding from 'k6/encoding';
 import * as data from './data.js';
-import { parseMode } from './modes.js';
+import { parseMode, warmupFor } from './modes.js';
+import * as validate from './validate.js';
+import * as authn from './auth.js';
+import * as chaos from './resilience.js';
 
 const DEFAULT_EXPECTED = { GET: [200], HEAD: [200], POST: [200, 201, 202], PUT: [200, 201, 204], PATCH: [200, 204], DELETE: [200, 202, 204], OPTIONS: [200, 204] };
 
@@ -15,7 +17,7 @@ function baseUrl(config) {
  * Resolves the APIs this run uses (enabled in config, READ_ONLY, API filter), with their expected statuses.
  * Throws when BASE_URL looks like production and ALLOW_PROD is not set (safety.blockedHostPattern).
  */
-export function prepare(config, modules, seedSteps) {
+export function prepare(config, modules, seedSteps, responseSchemas) {
   const creates = {};
   for (const step of seedSteps || []) creates[step.api] = step;
   const url = baseUrl(config);
@@ -48,6 +50,11 @@ export function prepare(config, modules, seedSteps) {
       expected,
       callback: http.expectedStatuses(...expected),
       creates: creates[meta.id], // the table this API inserts into, if it is a create endpoint
+      graphql: meta.graphql === true,
+      safe: meta.safe === true, // a read although it is a POST (GraphQL query)
+      bodyType: meta.bodyType, // undefined = JSON; form | multipart
+      authRole: c.auth, // a role, or "none" for a public endpoint (see lib/auth.js)
+      responseSchema: (responseSchemas || {})[meta.id], // what a successful response looks like, if known
       mod,
     };
     byId[api.id] = api;
@@ -56,63 +63,55 @@ export function prepare(config, modules, seedSteps) {
     } else if (c.enabled === false) {
       continue;
     }
-    if (readOnly && api.method !== 'GET' && api.method !== 'HEAD') continue;
+    if (readOnly && api.method !== 'GET' && api.method !== 'HEAD' && !api.safe) continue;
     if (mixed && api.weight <= 0) continue;
     apis.push(api);
   }
   if (only) {
     for (const id of only) if (!byId[id]) throw new Error(`API=${id}: no such API (see loadtest.config.json → apis)`);
   }
-  return { apis, byId, baseUrl: url, config, dataMode };
+  const parsed = parseMode(__ENV.MODE);
+  const warmup = parsed.profile === 'preview' ? null : warmupFor(config, parsed.profile);
+  const resilience = parsed.profile === 'preview' ? null : chaos.prepare(config, warmup ? warmup.seconds + 5 : 0);
+  return { apis, byId, baseUrl: url, config, dataMode, readOnly, validation: validationSettings(config), warmup, resilience };
 }
 
-function resolveEnv(value) {
-  if (typeof value === 'string') return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_, k) => __ENV[k] || '');
-  if (Array.isArray(value)) return value.map(resolveEnv);
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = resolveEnv(v);
-    return out;
-  }
-  return value;
+/** config.validation, with the VALIDATE_RESPONSES / VALIDATE_SAMPLE overrides: how responses and reads are checked. */
+function validationSettings(config) {
+  const cfg = config.validation || {};
+  const mode = __ENV.VALIDATE_RESPONSES || cfg.responses || 'check';
+  const sample = __ENV.VALIDATE_SAMPLE !== undefined ? parseFloat(__ENV.VALIDATE_SAMPLE) : cfg.sample !== undefined ? cfg.sample : 0.25;
+  const raw = cfg.readAfterWrite || {};
+  return {
+    mode, // check | log | off
+    sample,
+    maxViolations: cfg.maxViolations !== undefined ? cfg.maxViolations : 0,
+    readAfterWrite: mode !== 'off' && raw.enabled !== false,
+    maxMismatches: raw.maxMismatches !== undefined ? raw.maxMismatches : 0,
+  };
 }
 
 function at(obj, path) {
   return String(path || '').split('.').filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
 
-/** Runs once before the load (k6 setup): obtains credentials. Secrets come from the environment only. */
-export function setupAuth(config) {
-  const auth = config.auth || { type: 'none' };
-  switch (auth.type) {
-    case 'bearer':
-      if (!__ENV.AUTH_TOKEN) throw new Error('auth.type=bearer needs AUTH_TOKEN');
-      return { headers: { [auth.header || 'Authorization']: `Bearer ${__ENV.AUTH_TOKEN}` } };
-    case 'basic': {
-      const user = __ENV.AUTH_USER || '';
-      const pass = __ENV.AUTH_PASSWORD || '';
-      return { headers: { Authorization: `Basic ${encoding.b64encode(`${user}:${pass}`)}` } };
-    }
-    case 'apiKey':
-      if (!__ENV.API_KEY) throw new Error('auth.type=apiKey needs API_KEY');
-      return { headers: { [auth.apiKeyHeader || 'X-API-Key']: __ENV.API_KEY } };
-    case 'login': {
-      const login = auth.login || {};
-      const url = baseUrl(config) + (login.path || '/login');
-      const res = http.request(login.method || 'POST', url, JSON.stringify(resolveEnv(login.body || {})), {
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        tags: { api: 'auth_login', name: `${login.method || 'POST'} ${login.path || '/login'}` },
-      });
-      if (res.status < 200 || res.status >= 300) throw new Error(`login failed: HTTP ${res.status}`);
-      const token = at(res.json(), login.tokenPath || 'token');
-      if (!token) throw new Error(`login response has no ${login.tokenPath || 'token'}`);
-      return { headers: { [auth.header || 'Authorization']: `${login.scheme === undefined ? 'Bearer ' : login.scheme}${token}` } };
-    }
-    default:
-      return { headers: {} };
-  }
+/** Resilience (lib/resilience.js): creates the Toxiproxy proxies in setup, runs one fault scenario, removes every fault in teardown. */
+export function prepareResilience(runtime) {
+  if (runtime.resilience) chaos.ensureProxies(runtime.resilience);
 }
 
+export function fault(runtime) {
+  chaos.runFault(runtime.resilience, __ENV.FAULT);
+}
+
+export function cleanupResilience(runtime) {
+  chaos.cleanup(runtime.resilience);
+}
+
+/** Runs once before the load (k6 setup): obtains credentials. Secrets come from the environment only. */
+export function setupAuth(config) {
+  return authn.setup(config, baseUrl(config));
+}
 
 function queryString(query) {
   const parts = [];
@@ -133,7 +132,7 @@ function fillPath(template, params) {
  * every optional field (seeding).
  */
 export function buildRequest(api, hooks, seeded, complete) {
-  const ctx = data.context(api.id, seeded, complete);
+  const ctx = data.context(api.id, seeded, complete, api.method !== 'GET' && api.method !== 'HEAD');
   let req = api.mod.build(ctx);
   const payload = data.userPayload(ctx);
   if (payload !== undefined) req.body = payload;
@@ -142,9 +141,9 @@ export function buildRequest(api, hooks, seeded, complete) {
 }
 
 /** Builds, sends and checks one request, then pauses for the configured think time. */
-export function call(api, runtime, auth, hooks) {
+export function call(api, runtime, auth, hooks, phase) {
   const { req, ctx } = buildRequest(api, hooks, auth && auth.seeded);
-  const res = send(api, req, ctx, runtime, auth, hooks);
+  const res = send(api, req, ctx, runtime, auth, hooks, phase);
   if (api.creates && res.status >= 200 && res.status < 300) {
     // later requests of this VU can use the new row, by id and by its other keys (slug, username …)
     data.remember(api.creates.pool, createdId(api.creates, res, req));
@@ -156,27 +155,121 @@ export function call(api, runtime, auth, hooks) {
   return res;
 }
 
+function hasFile(value) {
+  return value && typeof value === 'object' && Object.values(value).some((v) => v && typeof v === 'object' && (v.$file || (Array.isArray(v) && v.some((x) => x && x.$file))));
+}
+
+/**
+ * The request body: JSON text, or for APIs that take forms an object k6 encodes itself — multipart/form-data when a
+ * field is a file (`{$file}` marker from lib/dummy.js) or the API is a multipart one, else urlencoded.
+ */
+function encodeBody(api, body) {
+  if (api.bodyType !== 'multipart' && api.bodyType !== 'form' && !hasFile(body)) return JSON.stringify(body);
+  const multipart = api.bodyType === 'multipart' || hasFile(body);
+  const form = {};
+  for (const [name, v] of Object.entries(body || {})) {
+    if (v === undefined || v === null) continue;
+    if (v.$file) form[name] = http.file(v.$file.data, v.$file.name, v.$file.contentType);
+    else if (Array.isArray(v) && v.some((x) => x && x.$file)) form[name] = http.file(v[0].$file.data, v[0].$file.name, v[0].$file.contentType);
+    else if (typeof v === 'object') form[name] = multipart ? http.file(JSON.stringify(v), `${name}.json`, 'application/json') : JSON.stringify(v);
+    else form[name] = multipart ? String(v) : v;
+  }
+  return form;
+}
+
 /** Sends a built request: URL, auth and JSON body, tags, expected-status check, afterResponse hook. */
 export function send(api, req, ctx, runtime, auth, hooks, phase) {
   const config = runtime.config;
   const url = runtime.baseUrl + fillPath(api.path, req.path) + queryString(req.query);
-  const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, (auth && auth.headers) || {});
-  for (const [k, v] of Object.entries(req.headers || {})) if (v !== undefined) headers[k] = String(v);
   let body = null;
-  if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') {
-    headers['Content-Type'] = 'application/json';
-    body = JSON.stringify(req.body);
-  }
-  const res = http.request(api.method, url, body, {
-    headers,
-    tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : { api: api.id, name: api.name },
+  if (req.body !== undefined && api.method !== 'GET' && api.method !== 'HEAD') body = encodeBody(api, req.body);
+  // with a warm-up phase, measured requests carry phase:measure so the run-wide thresholds can leave the warm-up out
+  const measured = runtime.warmup ? { api: api.id, name: api.name, phase: 'measure' } : { api: api.id, name: api.name };
+  if (runtime.resilience) measured.fault = chaos.tagNow(runtime.resilience, auth); // the injected fault this request runs under
+  const params = {
+    tags: phase ? { api: `${phase}_${api.id}`, name: api.name, phase } : measured,
     responseCallback: api.callback,
     timeout: (config.http && config.http.timeout) || '30s',
-  });
-  check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 },
-    phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id });
+  };
+  let res;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const session = authn.sessionFor(runtime, api, auth); // the identity of the API's role; logs in when due
+    const headers = Object.assign({ Accept: 'application/json' }, config.headers || {}, session.headers || {},
+      authn.csrfHeaders(session, runtime.baseUrl, api.method));
+    for (const [k, v] of Object.entries(req.headers || {})) if (v !== undefined) headers[k] = String(v);
+    if (typeof body === 'string') headers['Content-Type'] = 'application/json'; // forms and uploads: k6 sets theirs
+    params.headers = headers;
+    if (session.jar) params.jar = session.jar;
+    // the first 401 is answered by a new login, not a failure; only a 401 after that is
+    params.responseCallback = attempt === 0 && authn.canRenew(runtime, api)
+      ? http.expectedStatuses(...api.expected, 401) : api.callback;
+    res = http.request(api.method, url, body, params);
+    // an expired or revoked token: log in again and send the request once more
+    if (res.status === 401 && attempt === 0 && authn.renew(runtime, api)) continue;
+    break;
+  }
+  const tags = phase ? { api: `${phase}_${api.id}`, phase } : { api: api.id };
+  if (runtime.resilience && !phase) tags.fault = params.tags.fault;
+  check(res, { 'status is expected': (r) => api.expected.indexOf(r.status) >= 0 }, tags);
+  checkResponse(api, res, runtime, tags);
+  if (api.graphql && res.status === 200) checkGraphQl(api, res, tags);
   if (hooks && typeof hooks.afterResponse === 'function') hooks.afterResponse(api.id, res, req, ctx);
   return res;
+}
+
+/** GraphQL answers 200 with an "errors" member when an operation fails: that is a failed request. */
+function checkGraphQl(api, res, tags) {
+  let errors;
+  try {
+    errors = res.json().errors;
+  } catch (e) {
+    errors = [{ message: 'the response is not JSON' }];
+  }
+  const ok = !(Array.isArray(errors) && errors.length > 0);
+  check(res, { 'no GraphQL errors': () => ok }, tags);
+  if (!ok) console.warn(`GraphQL ${api.id} returned errors: ${JSON.stringify(errors).slice(0, 200)}`);
+}
+
+const loggedViolations = {};
+
+/** Validates a sample of successful JSON responses against the API's schema (see lib/validate.js). */
+function checkResponse(api, res, runtime, tags) {
+  const v = runtime.validation;
+  if (v.mode === 'off' || !api.responseSchema || res.status < 200 || res.status >= 300) return;
+  if (v.sample < 1 && Math.random() >= v.sample) return;
+  const type = String(res.headers['Content-Type'] || res.headers['content-type'] || '');
+  if (type.indexOf('json') < 0 || !res.body) return;
+  let errors;
+  try {
+    errors = validate.validate(api.responseSchema, res.json());
+  } catch (e) {
+    errors = ['$: the body is not valid JSON'];
+  }
+  const ok = errors.length === 0;
+  if (v.mode === 'check') check(res, { 'response matches schema': () => ok }, tags);
+  if (ok) return;
+  validate.violations.add(1, tags);
+  if ((loggedViolations[api.id] = (loggedViolations[api.id] || 0) + 1) <= 3) {
+    console.warn(`response of ${api.method} ${api.path} (HTTP ${res.status}) breaks its schema: ${errors.join('; ')}`);
+  }
+}
+
+/** After a read that follows a write of the same row: did the read return what the write sent? */
+function checkReadAfterWrite(api, res, written, runtime) {
+  if (!runtime.validation.readAfterWrite || !written || res.status < 200 || res.status >= 300) return;
+  let body;
+  try {
+    body = res.json();
+  } catch (e) {
+    return;
+  }
+  const diffs = validate.mismatches(written, body);
+  const tags = { api: api.id };
+  check(res, { 'read returns what was written': () => diffs.length === 0 }, tags);
+  if (diffs.length) {
+    validate.readMismatches.add(1, tags);
+    console.warn(`read ${api.method} ${api.path} differs from the write before it: ${diffs.join('; ')}`);
+  }
 }
 
 // ── Journey: replay of a recorded browser flow (data/journey.json) ──────────────────────────────────────
@@ -205,7 +298,12 @@ function resolveRefs(value, results) {
   if (value && typeof value === 'object') {
     if (value.$from !== undefined) {
       for (const source of [value].concat(value.alt || [])) {
-        const v = getPath(results[source.$from], source.at);
+        // "$location": the last segment of the step's Location header (a create answering 201 without a body)
+        let v = source.at === '$location' ? (results.locations || [])[source.$from]
+          : getPath(results[source.$from], source.at);
+        if (v === undefined && (value.deep === true || source.deep === true) && source.at !== '$location') {
+          v = findKey(results[source.$from], source.at, 0); // wrapped responses
+        }
         if (v !== undefined && v !== null && typeof v !== 'object') return v;
       }
       return value.recorded;
@@ -226,7 +324,7 @@ function onlyRefs(values, results) {
 }
 
 function stepRequest(step, api, runtime, results, seeded) {
-  const ctx = data.context(api.id, seeded);
+  const ctx = data.context(api.id, seeded, step.complete === true, api.method !== 'GET' && api.method !== 'HEAD');
   const req = api.mod.build(ctx);
   if (runtime.dataMode === 'auto' || runtime.dataMode === 'user') {
     req.path = Object.assign({}, req.path, resolveRefs(step.path, results));
@@ -242,21 +340,31 @@ function stepRequest(step, api, runtime, results, seeded) {
   } else {
     Object.assign(req.path, onlyRefs(step.path, results)); // created ids still flow from step to step
   }
+  // lifecycle steps pin chosen fields (a status transition) whatever the data mode generated
+  for (const [p, v] of Object.entries(step.set || {})) {
+    if (req.body === undefined || req.body === null || typeof req.body !== 'object') req.body = {};
+    setPath(req.body, p, resolveRefs(v, results));
+  }
   return { req, ctx };
 }
 
 /** Replays the whole recorded flow once (one iteration). Steps of disabled APIs (e.g. DELETE) are skipped. */
-export function replay(runtime, steps, auth, hooks) {
+export function replay(runtime, steps, auth, hooks, options) {
   const allowed = {};
   for (const a of runtime.apis) allowed[a.id] = true;
   const cfg = runtime.config.journey || {};
   const maxPause = cfg.maxPauseMs !== undefined ? cfg.maxPauseMs : 5000;
   const scale = cfg.pauseScale !== undefined ? cfg.pauseScale : 1;
   const results = [];
+  results.locations = [];
+  let lastWrite = null; // body of the last successful write of this flow (lifecycle: read-after-write)
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const api = runtime.byId[step.api];
-    if (!api || !allowed[step.api]) {
+    // a lifecycle flow may delete the row it created itself even though DELETE is off for shared data
+    const ownRow = step.ownRow === true && runtime.readOnly !== true
+      && (runtime.config.lifecycle || {}).deleteOwnRows !== false;
+    if (!api || !(allowed[step.api] || ownRow)) {
       results.push(undefined);
       continue;
     }
@@ -271,7 +379,81 @@ export function replay(runtime, steps, auth, hooks) {
     } catch (e) {
       json = undefined;
     }
-    results.push(json);
+    const location = res.headers.Location || res.headers.location;
+    if (location) {
+      let id = decodeURIComponent(location.replace(/\/+$/, '').split('/').pop());
+      if (/^\d+$/.test(id) && id.length < 16) id = parseInt(id, 10);
+      results.locations[i] = id;
+    }
+    if (options && options.readAfterWrite) {
+      if (api.method === 'GET') {
+        checkReadAfterWrite(api, res, lastWrite, runtime);
+      } else {
+        const wrote = res.status >= 200 && res.status < 300 && req.body && typeof req.body === 'object';
+        lastWrite = wrote && api.method !== 'DELETE' ? req.body : null; // a body-less action may change anything
+      }
+    }
+    // a step that failed leaves nothing for later steps to correlate with: they fall back to recorded values
+    results.push(res.status >= 200 && res.status < 300 ? json : undefined);
+    if (step.stopOnFailure === true && !(res.status >= 200 && res.status < 300)) break;
+  }
+}
+
+/**
+ * MODE=lifecycle-<profile>: each iteration walks one resource through its life cycle (data/lifecycle.json, generated
+ * from the code): create → read → update → status transitions → delete. Flows are taken in turn, so every resource
+ * gets the same share of iterations; LIFECYCLE=<name,…> narrows them.
+ */
+export function lifecycle(runtime, flows, auth, hooks) {
+  const wanted = __ENV.LIFECYCLE ? __ENV.LIFECYCLE.split(',').map((x) => x.trim()) : null;
+  const usable = flows.filter((f) => !wanted || wanted.indexOf(f.name) >= 0);
+  if (!usable.length) return;
+  const flow = usable[(typeof __ITER === 'number' ? __ITER : 0) % usable.length];
+  replay(runtime, flow.steps, auth, hooks, { readAfterWrite: true });
+}
+
+/**
+ * One warm-up iteration: a weighted pick of the enabled APIs, tagged apart (api warmup_<id>, phase warmup) so
+ * thresholds and reports ignore it. `warmup.readOnly` limits it to reads.
+ */
+export function warmupCall(runtime, auth, hooks, pick) {
+  const apis = runtime.warmup && runtime.warmup.readOnly ? runtime.apis.filter((a) => a.method === 'GET' || a.safe) : runtime.apis;
+  if (!apis.length) return;
+  call(pick(apis), runtime, auth, hooks, 'warmup');
+}
+
+/**
+ * MODE=session-<profile>: one session as seen in production — start at an entry endpoint, follow the observed
+ * endpoint-to-endpoint transitions until the session ended or `maxSteps` — from data/traffic.json (loadtest traffic).
+ */
+export function session(runtime, traffic, auth, hooks) {
+  const pick = (probabilities) => {
+    let r = Math.random();
+    let last;
+    for (const [id, p] of Object.entries(probabilities || {})) {
+      last = id;
+      r -= p;
+      if (r < 0) return id;
+    }
+    return last;
+  };
+  const enabled = {};
+  for (const a of runtime.apis) enabled[a.id] = a;
+  const maxSteps = (traffic.sessions && traffic.sessions.maxSteps) || 30;
+  let current = pick(traffic.entry);
+  for (let steps = 0; current && current !== '$end' && steps < maxSteps; steps++) {
+    if (enabled[current]) call(enabled[current], runtime, auth, hooks);
+    current = pick((traffic.transitions || {})[current]);
+  }
+}
+
+/** MODE=lifecycle-preview: prints the steps of every flow (LIFECYCLE=<name> narrows). Sends nothing. */
+export function previewLifecycle(runtime, flows, hooks) {
+  const wanted = __ENV.LIFECYCLE ? __ENV.LIFECYCLE.split(',').map((x) => x.trim()) : null;
+  for (const flow of flows) {
+    if (wanted && wanted.indexOf(flow.name) < 0) continue;
+    console.log(JSON.stringify({ flow: flow.name, resource: flow.resource, steps: flow.steps.length }));
+    previewJourney(runtime, flow.steps, hooks);
   }
 }
 

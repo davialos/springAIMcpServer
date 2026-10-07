@@ -1,14 +1,20 @@
 package com.springaimcpservercommon.loadtest.cli;
 
+import com.springaimcpservercommon.loadtest.api.CiReport;
 import com.springaimcpservercommon.loadtest.api.LoadTestGenerator;
 import com.springaimcpservercommon.loadtest.api.LoadTestReport;
 import com.springaimcpservercommon.loadtest.api.LoadTestRunner;
 import com.springaimcpservercommon.loadtest.api.ReportComparison;
+import com.springaimcpservercommon.loadtest.api.TrendHistory;
+import com.springaimcpservercommon.loadtest.ci.CiPipelines;
+import com.springaimcpservercommon.loadtest.data.BulkLoader;
 import com.springaimcpservercommon.loadtest.data.DataPlan;
+import com.springaimcpservercommon.loadtest.data.DatabaseSnapshot;
 import com.springaimcpservercommon.loadtest.data.FieldPlan;
 import com.springaimcpservercommon.loadtest.data.RecordedTraffic;
 import com.springaimcpservercommon.loadtest.data.SeedPlan;
 import com.springaimcpservercommon.loadtest.data.UserData;
+import com.springaimcpservercommon.loadtest.discovery.ProjectSettings;
 import com.springaimcpservercommon.loadtest.k6.LoadMode;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
 import com.springaimcpservercommon.loadtest.model.ApiEndpoint;
@@ -17,6 +23,7 @@ import com.springaimcpservercommon.loadtest.model.ObjectSchema;
 import com.springaimcpservercommon.loadtest.model.RefSchema;
 import com.springaimcpservercommon.loadtest.model.Schema;
 import com.springaimcpservercommon.loadtest.schema.SchemaSnapshot;
+import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -34,6 +41,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.springaimcpservercommon.loadtest.resilience.ResilienceSetup;
+import com.springaimcpservercommon.loadtest.traffic.Route;
+import com.springaimcpservercommon.loadtest.traffic.TrafficImporter;
+import com.springaimcpservercommon.loadtest.traffic.TrafficModel;
+import com.springaimcpservercommon.loadtest.traffic.TrafficReader;
+import com.springaimcpservercommon.loadtest.discovery.Documents;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import com.springaimcpservercommon.loadtest.observe.JfrRecorder;
+import com.springaimcpservercommon.loadtest.observe.ServerChecks;
+import tools.jackson.databind.JsonNode;
 import java.util.Set;
 
 /**
@@ -54,7 +72,8 @@ public final class LoadTestCli {
 
     private static final Set<String> FLAGS = Set.of("harvest", "interactive", "drop-unverified", "no-db",
             "no-default-excludes", "json", "help", "verbose", "read-only", "har-no-values", "no-bundled-openapi",
-            "grafana", "force", "row-counts", "no-schema-snapshot");
+            "grafana", "force", "yes", "allow-prod", "apply-slo", "jfr", "no-server-checks", "resilience", "ci", "update-baseline", "record",
+            "row-counts", "no-schema-snapshot");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -106,6 +125,12 @@ public final class LoadTestCli {
                 case "report" -> report(a);
                 case "compare" -> compare(a);
                 case "init-gradle" -> initGradle(a);
+                case "traffic" -> traffic(a);
+                case "trend" -> trend(a);
+                case "init-ci" -> initCi(a);
+                case "resilience-init" -> resilienceInit(a);
+                case "bulk-load" -> bulkLoad(a);
+                case "db-snapshot" -> dbSnapshot(a);
                 case "modes" -> modes();
                 case "help", "--help", "-h" -> {
                     usage();
@@ -138,8 +163,8 @@ public final class LoadTestCli {
     /** The generator configured from the discovery and generation options. */
     private LoadTestGenerator generator(CliArgs a) {
         if (a.get("project") == null && a.all("openapi").isEmpty() && a.all("har").isEmpty()
-                && a.get("actuator") == null) {
-            throw new IllegalArgumentException("give at least one of --project, --openapi, --har, --actuator");
+                && a.get("actuator") == null && a.get("runtime") == null) {
+            throw new IllegalArgumentException("give at least one of --project, --openapi, --har, --actuator, --runtime");
         }
         LoadTestGenerator.Builder b = LoadTestGenerator.builder().log(this::log);
         if (a.get("project") != null) {
@@ -151,6 +176,9 @@ public final class LoadTestCli {
         }
         a.all("openapi").forEach(b::openApi);
         b.bundledOpenApi(!a.flag("no-bundled-openapi"));
+        if (a.get("runtime") != null) {
+            b.runtime(a.get("runtime"));
+        }
         if (a.get("actuator") != null) {
             b.actuator(a.get("actuator"));
         }
@@ -195,7 +223,7 @@ public final class LoadTestCli {
         }
         b.dropUnverified(a.flag("drop-unverified"));
         b.schemaSnapshot(!a.flag("no-schema-snapshot"));
-        b.auth(a.get("auth", "none"), a.get("login-path"));
+        b.auth(a.get("auth", "auto"), a.get("login-path"));
         if (a.flag("interactive")) {
             b.prompt(this::interactive);
         }
@@ -380,7 +408,8 @@ public final class LoadTestCli {
             runner.dataMode(a.get("data-mode"));
         }
         Map<String, String> mapping = Map.of("api", "API", "vus", "VUS", "rate", "RATE", "duration-scale",
-                "DURATION_SCALE", "base-url", "BASE_URL", "per-api", "PER_API", "preview-count", "PREVIEW_COUNT");
+                "DURATION_SCALE", "base-url", "BASE_URL", "per-api", "PER_API", "preview-count", "PREVIEW_COUNT", "model", "MODEL",
+                "warmup", "WARMUP");
         mapping.forEach((opt, envName) -> {
             if (a.get(opt) != null) {
                 runner.env(envName, a.get(opt));
@@ -397,16 +426,121 @@ public final class LoadTestCli {
             runner.k6(a.get("k6"));
         }
         a.passThrough().forEach(runner::k6Arg);
-        LoadTestRunner.RunResult r = runner.run();
-        if (!a.all("baseline").isEmpty() && r.report().isPresent()) {
-            ReportComparison c = ReportComparison.compare(LoadTestReport.read(Path.of(a.get("baseline"))),
-                    r.report().get(), rules(a));
-            out.println(c.toMarkdown());
-            if (r.exitCode() == 0 && !c.passed()) {
-                return 3;
+        serverChecks(a, suite, runner);
+        if (a.flag("jfr")) {
+            runner.jfr(new JfrRecorder.Settings(a.get("jvm-pid"), a.get("jvm-match"), a.get("jcmd", "jcmd"),
+                    a.get("jfr-settings", "profile"), suite.resolve("reports"), a.all("jfr-package")));
+        }
+        if (a.flag("resilience")) {
+            runner.resilience(a.get("toxiproxy", toxiproxyUrl(suite)), a.all("experiment").isEmpty() ? null : a.all("experiment"));
+        }
+        if (a.get("restore-snapshot") != null) { // comparable runs start from the same data
+            Jdbc j = jdbc(a);
+            try (var snapshots = DatabaseSnapshot.connect(j.url(), j.user(),
+                    j.password(), a.get("db-schema"), this::log)) {
+                snapshots.allowProduction(a.flag("allow-prod")).restore(a.get("restore-snapshot"));
+            } catch (SQLException e) {
+                throw new IllegalStateException("restoring snapshot failed: " + e.getMessage(), e);
             }
         }
+        LoadTestRunner.RunResult r = runner.run();
+        ReportComparison comparison = null;
+        if (!a.all("baseline").isEmpty() && r.report().isPresent() && Files.isRegularFile(Path.of(a.get("baseline")))) {
+            comparison = ReportComparison.compare(LoadTestReport.read(Path.of(a.get("baseline"))),
+                    r.report().get(), rules(a));
+            out.println(comparison.toMarkdown());
+        }
+        if (r.report().isPresent() && (a.flag("ci") || a.get("history") != null)) {
+            publishCi(a, suite, r.report().get(), comparison);
+        }
+        if (comparison != null && r.exitCode() == 0 && !comparison.passed()) {
+            return 3;
+        }
         return r.exitCode();
+    }
+
+    /** CI outputs: pull-request comment, job summary, comparison file, history ({@code --ci}, {@code --history}). */
+    private void publishCi(CliArgs a, Path suite, LoadTestReport report, ReportComparison comparison) {
+        Path history = a.get("history") != null ? Path.of(a.get("history")) : suite.resolve("history/trend.jsonl");
+        CiReport.Published p = CiReport.publish(suite, report, comparison, history, System.getenv());
+        out.println("CI report: " + p.comment() + (p.summary() ? " (also appended to the job summary)" : "")
+                + (p.recorded() ? "; run recorded in " + history : ""));
+    }
+
+    /** Server-side checks: on when the target's Prometheus endpoint answers (--no-server-checks, serverChecks.enabled). */
+    private void serverChecks(CliArgs a, Path suite, LoadTestRunner runner) {
+        JsonNode config;
+        try {
+            config = Documents.parse(Files.readString(suite.resolve("loadtest.config.json")));
+        } catch (IOException e) {
+            return;
+        }
+        JsonNode block = config.path("serverChecks");
+        if (a.flag("no-server-checks") || !block.path("enabled").asBoolean(true) || a.get("mode") != null
+                && a.get("mode").contains("preview")) {
+            return;
+        }
+        String base = a.get("base-url", System.getenv().getOrDefault("BASE_URL", config.path("baseUrl").asString("")));
+        String url = a.get("server-checks", block.path("url").asString("").isEmpty()
+                ? base.replaceAll("/+$", "") + "/actuator/prometheus" : block.path("url").asString());
+        if (base.isEmpty() && a.get("server-checks") == null) {
+            return;
+        }
+        Map<String, String> headers = new java.util.LinkedHashMap<>(headers(a));
+        a.all("server-header").forEach(h -> {
+            int i = h.indexOf(':');
+            headers.put(h.substring(0, i).strip(), h.substring(i + 1).strip());
+        });
+        String token = System.getenv("AUTH_TOKEN");
+        if (token != null && !headers.containsKey("Authorization")
+                && java.net.URI.create(url).getHost() != null && java.net.URI.create(url).getHost()
+                .equals(java.net.URI.create(base.isEmpty() ? url : base).getHost())) {
+            headers.put("Authorization", "Bearer " + token); // only to the target's own host
+        }
+        ServerChecks.Settings limits = ServerChecks.Settings.from(block);
+        if (a.flag("resilience")) { // 5xx and logged errors are what an injected outage is supposed to cause
+            limits = new ServerChecks.Settings(limits.hikariPendingShare(), limits.hikariSaturation(), limits.gcShare(),
+                    limits.threadSaturation(), limits.heapUsage(), limits.cpu(), false, false);
+        }
+        runner.serverChecks(new LoadTestRunner.ServerWatch(url, headers,
+                java.time.Duration.ofSeconds(Long.parseLong(a.get("server-interval",
+                        String.valueOf(block.path("intervalSeconds").asInt(5))))),
+                limits));
+    }
+
+    private String toxiproxyUrl(Path suite) {
+        try {
+            return Documents.parse(Files.readString(suite.resolve("loadtest.config.json"))).path("resilience")
+                    .path("toxiproxy").asString("http://localhost:8474");
+        } catch (IOException e) {
+            return "http://localhost:8474";
+        }
+    }
+
+    /** Prepares a suite for resilience experiments: the config block and a Compose file for Toxiproxy. */
+    private int resilienceInit(CliArgs a) {
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        List<ResilienceSetup.Dependency> dependencies = new java.util.ArrayList<>();
+        for (String d : a.all("dependency")) { // name=host:port:listenPort
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("([\\w-]+)=(.+:\\d+):(\\d+)").matcher(d);
+            if (!m.matches()) {
+                throw new IllegalArgumentException("--dependency expects name=upstreamHost:upstreamPort:listenPort, got " + d);
+            }
+            dependencies.add(new ResilienceSetup.Dependency(m.group(1), m.group(2), Integer.parseInt(m.group(3))));
+        }
+        ResilienceSetup.Options defaults = ResilienceSetup.Options.of("");
+        try {
+            Path compose = ResilienceSetup.write(suite, new ResilienceSetup.Options(a.get("base-url", ""), a.get("upstream"),
+                    Integer.parseInt(a.get("listen-port", String.valueOf(defaults.listenPort()))), dependencies,
+                    a.get("toxiproxy", defaults.toxiproxyUrl()), a.get("image", defaults.image())), a.flag("force"));
+            out.println("Resilience experiments added to " + suite.resolve("loadtest.config.json") + " (resilience block)");
+            out.println("Toxiproxy:  docker compose -f " + compose + " up -d");
+            out.println("Run:        loadtest run --suite " + suite + " --mode load --resilience   [--experiment outage]");
+            out.println("Point the dependencies you proxy (--dependency) at Toxiproxy's listen ports.");
+            return 0;
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot write the resilience setup: " + e.getMessage(), e);
+        }
     }
 
     private int report(CliArgs a) {
@@ -432,13 +566,238 @@ public final class LoadTestCli {
         if (a.get("baseline") == null) {
             throw new IllegalArgumentException("--baseline <report.json> is required");
         }
-        LoadTestReport baseline = LoadTestReport.read(Path.of(a.get("baseline")));
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        Path baselineFile = Path.of(a.get("baseline"));
+        boolean first = a.flag("ci") && !Files.isRegularFile(baselineFile); // nothing to compare with yet
+        LoadTestReport baseline = first ? null : LoadTestReport.read(baselineFile);
+        String mode = a.get("mode", baseline == null ? null : baseline.mode());
         LoadTestReport current = a.get("current") != null ? LoadTestReport.read(Path.of(a.get("current")))
-                : LoadTestReport.latest(Path.of(a.get("suite", "load-tests")), baseline.mode())
-                .orElseThrow(() -> new IllegalArgumentException("no current report; pass --current"));
-        ReportComparison c = ReportComparison.compare(baseline, current, rules(a));
-        out.println(c.toMarkdown());
-        return c.passed() ? 0 : 3;
+                : LoadTestReport.latest(suite, mode).orElseThrow(() -> new IllegalArgumentException(
+                "no current report; pass --current"));
+        ReportComparison c = baseline == null ? null : ReportComparison.compare(baseline, current, rules(a));
+        if (c != null) {
+            out.println(c.toMarkdown());
+        } else {
+            out.println("No baseline at " + baselineFile + " yet: nothing to compare with.");
+        }
+        if (a.flag("ci") || a.get("history") != null) {
+            publishCi(a, suite, current, c);
+        }
+        boolean passed = c == null || c.passed();
+        if (passed && a.flag("update-baseline") && !current.file().toAbsolutePath().equals(baselineFile.toAbsolutePath())) {
+            try {
+                if (baselineFile.toAbsolutePath().getParent() != null) {
+                    Files.createDirectories(baselineFile.toAbsolutePath().getParent());
+                }
+                Files.copy(current.file(), baselineFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                out.println("Baseline updated from " + current.file().getFileName());
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+        return passed ? 0 : 3;
+    }
+
+    /** Writes a CI pipeline (GitHub Actions, GitLab CI or Jenkins) that runs the suite on every pull request and nightly. */
+    private int initCi(CliArgs a) {
+        Path project = Path.of(a.get("project", "."));
+        Path suitePath = Path.of(a.get("suite", project.resolve("load-tests").toString()));
+        String suite = project.toAbsolutePath().normalize().relativize(suitePath.toAbsolutePath().normalize()).toString()
+                .replace('\\', '/');
+        CiPipelines.BuildTool tool = a.get("build-tool") != null
+                ? CiPipelines.BuildTool.valueOf(a.get("build-tool").toUpperCase(Locale.ROOT))
+                : Files.exists(project.resolve("pom.xml")) ? CiPipelines.BuildTool.MAVEN
+                : Files.exists(project.resolve("build.gradle")) || Files.exists(project.resolve("build.gradle.kts"))
+                ? CiPipelines.BuildTool.GRADLE : CiPipelines.BuildTool.MAVEN;
+        String baseUrl = a.get("base-url", "http://localhost:8080");
+        try {
+            JsonNode config = Documents.parse(Files.readString(suitePath.resolve("loadtest.config.json")));
+            baseUrl = a.get("base-url", config.path("baseUrl").asString(baseUrl));
+        } catch (IOException | RuntimeException e) {
+            // no suite yet: the pipeline still works with the default address
+        }
+        CiPipelines.Options d = CiPipelines.Options.defaults(CiPipelines.Provider.parse(a.get("provider", "github")), tool,
+                suite.isEmpty() ? "." : suite, baseUrl);
+        CiPipelines.Options o = new CiPipelines.Options(d.provider(), d.tool(), d.suite(), a.get("mode", d.mode()),
+                a.get("nightly-mode", d.nightlyMode()), a.get("start", d.startCommand()), a.get("build", d.buildCommand()),
+                a.get("health-url", d.healthUrl()), d.baseUrl(), a.get("k6-version", d.k6Version()),
+                a.get("generator-version", d.generatorVersion()));
+        try {
+            Path file = CiPipelines.write(project, o, a.flag("force"));
+            if (file == null) {
+                out.println(project.resolve(o.provider().file()) + " exists (--force to overwrite)");
+                return 0;
+            }
+            out.println("Wrote " + file + " (" + tool.name().toLowerCase(Locale.ROOT) + ", mode " + o.mode()
+                    + ", nightly " + o.nightlyMode() + ")");
+            out.println("Edit the build/start commands and the services the application needs. Baseline and trend: "
+                    + o.suite() + "/baseline, " + o.suite() + "/history (kept by the pipeline's cache).");
+            if (o.provider() == CiPipelines.Provider.GITLAB) {
+                out.println("Add to .gitlab-ci.yml:  include: { local: .gitlab-ci.loadtest.yml }");
+            }
+            return 0;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** The performance history of a suite; {@code --record} first adds the newest report. */
+    private int trend(CliArgs a) {
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        Path history = a.get("history") != null ? Path.of(a.get("history")) : suite.resolve("history/trend.jsonl");
+        String mode = a.get("mode");
+        if (a.flag("record")) {
+            LoadTestReport latest = LoadTestReport.latest(suite, mode).orElseThrow(() -> new IllegalArgumentException(
+                    "no report in " + suite.resolve("reports") + (mode == null ? "" : " for " + mode)));
+            boolean added = TrendHistory.record(history, latest, TrendHistory.commitFrom(System.getenv()), java.time.Instant.now());
+            out.println(added ? "Recorded " + latest.file().getFileName() + " in " + history
+                    : latest.file().getFileName() + " is already in " + history);
+        }
+        List<TrendHistory.Point> points = TrendHistory.read(history, mode, Integer.parseInt(a.get("last", "20")));
+        if (points.isEmpty()) {
+            out.println("No runs recorded in " + history + " (run with --ci or --record).");
+            return 0;
+        }
+        out.println(TrendHistory.toMarkdown(points));
+        Double drift = TrendHistory.p95Drift(points);
+        return drift != null && a.get("max-drift") != null && drift > Double.parseDouble(a.get("max-drift")) ? 3 : 0;
+    }
+
+    /** Imports production traffic (Prometheus metrics, access logs) into a suite: endpoint mix, rate, sessions. */
+    private int traffic(CliArgs a) {
+        try {
+            return importTraffic(a);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private int importTraffic(CliArgs a) throws IOException {
+        Path suite = Path.of(a.get("suite", "load-tests"));
+        List<Route> routes = TrafficImporter.routes(suite);
+        String basePath = a.get("base-path");
+        if (basePath == null) {
+            String url = Documents.parse(Files.readString(suite.resolve("loadtest.config.json"))).path("baseUrl")
+                    .asString("");
+            String p = url.replaceFirst("^[a-z]+://[^/]*", "");
+            basePath = p.isEmpty() || p.equals("/") ? null : p;
+        }
+        TrafficModel model = null;
+        String source = null;
+        if (a.get("metrics") != null) {
+            source = a.get("metrics");
+            model = TrafficReader.fromPrometheus(Documents.text(source, headers(a)), routes,
+                    seconds(a.get("period", "0s")));
+        } else if (a.get("access-log") != null) {
+            source = a.get("access-log");
+            try (var lines = Files.lines(Path.of(source))) {
+                model = TrafficReader.fromAccessLog((Iterable<String>) lines::iterator, routes, basePath,
+                        a.get("log-time-unit", "auto"));
+            }
+        } else {
+            throw new IllegalArgumentException("--metrics <url|file> (Prometheus) or --access-log <file> is required");
+        }
+        if (model.totalRequests() == 0) {
+            throw new IllegalArgumentException("no request matched the suite's APIs: check --base-path (" + basePath
+                    + ") and that the source holds http_server_requests / access log lines");
+        }
+        TrafficImporter.apply(suite, model, source, new TrafficImporter.Options(a.flag("apply-slo"),
+                Double.parseDouble(a.get("slo-headroom", "1.5")),
+                a.get("rate") == null ? null : Double.valueOf(a.get("rate"))), out::println);
+        out.println("Run it: ./run.sh mixed-production   (open model, observed mix and rate)"
+                + (model.sessions() > 0 ? "   or   ./run.sh session-load   (observed sessions)" : ""));
+        return 0;
+    }
+
+    private static double seconds(String duration) {
+        double total = 0;
+        Matcher m = Pattern.compile("(\\d+(?:\\.\\d+)?)(ms|s|m|h|d)").matcher(duration);
+        while (m.find()) {
+            double v = Double.parseDouble(m.group(1));
+            total += switch (m.group(2)) {
+                case "ms" -> v / 1000;
+                case "s" -> v;
+                case "m" -> v * 60;
+                case "h" -> v * 3600;
+                default -> v * 86400;
+            };
+        }
+        return total;
+    }
+
+    /** JDBC settings: --db-url/--db-user/--db-password, else the project's spring.datasource.*. */
+    private record Jdbc(String url, @Nullable String user,
+                        @Nullable String password) {
+    }
+
+    private static Jdbc jdbc(CliArgs a) {
+        ProjectSettings settings = a.get("project") == null
+                ? ProjectSettings.DEFAULTS
+                : ProjectSettings.read(Path.of(a.get("project")));
+        String url = a.get("db-url", settings.datasourceUrl() == null ? "" : settings.datasourceUrl());
+        if (url.isBlank()) {
+            throw new IllegalArgumentException("--db-url is required (or --project with spring.datasource.url)");
+        }
+        String password = a.get("db-password", System.getenv().getOrDefault("LOADTEST_DB_PASSWORD",
+                settings.datasourcePassword() == null ? "" : settings.datasourcePassword()));
+        return new Jdbc(url, a.get("db-user", settings.datasourceUsername()), password);
+    }
+
+    /** Inserts realistic data volume into a test database: explicit tables and counts, --yes required. */
+    private int bulkLoad(CliArgs a) {
+        if (a.all("rows").isEmpty()) {
+            throw new IllegalArgumentException("--rows table=count is required (repeatable)");
+        }
+        Map<String, Long> rows = new LinkedHashMap<>();
+        for (String r : a.all("rows")) {
+            int eq = r.indexOf('=');
+            if (eq <= 0) {
+                throw new IllegalArgumentException("--rows expects table=count: " + r);
+            }
+            rows.put(r.substring(0, eq), Long.parseLong(r.substring(eq + 1).replace("_", "")));
+        }
+        Jdbc j = jdbc(a);
+        String shown = j.url().replaceAll("password=[^&;]*", "password=***");
+        if (!a.flag("yes")) {
+            out.println("Would insert into " + shown + ": " + rows);
+            out.println("This WRITES to the database. Repeat with --yes on a test database.");
+            return 2;
+        }
+        try (BulkLoader loader =
+                     BulkLoader.connect(j.url(), j.user(), j.password(),
+                             a.get("db-schema"), this::log)) {
+            loader.batchSize(a.integer("batch", 1000)).seed(a.integer("seed", 42)).allowProduction(a.flag("allow-prod"));
+            var result = loader.load(rows);
+            out.println("Inserted " + result.inserted() + " in " + result.took().toSeconds() + " s");
+            return 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("bulk load failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** save | restore | list | drop a PostgreSQL snapshot of the application tables. */
+    private int dbSnapshot(CliArgs a) {
+        String action = a.get("action", a.passThrough().isEmpty() ? "list" : a.passThrough().getFirst());
+        Jdbc j = jdbc(a);
+        try (DatabaseSnapshot snapshots =
+                     DatabaseSnapshot.connect(j.url(), j.user(), j.password(),
+                             a.get("db-schema"), this::log)) {
+            snapshots.allowProduction(a.flag("allow-prod"));
+            String name = a.get("name", "baseline");
+            switch (action) {
+                case "save" -> out.println("Saved " + snapshots.save(name) + " tables as snapshot " + name);
+                case "restore" -> out.println("Restored " + snapshots.restore(name) + " tables from snapshot " + name);
+                case "drop" -> {
+                    snapshots.drop(name);
+                    out.println("Dropped snapshot " + name);
+                }
+                case "list" -> snapshots.list().forEach(out::println);
+                default -> throw new IllegalArgumentException("db-snapshot --action save|restore|list|drop");
+            }
+            return 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("snapshot " + action + " failed: " + e.getMessage(), e);
+        }
     }
 
     /** Writes {@code <project>/gradle/loadtest.gradle} (the Gradle tasks) unless it exists. */
@@ -515,6 +874,9 @@ public final class LoadTestCli {
                   report     print the newest report of a suite (exit 1 when thresholds failed)
                   compare    compare a report with a baseline report (exit 3 on regression)
                   init-gradle  write gradle/loadtest.gradle (loadtestGenerate/Run/Compare tasks) into --project
+                  bulk-load  insert data volume into a TEST database: --rows table=count … --yes [--batch 1000]
+                             [--seed 42] (parents first, foreign/unique keys kept; --db-url or --project)
+                  db-snapshot --action save|restore|list|drop [--name baseline]   (PostgreSQL test databases)
                   modes      list load modes and data modes
 
                 Discovery (discover, generate)
@@ -522,6 +884,9 @@ public final class LoadTestCli {
                   --openapi <url|file>      OpenAPI 3 document, e.g. http://localhost:8080/v3/api-docs (repeatable;
                                             default: specs bundled in the project, --no-bundled-openapi to skip)
                   --actuator <url|file>     /actuator/mappings of the running app (also sees dynamic routes)
+                  --runtime <url|file>      /actuator/loadtest of an app with spring-ai-mcp-server-common-loadtest-runtime
+                                            (loadtest.runtime.enabled=true): live routes, Jackson shapes, validation
+                                            constraints and method-security access, as the framework resolved them
                   --har <file>              browser recording: DevTools ▸ Network ▸ Export HAR (repeatable). Adds
                                             the API calls seen, their recorded values, and a replayable journey
                   --har-host <host>         keep calls to this host (default: the most-called host; repeatable)
@@ -545,7 +910,34 @@ public final class LoadTestCli {
                                     key=sql:SELECT id FROM t WHERE …  uses a read-only query instead (first column)
                   --interactive             prompt for user values, API by API
                   --drop-unverified         drop user values of id/FK fields that are not in the database
-                  --auth <type>             none | bearer | basic | apiKey | login   (--login-path /api/auth/login)
+                  --auth <type>             auto (from Spring Security) | none | bearer | basic | apiKey | login | form | oauth2
+                                    (--login-path /api/auth/login)
+
+                Production traffic
+                  traffic --suite <dir> --metrics <url|file> [--period 7d]   Prometheus http_server_requests (the
+                                            /actuator/prometheus text, or the JSON of /api/v1/query); --period = what
+                                            the counters cover, to derive a rate
+                  traffic --suite <dir> --access-log <file> [--base-path /shop] [--log-time-unit auto|ms|s]
+                                            common/combined or JSON-lines access log: mix, rate, peak, sessions
+                  [--apply-slo [--slo-headroom 1.5]]  turn observed p95/error rate into thresholds; [--rate n] overrides
+                                            the observed rate. Then: ./run.sh mixed-production | session-load
+
+                CI
+                  init-ci --provider github|gitlab|jenkins [--project .] [--suite load-tests] [--mode smoke]
+                          [--nightly-mode mixed-load] [--build cmd] [--start cmd] [--health-url url] [--force]
+                                            writes the pipeline: build, start, run, baseline gate, PR comment, trend
+                  compare --baseline reports/base.json [--ci] [--history f.jsonl] [--update-baseline]
+                                            --ci: reports/pr-comment.md + $GITHUB_STEP_SUMMARY + trend; a missing
+                                            baseline is the first run. run takes --ci/--history too (with --baseline)
+                  trend --suite <dir> [--mode m] [--last 20] [--record] [--max-drift 25]   the history; exit 3 when the
+                                            newest p95 drifted more than --max-drift % above the recent median
+
+                Resilience (faults injected under load, Toxiproxy)
+                  resilience-init --suite <dir> [--listen-port 8666] [--upstream host.docker.internal:8080]
+                                            [--dependency db=host.docker.internal:5432:15432] (repeatable) [--force]
+                                            adds config → resilience (slow network, narrow bandwidth, connection
+                                            resets, outage; latency + outage per dependency) and
+                                            resilience/docker-compose.yml. Then: docker compose up -d; run --resilience
 
                   --no-schema-snapshot      do not write data/schema.sql (the database structure, as DDL)
 
@@ -558,9 +950,18 @@ public final class LoadTestCli {
                 Run
                   --suite <dir> --mode <mode> [--data-mode <mode>] [--api id1,id2] [--vus n] [--rate n]
                   [--duration-scale 0.1] [--base-url url] [--per-api parallel] [--read-only] [--k6 path]
+                  [--resilience [--toxiproxy http://localhost:8474] [--experiment name] (repeatable)]  inject the
+                                            config → resilience faults; judged during each fault and after it (exit 5: no Toxiproxy)
+                  [--model open] [--warmup 60s|off]   arrival-rate (open) model; warm-up phase left out of the verdict
                   [--grafana | --prometheus-url url]   stream metrics to the suite's Grafana stack (grafana/)
                   [--grafana-url url]                  annotate the run there (default http://localhost:3000)
                   [--baseline report.json]             also compare with a baseline (exit 3 on regression)
+                  Server-side checks run by default when <base-url>/actuator/prometheus answers (exit 4 when the
+                  target itself shows trouble: pool wait, GC, 5xx, logged errors; limits: config → serverChecks):
+                  [--server-checks <url>] [--server-header 'N: v'] [--server-interval 5] [--no-server-checks]
+                  [--jfr [--jvm-pid n | --jvm-match regex] [--jfr-settings profile] [--jcmd 'cmd'] [--jfr-package p]]
+                                                       record the target's JVM (jcmd) and analyze the recording
+                  [--restore-snapshot name --db-url …] restore a db-snapshot first (comparable runs)
                   [-- extra k6 args]
 
                 Report / compare

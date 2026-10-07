@@ -65,6 +65,42 @@ public final class RealDataBinder {
     }
 
     /**
+     * A field's binding: the pool and, for a composite foreign key's column, its position in the sampled tuple.
+     *
+     * @param pool      pool
+     * @param component position in a tuple pool, or {@code -1} for a single-column pool
+     */
+    public record Binding(PoolRef pool, int component) {
+    }
+
+    /**
+     * Binds a field, with the tuple position for composite foreign keys.
+     *
+     * @param f field
+     * @return the binding, if the field should use real data
+     */
+    public Optional<Binding> bindDetailed(FieldContext f) {
+        if (!f.sensitive() && !index.isEmpty() && explicitFor(f).isEmpty()) {
+            Optional<TableIndex.TupleReference> tuple = index.resolve(f.resourceHint())
+                    .flatMap(t -> index.tupleReference(t, f.name()));
+            if (tuple.isPresent()) {
+                return Optional.of(new Binding(tuple.get().pool(), tuple.get().component()));
+            }
+        }
+        return bind(f).map(p -> new Binding(p, -1));
+    }
+
+    private Optional<PoolRef> explicitFor(FieldContext f) {
+        for (String k : List.of(f.key(), f.ownerKey() + "." + f.name(), "*." + f.name())) {
+            PoolRef p = explicit.get(k);
+            if (p != null) {
+                return Optional.of(p);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Binds a field.
      *
      * @param f field

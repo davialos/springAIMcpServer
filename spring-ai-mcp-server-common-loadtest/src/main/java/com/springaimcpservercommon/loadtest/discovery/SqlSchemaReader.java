@@ -89,7 +89,9 @@ public final class SqlSchemaReader {
      * @return tables in declaration order; empty when the project has no schema scripts
      */
     public List<DbTable> read(Path projectDir) {
+        LiquibaseChangelogReader.Result liquibase = LiquibaseChangelogReader.read(projectDir, log);
         List<Path> scripts = new ArrayList<>(ProjectFiles.schemaScripts(projectDir));
+        scripts.removeIf(p -> liquibase.files().contains(p.toAbsolutePath().normalize())); // read in changelog order
         scripts.removeIf(p -> FLYWAY.matcher(p.getFileName().toString()).matches()
                 && Character.toUpperCase(p.getFileName().toString().charAt(0)) == 'U'); // Flyway undo
         scripts.sort(MIGRATION_ORDER);
@@ -101,11 +103,17 @@ public final class SqlSchemaReader {
                 log.accept("schema: cannot read " + p + " (" + e.getMessage() + ")");
             }
         }
+        if (!liquibase.statements().isEmpty()) {
+            texts.add(String.join(";\n", liquibase.statements()));
+        }
         List<DbTable> tables = parse(texts);
         if (!tables.isEmpty()) {
-            long fks = tables.stream().mapToLong(t -> t.foreignKeys().size()).sum();
+            long fks = tables.stream().mapToLong(t -> t.foreignKeys().size() + t.compositeForeignKeys().size()).sum();
+            long changelogs = liquibase.files().stream()
+                    .filter(f -> !f.getFileName().toString().endsWith(".sql")).count();
             log.accept("schema: " + tables.size() + " tables, " + fks + " foreign keys from " + scripts.size()
-                    + " SQL script(s) (no database needed)");
+                    + " SQL script(s)" + (changelogs > 0 ? " and " + changelogs + " Liquibase changelog(s)" : "")
+                    + " (no database needed)");
         }
         return tables;
     }
@@ -358,6 +366,10 @@ public final class SqlSchemaReader {
         private final Map<String, String[]> fks = new LinkedHashMap<>(); // column → {schema, table, column|null}
         private final Map<String, Integer> sizes = new LinkedHashMap<>();
         private final Set<String> unique = new LinkedHashSet<>();
+        private final Set<String> notNull = new LinkedHashSet<>();
+        private final Set<String> generated = new LinkedHashSet<>();
+        /** Multi-column foreign keys: {local columns, target schema, target table, target columns or empty}. */
+        private final List<Object[]> compositeFks = new ArrayList<>();
 
         Table(@Nullable String schema, String name) {
             this.schema = schema;
@@ -409,6 +421,15 @@ public final class SqlSchemaReader {
             }
             columns.put(col, typeName.toString());
             String flags = rest.replaceAll("'(?:[^']|'')*'", "''").toLowerCase(Locale.ROOT);
+            notNull.remove(col);
+            generated.remove(col);
+            if (flags.matches(".*\\bnot\\s+null\\b.*")) {
+                notNull.add(col);
+            }
+            if (typeName.toString().contains("serial") || flags.matches(
+                    ".*\\b(default|auto_increment|autoincrement|identity|generated)\\b.*")) {
+                generated.add(col); // the database fills it: an insert may leave it out
+            }
             if (flags.matches(".*\\bprimary\\s+key\\b.*")) {
                 pk.clear();
                 pk.add(col);
@@ -442,10 +463,12 @@ public final class SqlSchemaReader {
             if (m.find()) {
                 List<String> cols = columnList(m.group(1));
                 List<String> targets = m.group(3) == null ? List.of() : columnList(m.group(3));
-                if (cols.size() == 1) { // a composite key cannot be filled from one pool
-                    String[] q = qualified(m.group(2));
+                String[] q = qualified(m.group(2));
+                if (cols.size() == 1) {
                     fks.put(column(cols.getFirst()),
                             new String[] {q[0], q[1], targets.size() == 1 ? targets.getFirst() : null});
+                } else if (!cols.isEmpty()) { // filled together from one parent row (tuple pool)
+                    compositeFks.add(new Object[] {cols.stream().map(this::column).toList(), q[0], q[1], targets});
                 }
             }
         }
@@ -462,6 +485,8 @@ public final class SqlSchemaReader {
                 String col = column(unquote(a.replaceFirst("(?i)^drop\\s+(?:column\\s+)?(?:if\\s+exists\\s+)?", "")
                         .split("\\s+")[0]));
                 columns.remove(col);
+                notNull.remove(col);
+                generated.remove(col);
                 pk.remove(col);
                 fks.remove(col);
                 sizes.remove(col);
@@ -491,6 +516,19 @@ public final class SqlSchemaReader {
                     }
                 }
                 retype(def);
+            } else if (lower.matches("^alter\\s+(column\\s+)?\\S+\\s+(set|drop)\\s+(not\\s+null|default)\\b.*")) {
+                Matcher m = Pattern.compile("(?i)^alter\\s+(?:column\\s+)?(" + IDENT
+                        + ")\\s+(set|drop)\\s+(not\\s+null|default)\\b.*$").matcher(a);
+                if (m.matches()) {
+                    String col = column(unquote(m.group(1)));
+                    boolean set = m.group(2).equalsIgnoreCase("set");
+                    Set<String> target = m.group(3).toLowerCase(Locale.ROOT).startsWith("not") ? notNull : generated;
+                    if (set) {
+                        target.add(col);
+                    } else {
+                        target.remove(col);
+                    }
+                }
             } else if (lower.matches("^alter\\s+(column\\s+)?\\S+\\s+(set\\s+data\\s+)?type\\s+.*")) {
                 Matcher m = Pattern.compile("(?i)^alter\\s+(?:column\\s+)?(" + IDENT
                         + ")\\s+(?:set\\s+data\\s+)?type\\s+(.*)$").matcher(a);
@@ -506,11 +544,20 @@ public final class SqlSchemaReader {
             if (m.matches()) {
                 String col = column(unquote(m.group(1)));
                 boolean wasUnique = unique.contains(col);
+                boolean wasNotNull = notNull.contains(col);
+                boolean wasGenerated = generated.contains(col);
                 String[] fk = fks.get(col);
                 List<String> key = new ArrayList<>(pk);
                 columnDefinition(col + " " + m.group(2));
                 if (wasUnique) {
                     unique.add(col);
+                }
+                boolean pgStyle = !m.group(2).toLowerCase(Locale.ROOT).matches(".*\\b(null|default)\\b.*");
+                if (pgStyle && wasNotNull) {
+                    notNull.add(col); // ALTER … TYPE changes the type only
+                }
+                if (pgStyle && wasGenerated) {
+                    generated.add(col);
                 }
                 if (fk != null && !fks.containsKey(col)) {
                     fks.put(col, fk);
@@ -536,6 +583,17 @@ public final class SqlSchemaReader {
             }
             if (unique.remove(from)) {
                 unique.add(to);
+            }
+            if (notNull.remove(from)) {
+                notNull.add(to);
+            }
+            if (generated.remove(from)) {
+                generated.add(to);
+            }
+            for (Object[] fk : compositeFks) {
+                @SuppressWarnings("unchecked")
+                List<String> cols = (List<String>) fk[0];
+                fk[0] = cols.stream().map(c -> c.equals(from) ? to : c).toList();
             }
         }
 
@@ -587,7 +645,29 @@ public final class SqlSchemaReader {
             if (pk.size() == 1) {
                 uniqueNonKey.remove(pk.getFirst());
             }
-            return new DbTable(schema, name, columns, pk, refs, sizes, uniqueNonKey);
+            List<DbTable.CompositeForeignKey> composite = new ArrayList<>();
+            for (Object[] fk : compositeFks) {
+                @SuppressWarnings("unchecked")
+                List<String> cols = (List<String>) fk[0];
+                @SuppressWarnings("unchecked")
+                List<String> targetCols = (List<String>) fk[3];
+                Table t = all.get(key((String) fk[2]));
+                List<String> resolved = !targetCols.isEmpty() ? targetCols.stream()
+                        .map(c -> t != null ? t.column(c) : c).toList()
+                        : t != null && t.pk.size() == cols.size() ? List.copyOf(t.pk) : List.of();
+                if (resolved.size() == cols.size() && columns.keySet().containsAll(cols)) {
+                    composite.add(new DbTable.CompositeForeignKey(cols, new PoolRef(
+                            t != null ? t.schema : (String) fk[1], t != null ? t.name : (String) fk[2],
+                            String.join(",", resolved))));
+                }
+            }
+            Set<String> required = new LinkedHashSet<>(notNull);
+            required.addAll(pk);
+            required.removeAll(generated);
+            required.retainAll(columns.keySet());
+            Set<String> gen = new LinkedHashSet<>(generated);
+            gen.retainAll(columns.keySet());
+            return new DbTable(schema, name, columns, pk, refs, sizes, uniqueNonKey, composite, required, gen);
         }
     }
 }

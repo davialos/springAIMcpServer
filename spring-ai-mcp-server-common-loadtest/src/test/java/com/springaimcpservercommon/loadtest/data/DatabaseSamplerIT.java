@@ -53,10 +53,16 @@ class DatabaseSamplerIT {
             st.execute("CREATE TABLE " + SCHEMA + ".product (sku text PRIMARY KEY, price numeric(10,2))");
             st.execute("CREATE TABLE " + SCHEMA + ".orders (id bigserial PRIMARY KEY, "
                     + "customer_id bigint REFERENCES " + SCHEMA + ".customers(id))");
+            st.execute("CREATE TABLE " + SCHEMA + ".order_lines (order_id bigint NOT NULL REFERENCES " + SCHEMA
+                    + ".orders, line_no int NOT NULL, sku text NOT NULL, PRIMARY KEY (order_id, line_no))");
+            st.execute("CREATE TABLE " + SCHEMA + ".shipment_items (id serial PRIMARY KEY, order_id bigint, "
+                    + "line_no int, FOREIGN KEY (order_id, line_no) REFERENCES " + SCHEMA
+                    + ".order_lines (order_id, line_no))");
             st.execute("INSERT INTO " + SCHEMA + ".customers(email, password_hash) "
                     + "SELECT 'c' || g || '@example.com', 'h' FROM generate_series(1, 40) g");
             st.execute("INSERT INTO " + SCHEMA + ".product SELECT 'SKU-' || g, g FROM generate_series(1, 5) g");
             st.execute("INSERT INTO " + SCHEMA + ".orders(customer_id) SELECT 1 + g % 40 FROM generate_series(1, 10) g");
+            st.execute("INSERT INTO " + SCHEMA + ".order_lines VALUES (1, 1, 'A'), (1, 2, 'B'), (2, 1, 'C')");
         }
     }
 
@@ -77,7 +83,8 @@ class DatabaseSamplerIT {
     @Test
     void readsTablesAndSamplesDistinctRandomValues() throws SQLException {
         try (DatabaseSampler db = sampler()) {
-            assertThat(db.tables()).extracting(DbTable::name).containsExactlyInAnyOrder("customers", "product", "orders");
+            assertThat(db.tables()).extracting(DbTable::name).containsExactlyInAnyOrder("customers", "product", "orders",
+                    "order_lines", "shipment_items");
             assertThat(db.tables()).filteredOn(t -> t.name().equals("product")).singleElement()
                     .satisfies(t -> assertThat(t.primaryKey()).containsExactly("sku"));
             List<Object> ids = db.sample(new PoolRef(SCHEMA, "customers", "id"), 15);
@@ -105,6 +112,22 @@ class DatabaseSamplerIT {
             TableIndex.TableRef customersRef = index.resolve("customers").orElseThrow();
             assertThat(index.facts(customersRef, "nickname")).contains(new TableIndex.ColumnFacts(30, false));
             assertThat(index.facts(customersRef, "email")).hasValueSatisfying(f -> assertThat(f.unique()).isTrue());
+        }
+    }
+
+    @Test
+    void compositeKeysAreSampledAsTuplesAndColumnsKnowWhoFillsThem() throws SQLException {
+        try (DatabaseSampler db = sampler()) {
+            DbTable items = db.tables().stream().filter(t -> t.name().equals("shipment_items")).findFirst()
+                    .orElseThrow();
+            assertThat(items.compositeForeignKeys()).singleElement()
+                    .satisfies(k -> assertThat(k.target().key()).isEqualTo("loadtest_it.order_lines.order_id,line_no"));
+            assertThat(items.generatedColumns()).containsExactly("id"); // serial
+            DbTable lines = db.tables().stream().filter(t -> t.name().equals("order_lines")).findFirst().orElseThrow();
+            assertThat(lines.requiredColumns()).containsExactlyInAnyOrder("order_id", "line_no", "sku");
+            assertThat(db.sample(items.compositeForeignKeys().getFirst().target(), 10)).extracting(Object::toString)
+                    .containsExactlyInAnyOrder("[1, 1]", "[1, 2]", "[2, 1]");
+            assertThat(db.has(items.compositeForeignKeys().getFirst().target())).isTrue();
         }
     }
 

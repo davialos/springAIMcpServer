@@ -84,7 +84,9 @@ class K6SuiteE2ETest {
         String key = ex.getRequestMethod() + " " + path.replaceAll("/SKU-\\d+$", "/{sku}");
         HITS.computeIfAbsent(key, k -> new AtomicInteger()).incrementAndGet();
         byte[] in = ex.getRequestBody().readAllBytes();
-        int status = switch (ex.getRequestMethod()) {
+        String contentType = ex.getRequestHeaders().getFirst("Content-Type");
+        boolean upload = ex.getRequestMethod().equals("POST") && path.endsWith("/attachments");
+        int status = upload ? (multipartFile(contentType, in) ? 201 : 400) : switch (ex.getRequestMethod()) {
             case "POST" -> validate(path, in) ? 201 : 400;
             case "PUT" -> validate(path, in) ? 200 : 400;
             default -> 200;
@@ -94,6 +96,13 @@ class K6SuiteE2ETest {
         ex.sendResponseHeaders(status, out.length);
         ex.getResponseBody().write(out);
         ex.close();
+    }
+
+    /** A real file part: multipart/form-data with a filename and some content. */
+    private static boolean multipartFile(String contentType, byte[] body) {
+        String text = new String(body, StandardCharsets.ISO_8859_1);
+        return contentType != null && contentType.startsWith("multipart/form-data")
+                && text.contains("name=\"file\"; filename=\"") && text.length() > 200;
     }
 
     /** The sample project's Bean Validation rules, enforced on every generated body. */
@@ -158,6 +167,7 @@ class K6SuiteE2ETest {
         assumeThat(k6).as("k6 binary (K6_BIN or PATH)").isPresent();
         Map<String, String> all = new java.util.LinkedHashMap<>(env);
         all.put("BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort() + "/shop");
+        all.put("VALIDATE_RESPONSES", "off"); // the stub answers with canned bodies; see K6ResponseValidationE2ETest
         List<String> cmd = K6Runner.command(new K6Runner.Run(suite, mode, dataMode, all, k6.get(), List.of()));
         Process p = new ProcessBuilder(cmd).directory(suite.toFile()).redirectErrorStream(true).start();
         String output;
@@ -212,7 +222,7 @@ class K6SuiteE2ETest {
             try (Stream<String> s = o.output().lines()) {
                 lines = s.filter(l -> l.startsWith("{\"api\"")).map(Documents::parse).toList();
             }
-            assertThat(lines).as(dataMode).hasSize(15 * 9); // DELETE disabled by default
+            assertThat(lines).as(dataMode).hasSize(15 * 10); // DELETE disabled by default
             for (JsonNode l : lines) {
                 assertThat(l.path("dataMode").asString()).isEqualTo(dataMode);
                 if (l.path("api").asString().equals("createOrder")) {

@@ -25,6 +25,7 @@
         <module>spring-ai-mcp-server-common-security</module>
         <module>spring-ai-mcp-server-common-query</module>
         <module>spring-ai-mcp-server-common-ruleengine</module>
+        <module>spring-ai-mcp-server-common-validation</module>
         <module>spring-ai-mcp-server-common-ai</module>
         <module>spring-ai-mcp-server-common-mcp</module>
         <module>spring-ai-mcp-server-common-webmvc</module>
@@ -103,6 +104,11 @@
             <dependency>
                 <groupId>com.springaimcpservercommon</groupId>
                 <artifactId>spring-ai-mcp-server-common-ruleengine</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.springaimcpservercommon</groupId>
+                <artifactId>spring-ai-mcp-server-common-validation</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

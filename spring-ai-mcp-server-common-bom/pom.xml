@@ -46,6 +46,11 @@
             </dependency>
             <dependency>
                 <groupId>com.springaimcpservercommon</groupId>
+                <artifactId>spring-ai-mcp-server-common-validation</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.springaimcpservercommon</groupId>
                 <artifactId>spring-ai-mcp-server-common-ai</artifactId>
                 <version>${project.version}</version>
             </dependency>

@@ -1,0 +1,623 @@
+{
+ "uid": "devctl-k6",
+ "title": "devctl \u00b7 k6 load test",
+ "tags": [
+  "devctl",
+  "k6"
+ ],
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "refresh": "5s",
+ "time": {
+  "from": "now-15m",
+  "to": "now"
+ },
+ "timezone": "browser",
+ "templating": {
+  "list": [
+   {
+    "name": "testid",
+    "label": "Test",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": {
+     "query": "label_values(k6_vus, testid)",
+     "refId": "v"
+    },
+    "definition": "label_values(k6_vus, testid)",
+    "refresh": 2,
+    "includeAll": true,
+    "multi": true,
+    "allValue": ".*",
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "sort": 1
+   }
+  ]
+ },
+ "annotations": {
+  "list": []
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Virtual users",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(k6_vus{testid=~\"$testid\"})",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Requests / s",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 0,
+    "w": 5,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(k6_http_reqs_total{testid=~\"$testid\"}[30s]))",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps"
+    },
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "p95 latency",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 9,
+    "y": 0,
+    "w": 5,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(k6_http_req_duration_p95{testid=~\"$testid\"})",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.5
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Error rate",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 14,
+    "y": 0,
+    "w": 5,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "avg(k6_http_req_failed_rate{testid=~\"$testid\"})",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.01
+       },
+       {
+        "color": "red",
+        "value": 0.05
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Checks passed",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 19,
+    "y": 0,
+    "w": 5,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "avg(k6_checks_rate{testid=~\"$testid\"})",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Virtual users",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (testid) (k6_vus{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} VUs",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Throughput (requests/s)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (testid) (rate(k6_http_reqs_total{testid=~\"$testid\"}[30s]))",
+     "legendFormat": "{{testid}} req/s",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 8,
+   "type": "timeseries",
+   "title": "Response time",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (testid) (k6_http_req_duration_avg{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} avg",
+     "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (testid) (k6_http_req_duration_p95{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} p95",
+     "refId": "B"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (testid) (k6_http_req_duration_p99{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} p99",
+     "refId": "C"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (testid) (k6_http_req_duration_max{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} max",
+     "refId": "D"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Failed requests & checks",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "avg by (testid) (k6_http_req_failed_rate{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} failed",
+     "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "1 - avg by (testid) (k6_checks_rate{testid=~\"$testid\"})",
+     "legendFormat": "{{testid}} checks failing",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Time breakdown (avg)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 20,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(k6_http_req_waiting_avg{testid=~\"$testid\"})",
+     "legendFormat": "waiting (TTFB)",
+     "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(k6_http_req_connecting_avg{testid=~\"$testid\"})",
+     "legendFormat": "connecting",
+     "refId": "B"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(k6_http_req_blocked_avg{testid=~\"$testid\"})",
+     "legendFormat": "blocked",
+     "refId": "C"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(k6_http_req_receiving_avg{testid=~\"$testid\"})",
+     "legendFormat": "receiving",
+     "refId": "D"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Network",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 20,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(k6_data_received_total{testid=~\"$testid\"}[30s]))",
+     "legendFormat": "received",
+     "refId": "A"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(k6_data_sent_total{testid=~\"$testid\"}[30s]))",
+     "legendFormat": "sent",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Application logs during the test (errors / min per service)",
+   "description": "Loki: correlate latency spikes with errors",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 28,
+    "w": 24,
+    "h": 7
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "sum by (service) (count_over_time({job=\"devctl\", service!~\"build|log-shipper\"} |~ \"(?i)(error|exception|fatal)\" [1m]))",
+     "legendFormat": "{{service}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  }
+ ]
+}

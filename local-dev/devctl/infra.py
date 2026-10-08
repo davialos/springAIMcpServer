@@ -6,6 +6,7 @@ Config files are generated into ``$LOCALDEV_HOME/infra``. Containers reach host 
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from . import config
@@ -51,9 +52,16 @@ def write_configs(cfg: dict) -> Path:
     (d / "prometheus.yml").write_text(json.dumps(prom, indent=2))  # JSON is valid YAML
     (d / "loki.yaml").write_text(LOKI_YAML)
     ds = {"apiVersion": 1, "datasources": [
-        {"name": "Prometheus", "type": "prometheus", "url": "http://host.docker.internal:9090", "isDefault": True},
-        {"name": "Loki", "type": "loki", "url": "http://host.docker.internal:3100"}]}
+        {"name": "Prometheus", "type": "prometheus", "uid": "prometheus", "url": "http://host.docker.internal:9090", "isDefault": True},
+        {"name": "Loki", "type": "loki", "uid": "loki", "url": "http://host.docker.internal:3100"}]}
     (d / "grafana" / "datasources.yaml").write_text(json.dumps(ds, indent=2))
+    provider = {"apiVersion": 1, "providers": [{"name": "devctl", "folder": "devctl", "type": "file", "allowUiUpdates": True,
+                                                "options": {"path": "/var/lib/grafana/dashboards-devctl"}}]}
+    (d / "grafana" / "dashboards.yaml").write_text(json.dumps(provider, indent=2))
+    dd = d / "grafana" / "dashboards"
+    dd.mkdir(exist_ok=True)
+    for f in (Path(__file__).parent / "dashboards").glob("*.json"):
+        shutil.copy(f, dd / f.name)  # refreshed on every sync; copy a dashboard elsewhere in Grafana to customise it
     return d
 
 
@@ -67,7 +75,9 @@ def catalog(cfg: dict) -> dict:
         "loki": _docker("loki", "grafana/loki:latest", ["3100:3100"], [f"{d}/loki.yaml:/etc/loki/local-config.yaml:ro"],
                         args="-config.file=/etc/loki/local-config.yaml", health={"url": "http://localhost:3100/ready"}),
         "grafana": _docker("grafana", "grafana/grafana:latest", ["3000:3000"],
-                           [f"{d}/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro"],
+                           [f"{d}/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/ds.yaml:ro",
+                            f"{d}/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/devctl.yaml:ro",
+                            f"{d}/grafana/dashboards:/var/lib/grafana/dashboards-devctl:ro"],
                            env=["GF_AUTH_ANONYMOUS_ENABLED=true", "GF_AUTH_ANONYMOUS_ORG_ROLE=Admin"],
                            health={"url": "http://localhost:3000/api/health"}),
         "postgres": _docker("postgres", "postgres:16", ["5432:5432"], env=["POSTGRES_PASSWORD=postgres"],

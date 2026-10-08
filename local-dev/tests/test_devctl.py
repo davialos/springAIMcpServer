@@ -157,6 +157,26 @@ class DevctlTest(unittest.TestCase):
         self.assertFalse(down.flush())
         self.assertEqual(len(down.pending), 1)  # retained for retry
 
+    def test_grafana_dashboards_provisioned(self):
+        from devctl import compose
+        cfg = self.config.load()
+        proj = compose.build_project(cfg, self.config.state())
+        cmd = proj["processes"]["grafana"]["command"]
+        self.assertIn("dashboards-devctl", cmd)
+        d = self.config.HOME / "infra" / "grafana"
+        for name, uid in (("k6.json", "devctl-k6"), ("logs.json", "devctl-logs")):
+            dash = json.loads((d / "dashboards" / name).read_text())
+            self.assertEqual(dash["uid"], uid)
+            ids = [p["id"] for p in dash["panels"]]
+            self.assertEqual(len(ids), len(set(ids)))
+            for p in dash["panels"]:
+                self.assertIn(p["datasource"]["uid"], ("prometheus", "loki"))
+                self.assertTrue(all(t["expr"] for t in p["targets"]))
+                self.assertTrue(p["gridPos"]["x"] + p["gridPos"]["w"] <= 24)
+        ds = json.loads((d / "datasources.yaml").read_text())["datasources"]
+        self.assertEqual({x["uid"] for x in ds}, {"prometheus", "loki"})
+        self.assertIn("/var/lib/grafana/dashboards-devctl", json.loads((d / "dashboards.yaml").read_text())["providers"][0]["options"]["path"])
+
     def test_mcp(self):
         from devctl import mcp
         r = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

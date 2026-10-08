@@ -35,6 +35,12 @@ class AuthoringController {
         return ResponseEntity.created(URI.create("/api/v1/rules/" + w.value().id())).body(w);
     }
 
+    /** Live validation: compiles an expression against the library, saves nothing, answers 200 either way. */
+    @PostMapping("/expressions/check")
+    Dtos.ExpressionCheck check(Caller c, @RequestBody Dtos.CheckExpression request) {
+        return authoring.check(c, request.expression());
+    }
+
     @PatchMapping("/rules/{id}/status")
     RuleView ruleStatus(Caller c, @PathVariable UUID id, @RequestBody StatusChange change) {
         return authoring.setRuleStatus(c, id, change.status());

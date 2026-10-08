@@ -13,7 +13,8 @@
     <!--
       Rule-engine microservice of the local ecosystem (ADR-0026): embeds the CEL rule engine library (ADR-0025) and
       exposes the reference authoring/evaluation/admin-log REST API (OQ-65). Scope (tenant, organization) comes only from
-      the signed access token. Runs the library's own migrations (V1..V12) with Flyway; no starter, no JPA at run time.
+      the signed access token. Runs the library's own migrations (V1..V12) with Flyway and embeds the starter for the AI assistant (agent runtime,
+      /dynamic-ai chat and admin APIs, ADR-0028); the rule engine itself still uses plain JDBC.
     -->
     <artifactId>rule-engine-service</artifactId>
     <name>springAIMcpServerCommon :: Rule-engine service</name>
@@ -29,25 +30,17 @@
             <artifactId>spring-ai-mcp-server-common-ruleengine</artifactId>
             <version>${library.version}</version>
         </dependency>
+        <!-- the starter: persistence unit + migrations, the agent runtime, the /dynamic-ai chat and admin APIs (ADR-0028) -->
         <dependency>
             <groupId>com.springaimcpservercommon</groupId>
-            <artifactId>spring-ai-mcp-server-common-persistence</artifactId>
+            <artifactId>spring-ai-mcp-server-common-spring-boot-starter</artifactId>
             <version>${library.version}</version>
-            <!-- only its migration scripts are used: keep Hibernate/JPA off the service's class path -->
-            <exclusions>
-                <exclusion>
-                    <groupId>org.hibernate.orm</groupId>
-                    <artifactId>hibernate-core</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.springframework</groupId>
-                    <artifactId>spring-orm</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>jakarta.persistence</groupId>
-                    <artifactId>jakarta.persistence-api</artifactId>
-                </exclusion>
-            </exclusions>
+        </dependency>
+        <!-- the real model: active only when SPRING_AI_MODEL_CHAT=anthropic and ANTHROPIC_API_KEY are set; otherwise the built-in
+             offline assistant answers (AssistantModels). Another provider = another spring-ai-starter-model-* here. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-anthropic</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

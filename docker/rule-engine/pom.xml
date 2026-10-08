@@ -34,6 +34,8 @@
         <maven.compiler.parameters>true</maven.compiler.parameters>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <library.version>0.1.0-SNAPSHOT</library.version>
+        <!-- same Spring AI as the library (the chat model provider starters are managed by this BOM) -->
+        <spring-ai.version>2.0.1</spring-ai.version>
     </properties>
 
     <build>
@@ -56,6 +58,13 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>com.springaimcpservercommon.ecosystem</groupId>
                 <artifactId>rule-engine-contract</artifactId>

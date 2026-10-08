@@ -265,3 +265,16 @@ DRAFT --submit--> SUBMITTED --approve (not the submitter)--> APPROVED --publish-
 - **Retire** takes a rule or group out of service; a rule in an active group is refused (`rule_in_use`). Library parameters
   that an active rule reads cannot be retyped or deactivated (`parameter_in_use`).
 - Every statement is scoped by tenant and the subject row is locked while it changes.
+
+## 15. AI assistant and the Angular console (ADR-0028)
+- **Endpoint:** `GET /api/v1/assistant` → `{available, agentSlug, provider, note}`; it provisions the tenant's workspace, tool
+  bindings and agent and the caller's grants on first use. The chat is the library's own
+  `POST /dynamic-ai/api/agents/{slug}/chat/stream` (SSE events `turn.start`, `text.delta`, `usage`, `turn.end`, `error`) with the
+  same bearer token. `POST /api/v1/expressions/check` compiles an expression for live validation.
+- **Tools:** six read-only operations over the caller's visible rules, groups and the parameter library, plus a CEL check; results
+  are bounded (25 items, expressions cut at 400 characters). They run as the caller, so scope is the token's.
+- **Log:** conversations are recorded by the library (`conversations.enabled=true`, redacted) in the tenant's workspace and are
+  read in the console's administration page and `GET /api/v1/admin/logs/conversations`.
+- **Configuration:** `ASSISTANT_ENABLED`, `ASSISTANT_PROVIDER` (`offline` | `anthropic`), `ASSISTANT_MODEL_NAME`,
+  `SPRING_AI_MODEL_CHAT`, `ANTHROPIC_API_KEY`, `ANTHROPIC_CHAT_MODEL`; `dynamic.ai.agent.*` as in the service's `application.yml`.
+- **Consoles:** React on :8080 and Angular on :8081 speak the same API and contract; only the Angular console has the assistant.

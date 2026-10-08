@@ -4,6 +4,7 @@
 #   scripts/rule-engine/dev.sh up        one command: generates .env on first run, builds, starts, seeds, waits until healthy
 #
 #   console (UI)  http://localhost:8080     admin / admin123 and user / user123 (seeded, local stack only)
+#   Angular UI    http://localhost:8081     the same logins, plus the AI assistant
 #   Grafana       http://localhost:3000     admin / admin (dashboard "Rule engine — operations")
 #   Prometheus    http://localhost:9090     Loki http://localhost:3100     PostgreSQL localhost:55433
 #
@@ -95,6 +96,12 @@ services:
       RULES_MIGRATOR_PASSWORD: ${RULES_MIGRATOR_PASSWORD}
       # decides which API environments communication channels may call (LLD-12): the local stack is DEV
       DAI_ENV_TIER: dev
+      # the AI assistant: the built-in offline assistant by default; for Claude set ANTHROPIC_API_KEY, SPRING_AI_MODEL_CHAT=anthropic
+      # and ASSISTANT_PROVIDER=anthropic in .env (docs/integration/rule-engine-ecosystem.md)
+      ASSISTANT_PROVIDER: ${ASSISTANT_PROVIDER:-offline}
+      SPRING_AI_MODEL_CHAT: ${SPRING_AI_MODEL_CHAT:-none}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_CHAT_MODEL: ${ANTHROPIC_CHAT_MODEL:-claude-sonnet-5-5}
     ports:
       - "127.0.0.1:${RE_RULES_PORT:-8092}:8092"
     depends_on:
@@ -138,6 +145,28 @@ services:
       RULES_UPSTREAM: rule-engine-service:8092
     ports:
       - "127.0.0.1:${RE_UI_PORT:-8080}:8080"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      rule-engine-service:
+        condition: service_healthy
+
+  # the same console written in Angular, with the AI assistant panel; the React console above stays as it is
+  ui-angular:
+    image: ruleengine/ui-angular:dev
+    build:
+      context: .
+      dockerfile: ui-angular/Dockerfile
+      args:
+        NG_CONFIGURATION: local
+    restart: unless-stopped
+    labels:
+      logging: promtail
+    environment:
+      AUTH_UPSTREAM: auth-service:8091
+      RULES_UPSTREAM: rule-engine-service:8092
+    ports:
+      - "127.0.0.1:${RE_UI_NG_PORT:-8081}:8080"
     depends_on:
       auth-service:
         condition: service_healthy

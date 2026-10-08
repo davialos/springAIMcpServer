@@ -1,0 +1,10 @@
+{
+  "name": "@springaimcpservercommon/chat-ui",
+  "private": true,
+  "description": "<saimcp-chat> embeddable chat interface (plain ES modules, no build step, no runtime dependencies)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test src/test/js/*.test.mjs",
+    "demo": "node demo/mock-server.mjs"
+  }
+}

@@ -52,6 +52,12 @@
             <groupId>com.springaimcpservercommon</groupId>
             <artifactId>spring-ai-mcp-server-common-webmvc</artifactId>
         </dependency>
+        <!-- DaiProperties binds dynamic.ai.agent.mcp.transport to mcp's McpTransportMode, so the class must be present even
+             while the MCP endpoint is switched off (dynamic.ai.agent.mcp.enabled=false, the default) -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-mcp</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>

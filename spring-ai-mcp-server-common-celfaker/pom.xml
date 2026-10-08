@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+      Developer tool, not part of the starter or the BOM (ADR-0030): turns JSON API payloads into parameter-library
+      entries, fakes valid CEL expressions per data type, builds attribute value maps and test-case matrices, generates
+      API request data and k6 workflow suites, and serves the drag-and-drop flow dashboard. No Spring dependency.
+    -->
+    <artifactId>spring-ai-mcp-server-common-celfaker</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: CEL Faker</name>
+    <description>CEL expression faker, attribute value maps, API data generation and k6 workflow generator with a flow dashboard.</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.celfaker</automatic.module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-ruleengine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+    </dependencies>
+</project>

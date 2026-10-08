@@ -33,7 +33,12 @@
       },
       "depends_on": [
         "postgres"
-      ]
+      ],
+      "jfr": {
+        "packages": [
+          "com.acme.orders"
+        ]
+      }
     },
     "billing-core": {
       "kind": "war",
@@ -81,13 +86,28 @@
   },
   "loadtest_dir": "~/localdev/loadtests",
   "loadtests": {
-    "orders-smoke": {
-      "script": "orders-smoke.js",
-      "vus": 10,
-      "duration": "1m",
-      "env": {
-        "BASE_URL": "http://localhost:8081"
-      }
+    "orders-load": {
+      "script": "orders-load.js",
+      "service": "orders-api",
+      "profile": "load",
+      "vus": 20,
+      "duration": "2m",
+      "env": {},
+      "jfr": true
     }
+  },
+  "jfr": {
+    "auto": true,
+    "settings": "profile",
+    "maxage": "30m",
+    "maxsize": "256m",
+    "auto_analyze": true,
+    "packages": [
+      "com.acme"
+    ],
+    "analyzer_java_home": "auto:25"
+  },
+  "metrics": {
+    "interval_seconds": 2
   }
 }

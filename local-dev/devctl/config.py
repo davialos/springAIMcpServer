@@ -24,7 +24,10 @@ DEFAULTS = {
     "infra": {"enabled": ["prometheus", "loki", "grafana"], "prometheus_scrape_path": "/actuator/prometheus",
               "loki_url": "http://localhost:3100", "ship_logs": True},
     "loadtest_dir": "~/localdev/loadtests",  # k6 scripts live here (relative script paths resolve against it)
-    "loadtests": {},                          # name -> {script, vus, duration, env}
+    "loadtests": {},                          # name -> {script, service, profile, vus, duration, env, jfr}
+    "jfr": {"auto": True, "settings": "profile", "maxage": "30m", "maxsize": "256m", "stackdepth": 256,
+            "auto_analyze": True, "packages": [], "analyzer_cmd": "", "analyzer_java_home": "auto:25"},
+    "metrics": {"interval_seconds": 2, "history_points": 900},
 }
 
 

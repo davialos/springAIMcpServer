@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from . import builds, config, ops, pc, repos
+from . import builds, config, jfr, jvm, loadgen, loadrun, metrics, ops, pc, repos
 
 
 def _p(o):
@@ -41,7 +41,14 @@ def main(argv=None) -> int:
         add(a, f"{a} a service", "service")
     add("stack", "up|down a stack", "action", "name")
     add("infra", "start|stop|restart prometheus|loki|grafana|postgres", "action", "name")
-    add("loadtest", "start|stop a k6 load test", "action", "name")
+    lt = add("loadtest", "load tests: list | discover <svc> | run <name> | stop <run> | runs | show <run>", "action")
+    lt.add_argument("arg", nargs="?", default=""); lt.add_argument("--vus", type=int, default=0); lt.add_argument("--duration", default="")
+    j = add("jfr", "JFR: jvms | list [svc] | snapshot <svc|pid> | record <svc|pid> | analyze <id> | summary <id>", "action")
+    j.add_argument("arg", nargs="?", default=""); j.add_argument("--seconds", type=int, default=60)
+    add("perf", "live performance snapshot of a service", "service")
+    add("readiness", "observability/load-test readiness of a service", "service")
+    add("_run-loadtest", "internal", "run_id")
+    add("_analyze-jfr", "internal", "rec_id")
     add("ship-logs", "run the Loki log shipper (normally managed by process-compose)")
     add("logs", "process logs", "name")
     add("up", "(re)generate the project and start/update process-compose headless")
@@ -99,7 +106,52 @@ def _dispatch(a, cfg) -> int:
     elif c == "infra":
         _p(ops.infra_control(cfg, a.name, a.action))
     elif c == "loadtest":
-        _p(ops.loadtest_control(cfg, a.name, a.action))
+        act, arg = a.action, a.arg
+        if act == "list":
+            _p(cfg.get("loadtests", {}))
+        elif act == "discover":
+            _p(loadgen.discover(cfg, arg))
+        elif act == "run":
+            _p(loadrun.start(cfg, arg, a.vus, a.duration))
+        elif act == "stop":
+            _p(loadrun.stop(cfg, arg))
+        elif act == "runs":
+            for r in loadrun.list_runs(cfg):
+                k = r.get("k6") or {}
+                print(f"{r['id']:45} {r['status']:18} rps={k.get('rps') or '-'} p95={(k.get('latency_ms') or {}).get('p(95)', '-')}")
+        elif act == "show":
+            _p(loadrun.read(cfg, arg))
+        else:
+            raise ValueError(f"unknown loadtest action {act}")
+    elif c == "jfr":
+        act, arg = a.action, a.arg
+        tgt = {"pid": int(arg)} if arg.isdigit() else {"service": arg}
+        if act == "jvms":
+            for v in jvm.list_jvms(cfg):
+                print(f"{v['pid']:>7}  {v['service'] or '-':20} {v['main']}")
+        elif act == "list":
+            for r in jfr.list_recordings(cfg, arg):
+                an = r["analysis"]
+                print(f"{r['id']:70} {r['kind'] or '-':9} {an.get('status'):8} {an.get('health') or ''} {an.get('score') or ''}")
+        elif act == "snapshot":
+            _p(jfr.snapshot(cfg, **tgt))
+        elif act == "record":
+            _p(jfr.record(cfg, a.seconds, **tgt))
+        elif act == "analyze":
+            _p(jfr.analyze(cfg, arg, wait=True))
+        elif act == "summary":
+            _p(jfr.summary(cfg, arg))
+        else:
+            raise ValueError(f"unknown jfr action {act}")
+    elif c == "perf":
+        _p(metrics.snapshot(cfg, a.service))
+    elif c == "readiness":
+        for ch in metrics.readiness(cfg, a.service):
+            print(f"[{'ok' if ch['ok'] else '!!'}] {ch['check']:32} {ch['detail']}" + ("" if ch["ok"] else f"\n      fix: {ch['fix']}"))
+    elif c == "_run-loadtest":
+        return loadrun.run(cfg, a.run_id)
+    elif c == "_analyze-jfr":
+        jfr.run_analysis(cfg, a.rec_id)
     elif c == "ship-logs":
         from . import shipper
         shipper.Shipper(cfg).run()
@@ -144,7 +196,5 @@ def _status(s) -> None:
         state = (v["process"] or {}).get("status", "-")
         print(f"{n:24} {v['kind']:7} {state:10} health={h.get('detail', '-'):18} "
               f"{(dep['branch'] + '@' + str(dep['commit'])) if dep else 'not deployed'}")
-    for n, v in s["loadtests"].items():
-        print(f"k6/{n:21} {(v['process'] or {}).get('status', 'idle')}")
     for n, v in s["infra"].items():
         print(f"infra/{n:18} {(v['process'] or {}).get('status', 'off' if not v['enabled'] else '-')}")

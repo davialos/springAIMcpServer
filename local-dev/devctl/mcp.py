@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sys
 
-from . import __version__, builds, config, ops, pc, repos
+from . import __version__, builds, config, jfr, jvm, loadgen, loadrun, metrics, ops, pc, repos
 
 PROTOCOL = "2025-06-18"
 S = {"type": "string"}
@@ -39,9 +39,41 @@ TOOLS = {
                       lambda c, a: ops.stack_control(c, a["stack"], a["action"])),
     "infra_control": (_t("start | stop | restart prometheus, loki, grafana or postgres.", {"name": S, "action": {"enum": ["start", "stop", "restart"]}}, ["name", "action"]),
                       lambda c, a: ops.infra_control(c, a["name"], a["action"])),
-    "loadtest_control": (_t("start | stop a configured k6 load test (metrics -> Prometheus, tag testid=<name>; view in Grafana).",
-                            {"name": S, "action": {"enum": ["start", "stop"]}}, ["name", "action"]),
-                         lambda c, a: ops.loadtest_control(c, a["name"], a["action"])),
+    "perf_snapshot": (_t("Live performance of a service right now (2 s window): req/s, avg/p95 latency, 5xx %, heap, CPU, "
+                         "threads, GC, pool, plus the busiest endpoints. Reads /actuator/prometheus (or /actuator/metrics).",
+                         {"service": S}, ["service"]), lambda c, a: metrics.snapshot(c, a["service"])),
+    "perf_readiness": (_t("Which observability/load-test endpoints a service exposes and the minimal change for each missing one.",
+                          {"service": S}, ["service"]), lambda c, a: metrics.readiness(c, a["service"])),
+    "jfr_list_jvms": (_t("Local JVMs (pid, main class, devctl service if started by devctl)."), lambda c, a: jvm.list_jvms(c)),
+    "jfr_snapshot": (_t("Dump the continuous JFR recording (last jfr.maxage) of a service or pid now; analysis starts automatically.",
+                        {"service": S, "pid": {"type": "integer"}}),
+                     lambda c, a: jfr.snapshot(c, a.get("service", ""), int(a.get("pid") or 0))),
+    "jfr_record": (_t("Timed JFR recording of a service or any local JVM pid.",
+                      {"service": S, "pid": {"type": "integer"}, "seconds": {"type": "integer"}}),
+                   lambda c, a: jfr.record(c, int(a.get("seconds", 60)), a.get("service", ""), int(a.get("pid") or 0))),
+    "jfr_list": (_t("JFR recordings with analysis status, health and score.", {"service": S}),
+                 lambda c, a: jfr.list_recordings(c, a.get("service", ""))),
+    "jfr_analyze": (_t("(Re)analyze a recording with the JFR analyzer.", {"id": S}, ["id"]), lambda c, a: jfr.analyze(c, a["id"])),
+    "jfr_summary": (_t("Analysis summary of a recording: status, score, key metrics, top issues, hot spots, findings.",
+                       {"id": S}, ["id"]), lambda c, a: jfr.summary(c, a["id"])),
+    "loadtest_discover": (_t("Discover a service's HTTP endpoints (OpenAPI or actuator mappings).", {"service": S, "base_url": S}),
+                          lambda c, a: loadgen.discover(c, a.get("service", ""), a.get("base_url", ""))),
+    "loadtest_create": (_t("Generate a k6 script and register it. endpoints: [{method, path, weight?, body?}]; profile: "
+                           "smoke|load|stress|spike|soak; path_values: {param: [values]}.",
+                           {"name": S, "service": S, "endpoints": {"type": "array", "items": {"type": "object"}},
+                            "profile": S, "vus": {"type": "integer"}, "duration": S, "path_values": {"type": "object"},
+                            "p95_ms": {"type": "integer"}, "max_error_rate": {"type": "number"}},
+                           ["name", "service", "endpoints"]),
+                        lambda c, a: loadgen.create(c, a["name"], a["service"], a["endpoints"],
+                                                    **{k: v for k, v in a.items() if k not in ("name", "service", "endpoints")})),
+    "loadtest_run": (_t("Run a load test: JFR on the target, k6, live service metrics, then JFR analysis. Returns the run id.",
+                        {"name": S, "vus": {"type": "integer"}, "duration": S}, ["name"]),
+                     lambda c, a: loadrun.start(c, a["name"], int(a.get("vus") or 0), a.get("duration", ""))),
+    "loadtest_result": (_t("Status/results of a load run: k6 figures, service-side peaks, JFR analysis.", {"run_id": S}, ["run_id"]),
+                        lambda c, a: loadrun.read(c, a["run_id"])),
+    "loadtest_runs": (_t("Recent load runs."), lambda c, a: loadrun.list_runs(c, 20)),
+    "loadtest_stop": (_t("Stop a running load run (k6 is interrupted; JFR is still saved and analyzed).", {"run_id": S}, ["run_id"]),
+                      lambda c, a: loadrun.stop(c, a["run_id"])),
     "logs": (_t("Last N log lines of a process (service, jboss-eap, grafana...).", {"name": S, "lines": {"type": "integer"}}, ["name"]),
              lambda c, a: pc.logs(c, a["name"], int(a.get("lines", 100)))),
     "sync_project": (_t("Regenerate and apply the process-compose project (starts it headless if not running)."), lambda c, a: pc.sync(c)),

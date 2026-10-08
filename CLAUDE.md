@@ -99,7 +99,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
   in step with the code when a feature's wiring changes
 - `cel-rule-engine/` — standalone Spring Boot app (not part of the starter reactor): multi-tenant CEL rule engine with a parameter
   library, evaluation policies, multilingual messages and notification channels; see its README
-- `local-dev/` — NOT in the reactor: `devctl` local build/deploy/observability control plane on process-compose (TUI + web dashboard + CLI + MCP, JBoss EAP multi-WAR); README there, ADR-0029; tests `python3 -m unittest discover -s local-dev/tests`
+- `local-dev/` — NOT in the reactor: `devctl` local build/deploy/observability control plane on process-compose (TUI + web dashboard + CLI + MCP, JBoss EAP multi-WAR, live service metrics, load-test wizard + runs, auto JFR + analyzer view); README there, ADR-0029; tests `python3 -m unittest discover -s local-dev/tests`
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
 - `docs/integration/chat-ui-guide.md` — embeddable chat window `<saimcp-chat>` (stream flags, supporting APIs, custom components)

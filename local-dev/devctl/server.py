@@ -11,7 +11,9 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import builds, config, ops, pc, repos
+from . import builds, config, jfr, jvm, loadgen, loadrun, metrics, ops, pc, repos
+
+COLLECTOR = metrics.Collector()
 
 STATIC = Path(__file__).parent / "static"
 
@@ -46,6 +48,19 @@ def make_handler(port: int):
             u = urllib.parse.urlparse(self.path)
             if u.path in ("/", "/index.html"):
                 return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if u.path.startswith("/static/"):
+                name = u.path[len("/static/"):]
+                f = STATIC / name
+                if "/" in name or not name.endswith(".js") or not f.exists():
+                    return self._send(404, {"error": "not found"})
+                return self._send(200, f.read_bytes(), "text/javascript; charset=utf-8")
+            if u.path == "/files/jfr":  # analyzer report files (self-contained HTML, JSON, XLSX)
+                q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+                try:
+                    data, ctype = jfr.report_file(config.load(), q.get("id", ""), q.get("f", "report.html"))
+                except ValueError as e:
+                    return self._send(404, {"error": str(e)})
+                return self._send(200, data, ctype)
             self._dispatch("GET", u)
 
         def do_POST(self):
@@ -104,6 +119,32 @@ def route(method: str, path: str, q: dict, body: dict):
             return {"text": pc.logs(cfg, seg[1], int(q.get("n", 200)))}
         if seg == ["config"]:
             return cfg
+        if len(seg) == 2 and seg[0] == "metrics":
+            if seg[1] not in cfg["services"]:
+                raise ValueError(f"unknown service {seg[1]}")
+            COLLECTOR.interval = float(cfg["metrics"].get("interval_seconds", 2))
+            COLLECTOR.ensure_started()
+            return COLLECTOR.get(seg[1], float(q.get("since", 0)))
+        if len(seg) == 2 and seg[0] == "readiness":
+            return metrics.readiness(cfg, seg[1])
+        if seg == ["jfr"]:
+            return jfr.list_recordings(cfg, q.get("service", ""))
+        if seg == ["jfr", "jvms"]:
+            return jvm.list_jvms(cfg)
+        if seg == ["jfr", "summary"]:
+            return jfr.summary(cfg, q["id"])
+        if seg == ["loadtests"]:
+            return [{"name": n, **t} for n, t in cfg.get("loadtests", {}).items()]
+        if seg == ["loadtests", "discover"]:
+            return loadgen.discover(cfg, q.get("service", ""), q.get("base_url", ""))
+        if seg == ["loadruns"]:
+            return loadrun.list_runs(cfg, int(q.get("limit", 30)))
+        if len(seg) == 2 and seg[0] == "loadruns":
+            return loadrun.read(cfg, seg[1])
+        if len(seg) == 3 and seg[0] == "loadruns" and seg[2] == "timeline":
+            return loadrun.timeline(cfg, seg[1])
+        if len(seg) == 3 and seg[0] == "loadruns" and seg[2] == "log":
+            return loadrun.log(cfg, seg[1], int(q.get("offset", 0)))
         if seg == ["doctor"]:
             return [{"check": c, "ok": ok, "hint": h} for c, ok, h in ops.doctor(cfg)]
     else:
@@ -118,8 +159,19 @@ def route(method: str, path: str, q: dict, body: dict):
             return {"result": ops.service_control(cfg, seg[1], seg[2])}
         if len(seg) == 3 and seg[0] == "stacks":
             return {"result": ops.stack_control(cfg, seg[1], seg[2])}
-        if len(seg) == 3 and seg[0] == "loadtests":
-            return {"result": ops.loadtest_control(cfg, seg[1], seg[2])}
+        if seg == ["loadtests"]:
+            b = dict(body)
+            return loadgen.create(cfg, b.pop("name"), b.pop("service", ""), b.pop("endpoints"), **b)
+        if len(seg) == 3 and seg[0] == "loadtests" and seg[2] == "run":
+            return loadrun.start(cfg, seg[1], int(body.get("vus") or 0), body.get("duration") or "")
+        if len(seg) == 3 and seg[0] == "loadruns" and seg[2] == "stop":
+            return loadrun.stop(cfg, seg[1])
+        if seg == ["jfr", "snapshot"]:
+            return jfr.snapshot(cfg, body.get("service", ""), int(body.get("pid") or 0))
+        if seg == ["jfr", "record"]:
+            return jfr.record(cfg, int(body.get("seconds", 60)), body.get("service", ""), int(body.get("pid") or 0))
+        if seg == ["jfr", "analyze"]:
+            return jfr.analyze(cfg, body["id"])
         if len(seg) == 3 and seg[0] == "infra":
             return {"result": ops.infra_control(cfg, seg[1], seg[2])}
         if seg == ["project", "sync"]:

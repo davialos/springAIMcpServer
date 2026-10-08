@@ -4,6 +4,7 @@ Sources (re-globbed every poll so new services/builds are picked up):
   $LOCALDEV_HOME/logs/*.log            one per process-compose process   -> service=<file stem>
   <jboss base>/log/server.log          JBoss EAP                         -> service=jboss-server
   <builds_dir>/runs/*/build.log        build output                      -> service=build, build=<id>
+  <builds_dir>/loadruns/*/run.log      load-test runs (k6 + JFR)         -> service=loadtest, run=<id>
 Files present at startup are read from their end (no replay of old history); files that appear later from the start.
 """
 from __future__ import annotations
@@ -39,6 +40,8 @@ class Shipper:
             out[jb] = {"service": "jboss-server"}
         for f in (config.builds_root(self.cfg) / "runs").glob("*/build.log"):
             out[f] = {"service": "build", "build": f.parent.name}
+        for f in (config.builds_root(self.cfg) / "loadruns").glob("*/run.log"):
+            out[f] = {"service": "loadtest", "run": f.parent.name}
         return out
 
     def poll(self) -> int:

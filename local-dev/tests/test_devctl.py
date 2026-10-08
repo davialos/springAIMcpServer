@@ -108,17 +108,14 @@ class DevctlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             builds.start(self.cfg, "billing", "--upload-pack=x")
 
-    def test_k6_and_log_shipping(self):
+    def test_prometheus_remote_write_and_log_shipping(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
         from devctl import compose, shipper
         cfg = self.config.load()
         cfg["loadtests"] = {"smoke": {"script": "smoke.js", "vus": 5, "duration": "30s", "env": {"BASE_URL": "http://x"}}}
         proj = compose.build_project(cfg, self.config.state())
-        k6 = proj["processes"]["k6-smoke"]
-        self.assertTrue(k6["disabled"])
-        for part in ("k6 run", "experimental-prometheus-rw", "--vus 5", "--duration 30s", "BASE_URL=http://x", "smoke.js"):
-            self.assertIn(part, k6["command"])
+        self.assertNotIn("k6-smoke", proj["processes"])  # k6 runs through the load-run pipeline (loadrun.py)
         self.assertIn("web.enable-remote-write-receiver", proj["processes"]["prometheus"]["command"])
         self.assertEqual(proj["processes"]["log-shipper"]["depends_on"], {"loki": {"condition": "process_healthy"}})
         self.assertTrue(proj["processes"]["grafana"]["log_location"].endswith("logs/grafana.log"))

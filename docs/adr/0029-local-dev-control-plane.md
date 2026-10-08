@@ -20,6 +20,12 @@ logs and health checks from a TUI, a web UI and AI agents (Claude, Cursor).
 - Dashboard is loopback-only with Host and `X-Devctl` header checks because it can execute configured commands.
 - **k6** runs as on-demand process-compose processes writing to Prometheus remote-write; **logs** go to Loki via a
   small stdlib shipper tailing process-compose `log_location` files (chosen over Promtail/Alloy: testable here, no extra image).
+- **Performance / profiling** (no new runtime dependency): services are polled for their own Micrometer metrics
+  (`/actuator/prometheus`, falling back to `/actuator/metrics`, then a probe) - the minimal service change is actuator +
+  Prometheus registry. Every devctl-started JVM runs a continuous JFR ring buffer (`-XX:StartFlightRecording`),
+  dumped on demand with `jcmd`; analysis reuses `scripts/jfr-analyze.sh` and the dashboard renders its
+  `jfr-analyzer/summary/1` JSON. A load run is one detached process (JFR start → k6 → metrics timeline → JFR stop →
+  analysis) like a build, so k6 no longer runs as a process-compose process.
 
 ## Consequences
 Not a Spring module: no effect on the starter, BOM or offline repo. process-compose CLI behaviour is verified

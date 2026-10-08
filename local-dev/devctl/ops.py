@@ -136,27 +136,6 @@ def infra_control(cfg: dict, name: str, action: str) -> str:
     raise ValueError(action)
 
 
-def loadtest_control(cfg: dict, name: str, action: str) -> str:
-    if name not in cfg.get("loadtests", {}):
-        raise ValueError(f"unknown load test: {name} (known: {', '.join(cfg.get('loadtests', {})) or 'none'})")
-    if action not in ("start", "stop"):
-        raise ValueError(action)
-    if action == "start" and not shutil.which("k6"):
-        raise ValueError("k6 not found - brew install k6")
-    script = Path(cfg["loadtests"][name]["script"]).expanduser()
-    if not script.is_absolute():
-        script = config.path(cfg, "loadtest_dir") / script
-    if action == "start" and not script.exists():
-        raise ValueError(f"k6 script not found: {script}")
-    if action == "start":
-        for en in ("prometheus",):
-            if en not in cfg["infra"]["enabled"]:
-                raise ValueError("enable prometheus in infra.enabled to receive k6 metrics")
-        pc.sync(cfg)
-        _settle()
-    return pc.control(cfg, action, compose.K6 + name)
-
-
 def status(cfg: dict, with_health: bool = True) -> dict:
     st = config.state().get("deployed", {})
     procs = pc.processes(cfg) if pc.available() else {}
@@ -177,9 +156,7 @@ def status(cfg: dict, with_health: bool = True) -> dict:
     infra_list = {}
     for n in ("prometheus", "loki", "grafana", "postgres"):
         infra_list[n] = {"enabled": n in cfg["infra"]["enabled"], "process": procs.get(n)}
-    loadtests = {n: {"script": t["script"], "vus": t.get("vus"), "duration": t.get("duration"),
-                     "process": procs.get(compose.K6 + n)} for n, t in cfg.get("loadtests", {}).items()}
-    return {"loadtests": loadtests, "log_shipper": procs.get(compose.SHIPPER),
+    return {"log_shipper": procs.get(compose.SHIPPER),
             "process_compose": {"installed": pc.available(), "up": bool(procs), "port": cfg["process_compose_port"]},
             "services": services, "stacks": cfg["stacks"], "infra": infra_list,
             "jboss": {"configured": bool(cfg["jboss"].get("home")), "process": procs.get(compose.JBOSS)}}

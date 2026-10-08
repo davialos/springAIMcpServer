@@ -27,12 +27,17 @@ const ZIPF_CACHE = {};
  */
 export function pickSkewed(list, skew) {
   const n = list ? list.length : 0;
-  if (n < 2 || !skew || !skew.mode || skew.mode === 'uniform') return pick(list);
+  return n ? list[indexSkewed(n, skew)] : undefined;
+}
+
+/** The index form of pickSkewed: a position in [0, n) with the same popularity skew (n >= 1). */
+export function indexSkewed(n, skew) {
+  if (n < 2 || !skew || !skew.mode || skew.mode === 'uniform') return Math.floor(Math.random() * n);
   if (skew.mode === 'hot') {
     const hot = Math.max(1, Math.round(n * (skew.hotFraction !== undefined ? skew.hotFraction : 0.05)));
     const share = skew.hotShare !== undefined ? skew.hotShare : 0.8;
-    if (hot >= n || Math.random() < share) return list[Math.floor(Math.random() * Math.min(hot, n))];
-    return list[hot + Math.floor(Math.random() * (n - hot))];
+    if (hot >= n || Math.random() < share) return Math.floor(Math.random() * Math.min(hot, n));
+    return hot + Math.floor(Math.random() * (n - hot));
   }
   if (skew.mode === 'zipf') {
     const s = skew.s !== undefined ? skew.s : 1.1;
@@ -55,9 +60,9 @@ export function pickSkewed(list, skew) {
       if (cumulative[mid] < r) lo = mid + 1;
       else hi = mid;
     }
-    return list[lo];
+    return lo;
   }
-  return pick(list);
+  return Math.floor(Math.random() * n);
 }
 
 export function bool(p = 0.5) {

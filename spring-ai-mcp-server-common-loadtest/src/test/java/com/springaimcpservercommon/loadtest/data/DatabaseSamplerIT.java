@@ -142,6 +142,34 @@ class DatabaseSamplerIT {
     }
 
     @Test
+    void samplesColumnsOfOneTableAsAlignedRows() throws SQLException {
+        try (DatabaseSampler db = sampler()) {
+            PoolRef id = new PoolRef(SCHEMA, "orders", "id");
+            PoolRef customer = new PoolRef(SCHEMA, "orders", "customer_id");
+            Map<String, List<Object>> rows = db.sampleRows(List.of(id, customer), 50);
+            assertThat(rows).containsOnlyKeys(id.key(), customer.key());
+            assertThat(rows.get(id.key())).hasSize(10).isNotEmpty();
+            for (int i = 0; i < 10; i++) { // order g belongs to customer 1 + g % 40, whatever the random order
+                long order = (Long) rows.get(id.key()).get(i);
+                assertThat(rows.get(customer.key()).get(i)).isEqualTo(1 + order % 40);
+            }
+            assertThatThrownBy(() -> db.sampleRows(List.of(id, new PoolRef(SCHEMA, "customers", "id")), 5))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void queryPoolsSampleTheFirstColumnOfAReadOnlyQuery() throws SQLException {
+        try (DatabaseSampler db = sampler()) {
+            PoolRef pool = PoolRef.parse("sql:SELECT id FROM " + SCHEMA + ".customers WHERE id <= 5 ORDER BY id;");
+            assertThat(db.has(pool)).isTrue();
+            assertThat(db.sample(pool, 50)).containsExactlyInAnyOrder(1L, 2L, 3L, 4L, 5L);
+            assertThat(db.sample(pool, 2)).hasSize(2);
+            assertThat(db.existing(pool, List.of(1L, 99L))).containsExactly(1L, 99L); // the query decides validity
+        }
+    }
+
+    @Test
     void refusesTablesAndColumnsMissingFromTheMetadata() throws SQLException {
         try (DatabaseSampler db = sampler()) {
             assertThat(db.has(new PoolRef(SCHEMA, "customers", "email\" OR 1=1 --"))).isFalse();
@@ -168,6 +196,40 @@ class DatabaseSamplerIT {
             assertThat(r.user().fields().get("deliveryNotes")).containsExactly("leave at door"); // unbound: untouched
             assertThat(log).anyMatch(l -> l.contains("2/3 values exist"));
             assertThat(String.join("\n", log)).doesNotContain("password_hash");
+        }
+    }
+
+    @Test
+    void suiteCarriesAlignedRowsGroupsAndABindingReport(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws SQLException, java.io.IOException {
+        ApiCatalog catalog = CatalogMerger.merge(List.of(new SpringSourceScanner(s -> { }).scan(Fixtures.sampleShop())));
+        try (DatabaseSampler db = sampler()) {
+            TableIndex index = new TableIndex(catalog.entities(), db.tables());
+            DataPlan plan = DataPlan.build(catalog, new RealDataBinder(index,
+                    Map.of("*.status", PoolRef.parse("sql:SELECT email FROM " + SCHEMA + ".customers WHERE id <= 3"))));
+            List<String> log = new ArrayList<>();
+            RealDataCollector.Result r = new RealDataCollector(log::add)
+                    .collect(catalog, plan, index, db, null, UserData.empty(), 10, false);
+            assertThat(log).anyMatch(l -> l.contains("loadtest_it.customers <- database") && l.contains("rows sampled together"));
+            assertThat(r.pools().keySet()).anyMatch(k -> k.startsWith("sql:"));
+            assertThat(r.pools().get("loadtest_it.customers.email")).hasSameSizeAs(r.pools().get("loadtest_it.customers.id"));
+
+            new com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator().generate(catalog, plan, r.pools(), r.user(),
+                    null, new com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator.Options(dir, "http://localhost:8080",
+                    "auto", "none", null));
+            assertThat(java.nio.file.Files.readString(dir.resolve("data/bindings.md")))
+                    .contains("# Real-data bindings", "column `loadtest_it.customers.id`");
+            String apis;
+            try (var files = java.nio.file.Files.list(dir.resolve("apis"))) {
+                apis = files.map(f -> {
+                    try {
+                        return java.nio.file.Files.readString(f);
+                    } catch (java.io.IOException e) {
+                        throw new java.io.UncheckedIOException(e);
+                    }
+                }).collect(java.util.stream.Collectors.joining("\n"));
+            }
+            assertThat(apis).contains("\"group\":\"loadtest_it.customers\"");
         }
     }
 }

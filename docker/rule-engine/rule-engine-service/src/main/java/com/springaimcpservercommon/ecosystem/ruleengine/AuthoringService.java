@@ -407,6 +407,26 @@ class AuthoringService {
 
     // ── shared helpers ─────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Compiles an expression against the parameter library without saving anything (live validation in the rule form and
+     * the AI assistant's check tool). The message names parameters and types, never values.
+     */
+    Dtos.ExpressionCheck check(Caller c, @Nullable String expression) {
+        if (expression == null || expression.isBlank()) {
+            return new Dtos.ExpressionCheck(false, "the expression is empty", List.of());
+        }
+        if (expression.length() > 8192) {
+            return new Dtos.ExpressionCheck(false, "the expression is longer than 8192 characters", List.of());
+        }
+        try {
+            CompiledExpression compiled = cache.catalog(c.tenantId()).library().compileBoolean(expression);
+            return new Dtos.ExpressionCheck(true, null,
+                    compiled.referenced().stream().map(Parameter::celName).sorted().toList());
+        } catch (RuleCompilationException e) {
+            return new Dtos.ExpressionCheck(false, e.getMessage(), List.of());
+        }
+    }
+
     private CompiledExpression compile(Caller c, String expression) {
         try {
             return cache.catalog(c.tenantId()).library().compileBoolean(expression);

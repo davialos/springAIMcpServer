@@ -232,6 +232,9 @@ final class JsEmitter {
         spec.set("schema", schema);
         if (f != null && f.pool() != null) {
             spec.put("real", f.pool().key());
+            if (f.pool().tableKeyOrNull() != null) {
+                spec.put("group", f.pool().tableKeyOrNull()); // fields of one table take the same sampled row
+            }
             if (f.component() >= 0) {
                 spec.put("component", f.component()); // one tuple (parent row) per request for the whole key
             }

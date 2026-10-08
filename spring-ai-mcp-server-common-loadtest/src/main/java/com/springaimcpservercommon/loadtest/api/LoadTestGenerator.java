@@ -25,6 +25,7 @@ import com.springaimcpservercommon.loadtest.discovery.SecurityModel;
 import com.springaimcpservercommon.loadtest.discovery.SecurityScanner;
 import com.springaimcpservercommon.loadtest.discovery.SpringSourceScanner;
 import com.springaimcpservercommon.loadtest.discovery.SqlSchemaReader;
+import com.springaimcpservercommon.loadtest.k6.BindingReport;
 import com.springaimcpservercommon.loadtest.k6.GrafanaStack;
 import com.springaimcpservercommon.loadtest.k6.K6SuiteGenerator;
 import com.springaimcpservercommon.loadtest.model.ApiCatalog;
@@ -343,6 +344,11 @@ public final class LoadTestGenerator {
             K6SuiteGenerator.Result r = new K6SuiteGenerator().generate(catalog, plan, real.pools(), real.user(),
                     journey, seed, new K6SuiteGenerator.Options(outDir, baseUrl, s.dataMode, authType, s.loginPath,
                             d.security(), d.channels()));
+            BindingReport.Summary bound = BindingReport.summarize(plan, real.pools(), seed.pools());
+            log("real: " + bound.bound() + " inputs bound to real data"
+                    + (bound.boundWithoutValues() + bound.unboundIdentifiers() == 0 ? "" : ", "
+                    + (bound.boundWithoutValues() + bound.unboundIdentifiers())
+                    + " identifier inputs without values (see data/bindings.md)"));
             GrafanaStack.write(r.outDir(), catalog.project(),
                     GrafanaStack.scrape(baseUrl, d.settings().properties()));
             if (db != null && s.schemaSnapshot) {

@@ -5,9 +5,11 @@ import org.jspecify.annotations.Nullable;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -31,7 +33,7 @@ public final class RealDataCollector {
     }
 
     private final Consumer<String> log;
-    private final java.util.Set<String> seeded;
+    private final Set<String> seeded;
 
     /**
      * Creates a collector.
@@ -39,7 +41,7 @@ public final class RealDataCollector {
      * @param log receives one line per pool and per verification
      */
     public RealDataCollector(Consumer<String> log) {
-        this(log, java.util.Set.of());
+        this(log, Set.of());
     }
 
     /**
@@ -48,9 +50,9 @@ public final class RealDataCollector {
      * @param log    receives one line per pool and per verification
      * @param seeded pool keys the suite's seeding fills at run time ({@link SeedPlan#pools()})
      */
-    public RealDataCollector(Consumer<String> log, java.util.Set<String> seeded) {
+    public RealDataCollector(Consumer<String> log, Set<String> seeded) {
         this.log = log;
-        this.seeded = java.util.Set.copyOf(seeded);
+        this.seeded = Set.copyOf(seeded);
     }
 
     /**
@@ -70,7 +72,11 @@ public final class RealDataCollector {
                           @Nullable ApiHarvester harvester, UserData user, int limit, boolean dropUnverified) {
         Map<String, List<Object>> pools = new LinkedHashMap<>();
         List<PoolRef> missing = new ArrayList<>();
+        Set<String> sampledAsRows = db == null ? Set.of() : sampleTablesAsRows(plan, db, limit, pools);
         for (PoolRef pool : plan.pools()) {
+            if (sampledAsRows.contains(pool.key())) {
+                continue;
+            }
             List<Object> values = List.of();
             if (db != null && db.has(pool)) {
                 try {
@@ -116,6 +122,44 @@ public final class RealDataCollector {
             }
         }
         return new Result(pools, db == null ? user : verifyUser(plan, db, user, dropUnverified));
+    }
+
+    /**
+     * Pools of one table that the plan binds more than once are sampled together, as whole rows, so the values at
+     * the same index belong to the same row ({@code data.js} then uses one index per request for all of the
+     * table's fields). A table with no complete row, or a failing query, falls back to per-column sampling.
+     *
+     * @return keys of the pools filled here
+     */
+    private Set<String> sampleTablesAsRows(DataPlan plan, DatabaseSampler db, int limit,
+                                           Map<String, List<Object>> pools) {
+        Map<String, List<PoolRef>> byTable = new LinkedHashMap<>();
+        for (PoolRef pool : plan.pools()) {
+            String table = pool.tableKeyOrNull();
+            if (table != null && db.has(pool)) {
+                byTable.computeIfAbsent(table, k -> new ArrayList<>()).add(pool);
+            }
+        }
+        Set<String> done = new HashSet<>();
+        for (Map.Entry<String, List<PoolRef>> t : byTable.entrySet()) {
+            if (t.getValue().size() < 2) {
+                continue;
+            }
+            try {
+                Map<String, List<Object>> rows = db.sampleRows(t.getValue(), limit);
+                if (rows.isEmpty()) {
+                    continue;
+                }
+                pools.putAll(rows);
+                done.addAll(rows.keySet());
+                log.accept("real: " + t.getKey() + " <- database, " + rows.values().iterator().next().size()
+                        + " rows sampled together for " + rows.keySet());
+            } catch (SQLException | RuntimeException e) {
+                log.accept("real: " + t.getKey() + " row sampling failed (" + e.getMessage()
+                        + "), sampling columns separately");
+            }
+        }
+        return done;
     }
 
     private UserData verifyUser(DataPlan plan, DatabaseSampler db, UserData user, boolean drop) {

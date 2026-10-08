@@ -39,6 +39,7 @@ import java.util.stream.Stream;
  * data/real.json         real-data pools (database / API harvest)
  * data/user.json         user-supplied values, payloads and bindings
  * data/plan.json         every field: kind and real-data binding
+ * data/bindings.md        which inputs carry real data, from which column/query, and which do not
  * data/seed.json         relationship-ordered seeding through the create endpoints (k6 setup)
  * data/journey.json      recorded browser flow (HAR) replayed by MODE=journey-&lt;profile&gt;
  * data/lifecycle.json    per-resource business flows from the code, MODE=lifecycle-&lt;profile&gt;
@@ -191,6 +192,8 @@ public final class K6SuiteGenerator {
 
             writeJson(out.resolve("data/user.json"), user.toJson());
             writeJson(out.resolve("data/plan.json"), planJson(plan, realPools));
+            Set<String> seededPools = seed == null ? Set.of() : seed.pools();
+            Files.writeString(out.resolve("data/bindings.md"), BindingReport.render(plan, realPools, seededPools));
             writeJson(out.resolve("data/seed.json"), seed == null ? Documents.json().createArrayNode()
                     : seed.toJson());
             Path journeyFile = out.resolve("data/journey.json");

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Host application with saimcp-chat</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* a stand-in for an existing application: the chat must not inherit or leak styles */
+    body { margin: 0; font-family: Georgia, serif; background: #f2efe8; color: #2b2b2b; }
+    nav { background: #24324a; color: #fff; padding: 14px 24px; font-family: sans-serif; }
+    main { padding: 24px; max-width: 900px; }
+    button { background: hotpink; }
+    table { width: 100%; border-collapse: collapse; } td, th { border: 1px solid #ccc; padding: 6px; }
+  </style>
+  <script type="module" src="/dynamic-ai/ui/chat/saimcp-chat.js"></script>
+</head>
+<body>
+  <nav>ACME Back Office</nav>
+  <main>
+    <h1>Orders</h1>
+    <p>This page stands in for an existing application. The assistant opens bottom right; drag its top or left edge to
+      resize it. Try “show me everything”, “which order is late?” or “fail please”.</p>
+    <table><tr><th>Order</th><th>Status</th></tr><tr><td>PO-1001</td><td>open</td></tr></table>
+  </main>
+  <saimcp-chat agent="order-helper" open width="440" height="640"
+               greeting="Ask about orders, invoices or customers."></saimcp-chat>
+  <script type="module">
+    const chat = document.querySelector('saimcp-chat');
+    // a real host would return its user's token: chat.tokenProvider = async () => auth.getAccessToken();
+    for (const name of ['saimcp-turn-end', 'saimcp-feedback', 'saimcp-answer', 'saimcp-error']) {
+      chat.addEventListener(name, (e) => console.log(name, e.detail));
+    }
+  </script>
+</body>
+</html>

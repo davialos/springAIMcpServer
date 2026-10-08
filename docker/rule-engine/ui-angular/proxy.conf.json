@@ -1,0 +1,5 @@
+{
+  "/auth": { "target": "http://localhost:8091", "secure": false },
+  "/api": { "target": "http://localhost:8092", "secure": false },
+  "/dynamic-ai": { "target": "http://localhost:8092", "secure": false }
+}

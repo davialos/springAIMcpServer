@@ -1,6 +1,6 @@
 # One image recipe for both Spring Boot services (ARG SERVICE = auth-service | rule-engine-service).
-# Build context is the REPOSITORY ROOT: the rule-engine service uses the library modules (ruleengine, persistence) that are
-# installed into the build's Maven cache first.
+# Build context is the REPOSITORY ROOT: the rule-engine service uses the library modules (ruleengine, starter) that are
+# installed into the build's Maven cache first (ruleengine, and the starter with the modules it aggregates).
 #   docker build -f docker/rule-engine/Dockerfile.service --build-arg SERVICE=rule-engine-service -t ruleengine/rule-engine-service:dev .
 
 # the repository requires JDK 25 and Maven 3.9.x (maven-enforcer): the official image has both
@@ -11,7 +11,7 @@ COPY . .
 # 1. the library modules the services depend on (no tests: they need Docker-in-Docker and run in CI)
 # 2. the service, as an executable jar
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B -q -pl spring-ai-mcp-server-common-ruleengine,spring-ai-mcp-server-common-persistence -am install \
+    mvn -B -q -pl spring-ai-mcp-server-common-ruleengine,spring-ai-mcp-server-common-spring-boot-starter -am install \
         -DskipTests -DskipITs --no-transfer-progress && \
     mvn -B -q -f docker/rule-engine/pom.xml -pl ${SERVICE} -am package -DskipTests -DskipITs --no-transfer-progress && \
     cp docker/rule-engine/${SERVICE}/target/*.jar /workspace/app.jar

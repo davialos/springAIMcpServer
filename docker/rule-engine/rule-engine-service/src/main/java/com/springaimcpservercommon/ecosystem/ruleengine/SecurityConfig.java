@@ -7,6 +7,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -48,7 +50,21 @@ class SecurityConfig {
         return decoder;
     }
 
+    /** Everything that is neither this API, the actuator nor the library's {@code /dynamic-ai/**} is refused. */
     @Bean
+    @Order(Ordered.LOWEST_PRECEDENCE)
+    SecurityFilterChain denyEverythingElse(HttpSecurity http) throws Exception {
+        return http.csrf(csrf -> csrf.disable()).authorizeHttpRequests(a -> a.anyRequest().denyAll())
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint((req, res, ex) -> problem(res, HttpStatus.UNAUTHORIZED,
+                                "unauthenticated", "a valid access token is required"))
+                        .accessDeniedHandler((req, res, ex) -> problem(res, HttpStatus.FORBIDDEN, "forbidden",
+                                "your role may not use this resource")))
+                .build();
+    }
+
+    @Bean
+    @Order(100)
     SecurityFilterChain filterChain(HttpSecurity http, JwtDecoder decoder, RuleEngineProperties props)
             throws Exception {
         Converter<Jwt, AbstractAuthenticationToken> converter = jwt -> {
@@ -64,7 +80,8 @@ class SecurityConfig {
                     caller.admin() ? "ROLE_ADMIN" : "ROLE_USER"));
             return new JwtAuthenticationToken(jwt, authorities, caller.username());
         };
-        http.csrf(csrf -> csrf.disable()) // stateless bearer API: no cookie to forge
+        http.securityMatcher("/api/**", "/actuator/**", "/error") // /dynamic-ai/** has the library's own chains
+                .csrf(csrf -> csrf.disable()) // stateless bearer API: no cookie to forge
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .addFilterBefore(new BodyLimitFilter(props.maxBodyBytes()), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(a -> a

@@ -5,7 +5,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /** Rule-engine microservice of the local ecosystem (ADR-0026): authoring, evaluation and admin logs over the CEL engine. */
-@SpringBootApplication
+@SpringBootApplication(scanBasePackages = {"com.springaimcpservercommon.ecosystem.ruleengine", "com.example.ruleconsole"})
 @ConfigurationPropertiesScan
 public class RuleEngineServiceApplication {
 

@@ -18,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -233,6 +234,9 @@ public final class DatabaseSampler implements AutoCloseable {
      * @throws IllegalArgumentException when the column is not in the metadata
      */
     public List<Object> sample(PoolRef pool, int limit) throws SQLException {
+        if (pool.isQuery()) {
+            return sampleQuery(pool, limit);
+        }
         DbTable table = table(pool);
         List<String> columns = new ArrayList<>();
         for (String c : pool.column().split(",")) {
@@ -265,6 +269,113 @@ public final class DatabaseSampler implements AutoCloseable {
         return out;
     }
 
+    /**
+     * Runs a query pool's statement and returns the first column of up to {@code limit} rows, distinct, non-null
+     * and in random order. The statement was checked by {@link #requireReadOnlySelect(String)} when the pool was
+     * created and runs on the read-only connection with a statement timeout and a row cap.
+     */
+    private List<Object> sampleQuery(PoolRef pool, int limit) throws SQLException {
+        String sql = DatabaseSampler.requireReadOnlySelect(Objects.requireNonNull(pool.sql()));
+        Set<Object> seen = new LinkedHashSet<>();
+        try (Statement st = connection.createStatement()) {
+            st.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            st.setMaxRows(Math.max(limit * 4, limit)); // headroom: duplicates and nulls are dropped below
+            try (ResultSet rs = st.executeQuery(sql)) {
+                while (rs.next() && seen.size() < limit) {
+                    Object v = rs.getObject(1);
+                    if (v != null) {
+                        seen.add(jsonValue(v));
+                    }
+                }
+            }
+        }
+        List<Object> out = new ArrayList<>(seen);
+        java.util.Collections.shuffle(out); // a query without ORDER BY RANDOM() would otherwise bias to its first rows
+        return out;
+    }
+
+    /**
+     * Samples several columns of one table <em>as rows</em>: the values at the same index of the returned lists
+     * come from the same row. Used so a request that carries several fields of one table (an order's id and its
+     * customer id, a SKU and its warehouse) sends values that belong together instead of unrelated rows. Only
+     * rows with no null in any of the columns are used.
+     *
+     * @param pools table-column pools of one table (at least two)
+     * @param limit maximum number of rows
+     * @return pool key → values, all lists of the same length and order; empty when no complete row exists
+     * @throws SQLException             on query errors
+     * @throws IllegalArgumentException when the pools are not all columns of one known table
+     */
+    public Map<String, List<Object>> sampleRows(List<PoolRef> pools, int limit) throws SQLException {
+        DbTable table = table(pools.getFirst());
+        List<String> columns = new ArrayList<>();
+        for (PoolRef p : pools) {
+            if (p.isQuery() || table(p) != table) {
+                throw new IllegalArgumentException("pools of one table expected: " + p.key());
+            }
+            columns.add(column(table, p.column()));
+        }
+        String list = columns.stream().map(this::q).collect(java.util.stream.Collectors.joining(", "));
+        String notNull = columns.stream().map(c -> q(c) + " IS NOT NULL")
+                .collect(java.util.stream.Collectors.joining(" AND "));
+        String sql = "SELECT " + list + " FROM (SELECT DISTINCT " + list + " FROM " + from(table) + " WHERE "
+                + notNull + ") d" + randomOrder();
+        Map<String, List<Object>> out = new LinkedHashMap<>();
+        pools.forEach(p -> out.put(p.key(), new ArrayList<>()));
+        try (Statement st = connection.createStatement()) {
+            st.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            st.setMaxRows(limit);
+            try (ResultSet rs = st.executeQuery(sql)) {
+                int rows = 0;
+                while (rs.next() && rows++ < limit) {
+                    for (int i = 0; i < pools.size(); i++) {
+                        out.get(pools.get(i).key()).add(jsonValue(rs.getObject(i + 1)));
+                    }
+                }
+            }
+        }
+        return out.values().iterator().next().isEmpty() ? Map.of() : out;
+    }
+
+    private static final java.util.regex.Pattern READ_ONLY_START =
+            java.util.regex.Pattern.compile("(?is)^\\s*(select|with)\\b.*");
+    private static final java.util.regex.Pattern WRITE_WORD = java.util.regex.Pattern.compile(
+            "(?i)\\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|call|exec|execute|copy|into"
+                    + "|lock|vacuum|set)\\b");
+
+    /**
+     * Checks that a statement from configuration is a single read-only {@code SELECT} / {@code WITH} query and
+     * returns it without a trailing semicolon. Defence in depth: the connection is read-only and the statement
+     * has a timeout as well. A string literal that contains a write keyword is rejected too (false positive,
+     * on purpose).
+     *
+     * @param sql statement text
+     * @return the normalised statement
+     * @throws IllegalArgumentException when it is empty, has several statements or contains a write keyword
+     */
+    static String requireReadOnlySelect(String sql) {
+        String s = sql == null ? "" : sql.trim();
+        while (s.endsWith(";")) {
+            s = s.substring(0, s.length() - 1).trim();
+        }
+        if (s.isEmpty() || !READ_ONLY_START.matcher(s).matches()) {
+            throw new IllegalArgumentException("a query pool must be a SELECT or WITH statement: " + abbreviate(s));
+        }
+        if (s.contains(";")) {
+            throw new IllegalArgumentException("a query pool must be a single statement: " + abbreviate(s));
+        }
+        java.util.regex.Matcher m = WRITE_WORD.matcher(s);
+        if (m.find()) {
+            throw new IllegalArgumentException("a query pool must be read-only, found '" + m.group(1) + "': "
+                    + abbreviate(s));
+        }
+        return s.replaceAll("\\s+", " ");
+    }
+
+    private static String abbreviate(String s) {
+        return s.length() <= 80 ? s : s.substring(0, 77) + "...";
+    }
+
     private String randomOrder() {
         if (product.contains("mysql") || product.contains("mariadb")) {
             return " ORDER BY RAND()";
@@ -287,6 +398,9 @@ public final class DatabaseSampler implements AutoCloseable {
      * @throws SQLException on query errors
      */
     public List<Object> existing(PoolRef pool, List<?> values) throws SQLException {
+        if (pool.isQuery()) {
+            return new ArrayList<>(values); // the query defines which values are valid; nothing to look up by column
+        }
         DbTable table = table(pool);
         if (pool.column().contains(",")) {
             return List.of(); // tuples (composite keys) are sampled, never checked value by value
@@ -336,6 +450,9 @@ public final class DatabaseSampler implements AutoCloseable {
      * @return {@code true} when both are in the metadata
      */
     public boolean has(PoolRef pool) {
+        if (pool.isQuery()) {
+            return true;
+        }
         try {
             DbTable table = table(pool);
             for (String c : pool.column().split(",")) {

@@ -51,10 +51,11 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `security` | `…security` | principal mapping, authorization engine, API keys, filter chain pieces | core, persistence, spring-security |
 | `query` | `…query` | dynamic query AST → Criteria compiler/executor over **host** entities | core |
 | `ruleengine` | `…ruleengine` | opt-in CEL rule engine: parameter library (`object.attribute` typed CEL variables), rule groups + evaluation policies, multilingual messages, e-mail/push/API channels, trigger points; JDBC store over `dai_re_*` (V11), change-marker cache (ADR-0025, LLD-18). **No Spring**; not in the starter/BOM-default path (CEL pulls protobuf + Guava) | core, cel-java |
-| `docker/rule-engine` | `…ecosystem` | NOT in the reactor: local rule-engine ecosystem — `contract` (protobuf), `auth-service`, `rule-engine-service`, `ui` (React console), compose + Grafana/Loki/Prometheus (ADR-0026, LLD-18 §12); `scripts/rule-engine/dev.sh` | ruleengine, persistence, protobuf, Spring Boot |
+| `docker/rule-engine` | `…ecosystem` | NOT in the reactor: local rule-engine ecosystem — `contract` (protobuf), `auth-service`, `rule-engine-service`, `ui` (React console), `ui-angular` (Angular console + AI assistant panel), the assistant embedded in `rule-engine-service` through the starter, compose + Grafana/Loki/Prometheus (ADR-0026, ADR-0028, LLD-18 §12–13); `scripts/rule-engine/dev.sh` | ruleengine, starter, protobuf, Spring Boot, Angular |
 | `ai` | `…ai` | agent runtime, tool bridge, advisors, write guard | core, spring-ai |
 | `mcp` | `…mcp` | MCP server exposure, auth glue | ai, security |
 | `webmvc` | `…webmvc` | dynamic endpoints, admin API, SSE streaming, problem details | core, security |
+| `chat-ui` | — (static JS) | `<saimcp-chat>` Web Component: plain ES modules in `META-INF/resources/dynamic-ai/ui/chat/` (no build step, no npm runtime deps), Node tests (`scripts/chat-ui-test.sh`), `demo/` mock backend; opt-in, in the BOM, not in the starter (F-53, docs/integration/chat-ui-guide.md) | nothing (talks to `webmvc` over HTTP) |
 | `autoconfigure` | `…autoconfigure` | `@AutoConfiguration` classes + `@ConfigurationProperties` only | all above (optional) |
 | `spring-boot-starter` | — | dependency aggregator | autoconfigure + defaults |
 | `loadtest` | `…loadtest` | dev tool (not in the starter/BOM): Spring API discovery (sources, OpenAPI, actuator, HAR) → entity-relationship payloads + seeding → k6 suite generator, data providers, journeys, CLI (ADR-0022, LLD-16) | jackson 3, postgresql driver; **no Spring** |
@@ -86,8 +87,8 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 
 - `docs/README.md` index · `docs/01-feature-catalog.md` · `docs/02-architecture-overview.md` · `docs/lld/*.md`
 - `docs/lld/15-database-schema.md` — PostgreSQL schema (tables, keys, indexes, partitions, retention)
-- `docs/lld/18-rule-engine.md` — CEL rule engine (parameter library, policies, messages, channels, triggers); local DB + sample data: `scripts/rule-engine/` (`local-db.sh`, `sample-data.sql`); decision ADR-0025; §12 authoring API/console/logs ecosystem (ADR-0026)
-- `docs/integration/rule-engine-ecosystem.md` — one-command local stack (`scripts/rule-engine/dev.sh up|smoke|dashboards|e2e`), users, ports, troubleshooting · `docs/design/README.md` — console design tokens, Figma status (OQ-70)
+- `docs/lld/18-rule-engine.md` — CEL rule engine (parameter library, policies, messages, channels, triggers); local DB + sample data: `scripts/rule-engine/` (`local-db.sh`, `sample-data.sql`); decision ADR-0025; §12 authoring API/console/logs ecosystem (ADR-0026), §15 AI assistant + Angular console (ADR-0028)
+- `docs/integration/rule-engine-ecosystem.md` — one-command local stack (`scripts/rule-engine/dev.sh up|smoke|dashboards|e2e|e2e-angular`), users, ports, troubleshooting · `docs/design/README.md` — console design tokens, Figma status (OQ-70)
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`, `scripts/loadtest-mcp.sh`); guide `docs/integration/load-testing-guide.md`
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/tools/perf-test.md` — universal performance test against any running service: k6 load + JFR profile +
@@ -100,6 +101,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
   library, evaluation policies, multilingual messages and notification channels; see its README
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
+- `docs/integration/chat-ui-guide.md` — embeddable chat window `<saimcp-chat>` (stream flags, supporting APIs, custom components)
 
 ## Design rules (non-negotiable)
 

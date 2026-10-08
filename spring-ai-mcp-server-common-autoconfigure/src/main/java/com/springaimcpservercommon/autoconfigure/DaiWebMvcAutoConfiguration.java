@@ -458,15 +458,22 @@ public class DaiWebMvcAutoConfiguration {
     /**
      * The dynamic endpoint registrar that manages Spring MVC route registration / deregistration.
      *
-     * @param handlerMapping the host's primary {@link RequestMappingHandlerMapping}
-     * @param handler        the generic dynamic handler
+     * @param mappings the host's {@link RequestMappingHandlerMapping} beans: the main one receives the routes (with
+     *                 Actuator on the class path there are two, and Actuator's must not be chosen)
+     * @param beans    the bean factory, to find the main mapping by its Spring MVC name when there are several
+     * @param handler  the generic dynamic handler
      * @return the registrar
      */
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean({RequestMappingHandlerMapping.class, GenericDynamicHandler.class})
-    public DynamicEndpointRegistrar dynamicEndpointRegistrar(RequestMappingHandlerMapping handlerMapping,
+    public DynamicEndpointRegistrar dynamicEndpointRegistrar(ObjectProvider<RequestMappingHandlerMapping> mappings,
+                                                              org.springframework.beans.factory.ListableBeanFactory beans,
                                                               GenericDynamicHandler handler) throws NoSuchMethodException {
+        RequestMappingHandlerMapping handlerMapping = DaiControllerRegistrar.hostMapping(mappings, beans);
+        if (handlerMapping == null) {
+            throw new IllegalStateException("no main RequestMappingHandlerMapping for the dynamic endpoints");
+        }
         Method handleMethod = GenericDynamicHandler.class.getMethod(
                 "handleRequest",
                 jakarta.servlet.http.HttpServletRequest.class,

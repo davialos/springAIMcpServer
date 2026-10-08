@@ -7,6 +7,13 @@
 //   real    real values > user > dummy
 //   user    user values > dummy
 //   mixed   weighted pick per field per request among the sources available (config.data.mix)
+// Which real value is used (config.data.pick / PICK env):
+//   random     any sampled value (default)
+//   partition  each VU walks its own slice of the pool (VU n takes n-1, n-1+K, n-1+2K, …; K = config.data.partitions
+//              or the VUS env, default 100): no two VUs hit the same row, so updates/deletes do not contend or 404
+//   sequence   every VU walks the pool in order from its own start, wrapping around
+// Real values of one table that were sampled together (spec.group) come from the same row: one request that carries
+// an order id and its customer id sends a pair that exists, not two unrelated rows.
 // In every mode except user/real, identifier fields (ids, foreign keys) keep using real values when
 // config.data.realIdentifiersInAllModes is true (default), so lookups hit existing rows instead of 404-ing.
 import * as R from './random.js';
@@ -40,8 +47,8 @@ export function dataMode() {
  * request changes data (POST/PUT/PATCH/DELETE), which per-VU partitioning (data.partition) keeps off other VUs' rows.
  */
 export function context(apiId, seeded, complete, write) {
-  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, seeded: seeded || {}, complete: complete === true,
-    write: write === true };
+  return { api: apiId, mode: STATE.mode, depth: 0, sources: {}, rows: {}, seeded: seeded || {},
+    complete: complete === true, write: write === true };
 }
 
 function cfg() {
@@ -73,19 +80,34 @@ function realValues(spec, ctx) {
 }
 
 /**
- * One real value. A composite foreign key's pool holds tuples (one per parent row): the first of its fields in a
- * request picks the tuple, the others take their component from the same tuple.
+ * One real value. The pool is first narrowed to this VU's slice for writes (data.partition, see below). Then:
+ *  - a composite foreign key's pool holds tuples (one per parent row): the first of its fields in a request picks the
+ *    tuple, the others take their component from the same tuple;
+ *  - values of one `group` (table) share the row chosen first in this request, provided the pools have the same length
+ *    (pools sampled together do; seeded/harvested ones usually do not and are picked independently);
+ *  - otherwise one value: by popularity skew (data.skew) with the default `random` pick, or by the `partition` /
+ *    `sequence` walk of data.pick.
  */
 function pickReal(spec, ctx, values) {
   const mine = partitioned(values, ctx);
-  if (spec.component === undefined) return R.pickSkewed(mine, skew());
-  ctx.tuples = ctx.tuples || {};
-  let t = ctx.tuples[spec.real];
-  if (t === undefined) {
-    t = R.pickSkewed(mine, skew());
-    ctx.tuples[spec.real] = t;
+  if (spec.component !== undefined) {
+    ctx.tuples = ctx.tuples || {};
+    let t = ctx.tuples[spec.real];
+    if (t === undefined) {
+      t = mine[pickPosition(spec, mine.length)];
+      ctx.tuples[spec.real] = t;
+    }
+    return Array.isArray(t) ? t[spec.component] : t;
   }
-  return Array.isArray(t) ? t[spec.component] : t;
+  if (!spec.group) return mine[pickPosition(spec, mine.length)];
+  const slot = `${spec.group}:${mine.length}`;
+  if (ctx.rows[slot] === undefined) ctx.rows[slot] = pickPosition(spec, mine.length);
+  return mine[ctx.rows[slot]];
+}
+
+/** A position in a pool of `len` values: skewed random for the default strategy, else the pick-strategy walk. */
+function pickPosition(spec, len) {
+  return pickStrategy() === 'random' ? R.indexSkewed(len, skew()) : pickIndex(spec, len);
 }
 
 /** Popularity skew of real values: data.skew (uniform | zipf | hot), overridden by SKEW / SKEW_S in the environment. */
@@ -121,6 +143,28 @@ export function remember(pool, id) {
   const list = CREATED[pool] || (CREATED[pool] = []);
   if (list.length >= MAX_CREATED) list.shift();
   list.push(id);
+}
+
+const PICKS = ['random', 'partition', 'sequence'];
+const CURSOR = {};
+
+function pickStrategy() {
+  const p = (__ENV.PICK || cfg().pick || 'random').toLowerCase();
+  if (PICKS.indexOf(p) < 0) throw new Error(`PICK must be one of ${PICKS.join(', ')} (got ${p})`);
+  return p;
+}
+
+/** Index into a pool of `len` values according to the pick strategy. */
+function pickIndex(spec, len) {
+  const strategy = pickStrategy();
+  if (strategy === 'random' || len <= 1) return R.int(0, len - 1);
+  const slot = `${spec.group || spec.real || spec.key}:${len}`;
+  const n = CURSOR[slot] || 0;
+  CURSOR[slot] = n + 1;
+  const vu = (typeof __VU === 'number' && __VU > 0 ? __VU : 1) - 1;
+  if (strategy === 'sequence') return (vu + n) % len;
+  const k = Math.max(1, Number(cfg().partitions || __ENV.VUS || 100));
+  return ((vu % k) + k * n) % len;
 }
 
 function choose(ctx, spec, user, real) {
@@ -163,7 +207,8 @@ function weighted(options) {
 
 /**
  * The value of one scalar field.
- * spec: { key, name, owner, kind, schema: {type, format, enum, minLength, …}, real: 'table.column' | null }
+ * spec: { key, name, owner, kind, schema: {type, format, enum, minLength, …}, real: 'table.column' | 'sql:<id>' | null,
+ *         group: 'table' | undefined }
  */
 export function field(ctx, spec) {
   const user = userValues(Object.assign({ api: ctx.api }, spec));

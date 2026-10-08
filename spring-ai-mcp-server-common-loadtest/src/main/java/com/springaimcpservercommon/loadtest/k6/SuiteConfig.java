@@ -98,6 +98,7 @@ final class SuiteConfig {
         data.put("mode", s.dataMode());
         data.putObject("mix").put("user", 20).put("real", 40).put("dummy", 30).put("random", 10);
         data.put("realIdentifiersInAllModes", true);
+        data.put("pick", "random"); // random | partition | sequence: how a real value is chosen (PICK env)
         data.put("optionalFieldRate", 0.7);
         data.put("maxArrayItems", 3);
         data.put("maxDepth", 4);

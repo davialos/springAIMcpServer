@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.springaimcpservercommon</groupId>
+        <artifactId>spring-ai-mcp-server-common-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>spring-ai-mcp-server-common-chat-ui</artifactId>
+    <packaging>jar</packaging>
+    <name>springAIMcpServerCommon :: Chat UI</name>
+    <description>Embeddable chat interface &lt;saimcp-chat&gt; (Web Component, F-53) for the agent stream (dai-stream/1,
+        LLD-13): resizable window, Markdown with tables, code highlighting (CEL included) and Mermaid, step details,
+        choices, feedback and copy. Plain ES modules with no build step and no runtime dependencies, served by Spring
+        Boot's static resource handling from META-INF/resources at /dynamic-ai/ui/chat/. Opt-in: not part of the
+        starter. JavaScript tests run with Node (scripts/chat-ui-test.sh).</description>
+
+    <properties>
+        <automatic.module.name>com.springaimcpservercommon.chatui</automatic.module.name>
+    </properties>
+</project>

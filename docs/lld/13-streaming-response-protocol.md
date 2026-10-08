@@ -44,12 +44,27 @@ Every event has an SSE `id: <turnId>:<seq>` (monotonic) and a JSON `data` object
 | `tool.call` | `callId, tool, argsPreview` (PII-redacted, ≤ 300 chars) | Model requested a tool; emitted live from the tool thread when `ui.steps` (implemented, `StepReportingToolCallback`) |
 | `tool.result` | `callId, status` (`ok\|empty\|truncated\|error\|not_permitted\|unavailable\|proposed`), `summary` | Tool finished; the summary is built from the envelope's status, entity, count and displayable error only, never rows |
 | `ui.component` | `componentType, payload` (JSON string), `componentId?`, `copyable?` | Display data — always a complete JSON object, never split. `componentId` identifies interactive components within the turn; `copyable: true` asks the client for a copy button |
-| `ui.component` (`componentType: "choice"`) | `payload` = `{componentId, question, options:[{value,label,description?}], multiple, allowOther}` | Shown when the model calls the built-in `present_choices` tool (only when `ui.choices`); texts PII-redacted; recorded so the answer can be validated (`ChatUiState`). The user answers through the next chat request (`answer` field) |
+| `ui.component` (`componentType: "choice"`) | `payload` = `{componentId, question, options:[{value,label,description?}], multiple, allowOther}` | Shown when the model calls the built-in `present_choices` tool (only when `ui.choices`); texts PII-redacted; recorded so the answer can be validated (`ChatUiState`). The user answers through `POST …/answer` (§3.1), which validates against the stored payload, stores once and returns the `message` the client sends as the next chat turn |
 | `ui.component` (`componentType: "structured-response"`) | `payload` = the answer's display tree (LLD-06 §8.3) | Sent once, after the last `text.delta` and before `usage`/`turn.end`, when the structured display is on; PII already removed |
 | `proposal.created` / `proposal.updated` / `proposal.applied` | proposal review payload / state (LLD-11) | Write flow |
 | `usage` | `inputTokens, outputTokens, costMicros, model` | Before `turn.end` |
 | `turn.end` | `finishReason` (`stop\|length\|tool_limit\|budget\|cancelled`), `messageId` | Last event of a successful turn |
 | `error` | RFC 9457 subset: `type, title, code, retryable, turnId` | Terminal failure after 200 was sent; stream then closes |
+### 3.1 Supporting APIs of the chat window (implemented, `ChatUiController`)
+
+Under `{base}/api/agents/{slug}`; each needs `agent:invoke`; state addressed by `sha256(workspace:agent:principal:conversation)`
+so a caller reaches only their own conversations; stored in `dai_chat_interaction` / `dai_turn_feedback` (V13, LLD-15)
+behind the `ChatUiState` port (PostgreSQL default, ADR-0021).
+
+| Call | Purpose |
+|------|---------|
+| `GET /chat/config` | `{agent, displayName, protocol, ui, maxMessageChars, persistentState}` — features before the first turn |
+| `GET /conversations/{id}/ui-state` | shown components with their answers + feedback per turn, to restore a reloaded chat |
+| `POST /conversations/{id}/turns/{turnId}/components/{componentId}/answer` | answer a `choice`: `200 {answer, message}`, `400` invalid, `404` unknown, `409` answered / not kept |
+| `PUT` / `DELETE /conversations/{id}/turns/{turnId}/feedback` | like/dislike `{rating, reason?, comment?}` (comment PII-redacted), or withdraw; `204` |
+
+Client contract and examples: [chat-ui-guide.md](../integration/chat-ui-guide.md).
+
 Heartbeats are SSE **comments** (`: keep-alive`), not events — every SSE parser ignores them, so they
 never reach application code.
 
@@ -98,6 +113,9 @@ exfiltration and blocked-term filtering of the output are not implemented (OQ-55
 held back whole (OQ-51) and redacted inside the document.
 
 ## 6. Client rendering responsibilities (JS client & Web Components)
+> **Implemented (2026-10-06)** as `<saimcp-chat>` in module `spring-ai-mcp-server-common-chat-ui` (plain ES modules,
+> no build step; integration: [chat-ui-guide.md](../integration/chat-ui-guide.md)). The element name is
+> `<saimcp-chat>` (a whole chat window), not the `<saimcp-chat-stream>` sketched below; the rules below hold.
 - Incremental Markdown rendering with a **streaming-tolerant parser** (re-parses the accumulated text on each
   delta and hides incomplete constructs), in `<saimcp-chat-stream>`.
 - **Sanitised rendering:** raw HTML disabled; images not auto-loaded (placeholder + click-to-load against an

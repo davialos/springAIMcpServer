@@ -55,6 +55,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `ai` | `…ai` | agent runtime, tool bridge, advisors, write guard | core, spring-ai |
 | `mcp` | `…mcp` | MCP server exposure, auth glue | ai, security |
 | `webmvc` | `…webmvc` | dynamic endpoints, admin API, SSE streaming, problem details | core, security |
+| `chat-ui` | — (static JS) | `<saimcp-chat>` Web Component: plain ES modules in `META-INF/resources/dynamic-ai/ui/chat/` (no build step, no npm runtime deps), Node tests (`scripts/chat-ui-test.sh`), `demo/` mock backend; opt-in, in the BOM, not in the starter (F-53, docs/integration/chat-ui-guide.md) | nothing (talks to `webmvc` over HTTP) |
 | `autoconfigure` | `…autoconfigure` | `@AutoConfiguration` classes + `@ConfigurationProperties` only | all above (optional) |
 | `spring-boot-starter` | — | dependency aggregator | autoconfigure + defaults |
 | `loadtest` | `…loadtest` | dev tool (not in the starter/BOM): Spring API discovery (sources, OpenAPI, actuator, HAR) → entity-relationship payloads + seeding → k6 suite generator, data providers, journeys, CLI (ADR-0022, LLD-16) | jackson 3, postgresql driver; **no Spring** |
@@ -100,6 +101,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
   library, evaluation policies, multilingual messages and notification channels; see its README
 - `docs/security/*.md` · `docs/adr/*.md` · `docs/open-questions.md` · `docs/production-readiness.md`
 - `docs/integration/host-integration-guide.md` — how host applications configure the starter
+- `docs/integration/chat-ui-guide.md` — embeddable chat window `<saimcp-chat>` (stream flags, supporting APIs, custom components)
 
 ## Design rules (non-negotiable)
 

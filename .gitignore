@@ -32,3 +32,6 @@ graphify-out/
 dist/
 
 perf-results/
+
+# Node (chat UI tests and demo need none, but keep local installs out)
+node_modules/

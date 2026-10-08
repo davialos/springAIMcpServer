@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Dev Control</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1c2330;--mut:#667085;--bd:#dfe3ea;--ok:#12805c;--bad:#c0392b;--warn:#b7791f;--acc:#2f5bea}
+@media (prefers-color-scheme:dark){:root{--bg:#0f131a;--card:#171c26;--fg:#e6e9ef;--mut:#8b94a6;--bd:#2a3140;--ok:#3ecf8e;--bad:#ff6b5e;--warn:#e5b04a;--acc:#6c8cff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,system-ui,sans-serif}
+header{display:flex;gap:16px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--bd);background:var(--card);flex-wrap:wrap}
+h1{font-size:16px;margin:0}nav{display:flex;gap:4px}nav button{border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.on{background:var(--acc);color:#fff}main{padding:16px;max-width:1200px;margin:auto}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}select,button,input{font:inherit;padding:6px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--fg)}
+button{cursor:pointer}button.p{background:var(--acc);color:#fff;border-color:var(--acc)}button.d{color:var(--bad)}button:disabled{opacity:.5}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--bd);vertical-align:middle}th{color:var(--mut);font-weight:500;font-size:12px}
+.badge{padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid var(--bd)}.ok{color:var(--ok);border-color:var(--ok)}.bad{color:var(--bad);border-color:var(--bad)}.warn{color:var(--warn);border-color:var(--warn)}
+pre{background:#0b0e14;color:#d6deeb;padding:10px;border-radius:6px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0 0;font:12px/1.4 ui-monospace,Menlo,monospace}
+.mut{color:var(--mut)}#msg{position:fixed;right:16px;bottom:16px;max-width:420px}#msg div{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--acc);padding:8px 12px;margin-top:6px;border-radius:6px}
+.scroll{overflow-x:auto}
+</style></head><body>
+<header><h1>Local Dev Control</h1>
+<nav id="nav"></nav><span class="mut" id="pcstat"></span></header>
+<main id="main"></main><div id="msg"></div>
+<script>
+const $=(s,e=document)=>e.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api=async(m,p,b)=>{const r=await fetch('/api'+p,{method:m,headers:{'X-Devctl':'1','Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});
+  const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j};
+const toast=(t,bad)=>{const d=document.createElement('div');d.textContent=t;if(bad)d.style.borderLeftColor='var(--bad)';$('#msg').append(d);setTimeout(()=>d.remove(),bad?9000:4000)};
+const act=async(fn,ok)=>{try{const r=await fn();toast(ok||'done');refresh();return r}catch(e){toast(e.message,1)}};
+const tabs=['Services','Build','Infra','Logs'];let tab=localStorage.tab||'Services',S=null,repos=[],buildTimer=null,curBuild=null,logOff=0;
+$('#nav').innerHTML=tabs.map(t=>`<button data-t="${t}">${t}</button>`).join('');
+$('#nav').onclick=e=>{if(e.target.dataset.t){tab=localStorage.tab=e.target.dataset.t;render()}};
+const bd=(t,c)=>`<span class="badge ${c}">${esc(t)}</span>`;
+const procBadge=p=>!p?bd('not running','warn'):bd(p.status+(p.ready==='Ready'?' · ready':''),p.status==='Running'?'ok':'bad');
+const healthBadge=h=>!h||h.ok===null?bd('n/a',''):bd(h.ok?'healthy '+h.ms+'ms':'down: '+h.detail,h.ok?'ok':'bad');
+
+async function refresh(){try{S=await api('GET','/state');$('#pcstat').textContent=S.process_compose.installed?(S.process_compose.up?'process-compose: up':'process-compose: not started'):'process-compose NOT installed';
+  if(tab==='Services'||tab==='Infra')render(true)}catch(e){toast(e.message,1)}}
+async function render(soft){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+  if(!S)return;({Services,Build,Infra,Logs})[tab](soft)}
+
+async function Services(){
+  const sv=S.services,names=Object.keys(sv);
+  const builds=await api('GET','/builds?ok=1&limit=100');
+  const rows=names.map(n=>{const v=sv[n],d=v.deployed,bs=builds.filter(b=>b.repo===v.repo);
+    return `<tr><td><b>${esc(n)}</b><div class="mut">${esc(v.kind)} · ${esc(v.repo||'')}${v.kind==='war'?' · JBoss':''}</div></td>
+    <td>${d?esc(d.branch)+' <span class="mut">@'+esc(d.commit)+'</span>':'<span class="mut">not deployed</span>'}</td>
+    <td>${procBadge(v.process)}</td><td>${healthBadge(v.health)} ${v.url?`<a href="${esc(v.url)}" target="_blank" rel="noopener">open</a>`:''}</td>
+    <td class="row"><select data-svc="${esc(n)}">${bs.length?bs.map(b=>`<option value="${esc(b.id)}">${esc(b.branch)} @${esc(b.commit)} · ${new Date(b.started*1000).toLocaleTimeString()}</option>`).join(''):'<option value="">no builds</option>'}</select>
+    <button class="p" data-a="deploy" data-n="${esc(n)}">Deploy</button><button data-a="start" data-n="${esc(n)}">Start</button><button data-a="restart" data-n="${esc(n)}">Restart</button><button data-a="stop" data-n="${esc(n)}">Stop</button><button class="d" data-a="undeploy" data-n="${esc(n)}">Undeploy</button><button data-a="logs" data-n="${esc(n)}">Logs</button></td></tr>`}).join('');
+  const stacks=Object.entries(S.stacks).map(([k,m])=>`<span class="row card" style="padding:6px 10px;display:inline-flex;margin-right:8px"><b>${esc(k)}</b><span class="mut">${esc(m.join(', '))}</span><button data-a="stack-up" data-n="${esc(k)}">Up</button><button data-a="stack-down" data-n="${esc(k)}">Down</button></span>`).join('');
+  $('#main').innerHTML=`<div class="card"><div class="row"><b>Stacks</b>${stacks||'<span class="mut">none configured</span>'}<span style="flex:1"></span><button data-a="sync">Sync process-compose</button><button class="d" data-a="down">Stop all</button></div></div>
+  <div class="card scroll"><table><thead><tr><th>Service</th><th>Deployed build</th><th>Process</th><th>Health</th><th>Actions</th></tr></thead><tbody>${rows||'<tr><td>No services in config.json</td></tr>'}</tbody></table></div>`}
+
+$('#main').onclick=e=>{const b=e.target.closest('button[data-a]');if(!b)return;const a=b.dataset.a,n=b.dataset.n;
+  if(a==='deploy'){const bid=$(`select[data-svc="${n}"]`).value;return act(()=>api('POST','/deploy',{service:n,build_id:bid}),'deployed '+n)}
+  if(a==='undeploy'){if(!confirm('Undeploy '+n+'?'))return;return act(()=>api('POST','/undeploy',{service:n}))}
+  if(['start','stop','restart'].includes(a))return act(()=>api('POST',`/services/${n}/${a}`),a+' '+n);
+  if(a==='stack-up')return act(()=>api('POST',`/stacks/${n}/up`));if(a==='stack-down')return act(()=>api('POST',`/stacks/${n}/down`));
+  if(a==='sync')return act(()=>api('POST','/project/sync'));if(a==='down'){if(confirm('Stop everything?'))return act(()=>api('POST','/project/down'))}
+  if(a==='logs'){tab='Logs';localStorage.tab=tab;window.logTarget=S.services[n]?.kind==='war'?'jboss-eap':n;render()}
+  if(a==='infra')return act(()=>api('POST',`/infra/${n}/${b.dataset.v}`));
+  if(a==='build')return startBuild();
+  if(a==='showlog'){showBuild(b.dataset.n)}};
+
+async function Build(){
+  if(!repos.length)repos=await api('GET','/repos');
+  const builds=await api('GET','/builds?limit=15');
+  $('#main').innerHTML=`<div class="card"><div class="row"><select id="repo">${repos.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select>
+  <select id="branch"></select><button id="fetchb">Fetch branches</button><button class="p" data-a="build">Build</button>
+  <span class="mut" id="rinfo"></span></div></div>
+  <div class="card"><b>Recent builds</b><table><tbody>${builds.map(b=>`<tr><td>${esc(b.repo)}</td><td>${esc(b.branch)}</td><td>${esc(b.commit||'')}</td>
+  <td>${bd(b.status,b.status==='success'?'ok':b.status==='failed'?'bad':'warn')}</td><td class="mut">${esc(b.artifacts.join(', '))}</td><td><button data-a="showlog" data-n="${esc(b.id)}">Log</button></td></tr>`).join('')}</tbody></table>
+  <pre id="blog">Select a build to see its log.</pre></div>`;
+  const loadBranches=async(f)=>{const r=$('#repo').value;if(!r)return;$('#branch').innerHTML='<option>loading…</option>';
+    try{const bs=await api('GET',`/repos/${encodeURIComponent(r)}/branches${f?'?fetch=1':''}`);$('#branch').innerHTML=bs.map(x=>`<option>${esc(x)}</option>`).join('');
+      const info=repos.find(x=>x.name===r);$('#rinfo').textContent=info?`${info.build_system} · checked out: ${info.current_branch}`:''}catch(e){toast(e.message,1)}};
+  $('#repo').onchange=()=>loadBranches(false);$('#fetchb').onclick=()=>loadBranches(true);loadBranches(false);
+  if(curBuild)showBuild(curBuild)}
+async function startBuild(){const repo=$('#repo').value,branch=$('#branch').value;
+  const m=await act(()=>api('POST','/builds',{repo,branch}),'build started');if(m)showBuild(m.id)}
+function showBuild(id){curBuild=id;logOff=0;clearInterval(buildTimer);const pre=$('#blog');if(!pre)return;pre.textContent='';
+  const tick=async()=>{try{const r=await api('GET',`/builds/${id}/log?offset=${logOff}`);if(r.text){pre.textContent+=r.text;pre.scrollTop=pre.scrollHeight}logOff=r.offset;
+    const m=await api('GET','/builds/'+id);if(m.status!=='running'){clearInterval(buildTimer);if(!r.text)toast('build '+m.status,m.status!=='success')}}catch(e){clearInterval(buildTimer)}};
+  tick();buildTimer=setInterval(tick,1000)}
+
+function Infra(){const rows=Object.entries(S.infra).map(([n,v])=>`<tr><td><b>${n}</b></td><td>${v.enabled?bd('enabled','ok'):bd('disabled','')}</td><td>${procBadge(v.process)}</td>
+  <td class="row"><button class="p" data-a="infra" data-n="${n}" data-v="start">Start</button><button data-a="infra" data-n="${n}" data-v="restart">Restart</button><button data-a="infra" data-n="${n}" data-v="stop">Stop</button></td></tr>`).join('');
+  const links={grafana:'http://localhost:3000',prometheus:'http://localhost:9090',loki:'http://localhost:3100/ready'};
+  $('#main').innerHTML=`<div class="card"><table><thead><tr><th>Service</th><th>Config</th><th>Process</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>
+  <p class="mut">Open: ${Object.entries(links).map(([k,u])=>`<a href="${u}" target="_blank" rel="noopener">${k}</a>`).join(' · ')}</p></div>
+  <div class="card"><b>JBoss EAP</b> ${S.jboss.configured?procBadge(S.jboss.process):'<span class="mut">jboss.home not configured</span>'}</div>`}
+
+async function Logs(){const names=[...Object.keys(S.services),'jboss-eap',...Object.keys(S.infra)];
+  $('#main').innerHTML=`<div class="card"><div class="row"><select id="ln">${names.map(n=>`<option ${n===window.logTarget?'selected':''}>${n}</option>`).join('')}</select><input id="lines" type="number" value="300" style="width:90px">
+  <label><input type="checkbox" id="follow" checked> follow</label></div><pre id="plog"></pre></div>`;
+  const load=async()=>{if(tab!=='Logs')return;try{const r=await api('GET',`/logs/${$('#ln').value}?n=${$('#lines').value}`);const p=$('#plog');if(!p)return;p.textContent=r.text;p.scrollTop=p.scrollHeight}catch(e){const p=$('#plog');if(p)p.textContent=e.message}};
+  $('#ln').onchange=load;load();clearInterval(window.lt);window.lt=setInterval(()=>{if($('#follow')?.checked)load()},3000)}
+
+refresh();setInterval(()=>{if(tab==='Services'||tab==='Infra')refresh()},5000);
+</script></body></html>

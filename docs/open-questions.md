@@ -102,3 +102,4 @@ Deployment criticality:
 | OQ-10 | Which DB for configuration, audit and versioning? | **PostgreSQL** (product owner, 2026-09-28) → ADR-0019, LLD-15 |
 | OQ-12 | Write capability in v1 | Reviewed change proposals only → ADR-0009, LLD-11 |
 | OQ-32 | Consolidate the three independent canonical-JSON writers on one implementation | **Done — `core.json.CanonicalJson` is now the single writer, verified against the three existing test suites plus new cross-module regression tests** | lld-chief-architect | ADR-0020 | RESOLVED → ADR-0020 |
+| OQ-LD-1 | local-dev: validate process-compose CLI usage (`up -D --tui=false`, `project update`, `process list -o json`) and JBoss EAP `/health/ready` against real installs on macOS | OPEN | — | ADR-0029 | OPEN |

@@ -1,0 +1,38 @@
+{
+  "workspace": "~/work",
+  "builds_dir": "~/localdev",
+  "dashboard_port": 8765,
+  "process_compose_port": 8099,
+  "java_home": "auto:21",
+  "jboss": {
+    "home": "/opt/jboss-eap-8.0",
+    "java_home": "auto:17",
+    "port_offset": 0,
+    "java_opts": "-Xms256m -Xmx1g",
+    "always_on": false
+  },
+  "repos": {
+    "legacy-billing": {
+      "build_cmd": "mvn -B -DskipTests -Pjboss package",
+      "artifact_globs": ["**/target/*.war"],
+      "java_home": "auto:17"
+    }
+  },
+  "services": {
+    "orders-api": {
+      "kind": "jar", "repo": "orders", "artifact": "orders-*.jar", "port": 8081,
+      "java_opts": "-Xmx512m", "args": "--spring.profiles.active=local",
+      "env": {"DB_URL": "jdbc:postgresql://localhost:5432/orders"},
+      "depends_on": ["postgres"]
+    },
+    "billing-core": {"kind": "war", "repo": "legacy-billing", "artifact": "billing-core*.war", "context": "billing-core"},
+    "billing-web":  {"kind": "war", "repo": "legacy-billing", "artifact": "billing-web*.war",  "context": "billing"},
+    "billing-ws":   {"kind": "war", "repo": "legacy-billing", "artifact": "billing-ws*.war",   "context": "billing-ws",
+                     "health": {"url": "http://localhost:8080/billing-ws/health"}}
+  },
+  "stacks": {
+    "billing": ["billing-core", "billing-web", "billing-ws"],
+    "shop": ["orders-api", "billing-core", "billing-web"]
+  },
+  "infra": {"enabled": ["prometheus", "loki", "grafana"], "prometheus_scrape_path": "/actuator/prometheus"}
+}

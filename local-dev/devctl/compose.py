@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 import shlex
+import sys
 from pathlib import Path
 
 from . import config, infra, javahome
 
 JBOSS = "jboss-eap"
+K6 = "k6-"
+SHIPPER = "log-shipper"
+
+
+def log_dir() -> Path:
+    return config.HOME / "logs"
 
 
 def jboss_base(cfg: dict) -> Path:
@@ -100,4 +107,33 @@ def build_project(cfg: dict, st: dict) -> dict:
         if not active:
             p["disabled"] = True
         procs[name] = p
+    for name, t in cfg.get("loadtests", {}).items():
+        procs[K6 + name] = _k6_process(cfg, name, t)
+
+    if cfg["infra"].get("ship_logs", True) and "loki" in cfg["infra"]["enabled"]:
+        root = Path(__file__).resolve().parent.parent
+        procs[SHIPPER] = {"command": f"PYTHONPATH={shlex.quote(str(root))} exec {shlex.quote(sys.executable)} -m devctl ship-logs",
+                          "namespace": "infra", "depends_on": {"loki": {"condition": "process_healthy"}},
+                          "availability": {"restart": "always", "backoff_seconds": 5}}
+    for name, p in procs.items():
+        p.setdefault("log_location", str(log_dir() / f"{name}.log"))
     return {"version": "0.5", "is_strict": False, "processes": procs}
+
+
+def _k6_process(cfg: dict, name: str, t: dict) -> dict:
+    """On-demand k6 run (disabled until started). Metrics go to Prometheus remote-write (tag testid=<name>)."""
+    script = Path(t["script"]).expanduser()
+    if not script.is_absolute():
+        script = config.path(cfg, "loadtest_dir") / script
+    cmd = ["k6", "run", "-o", "experimental-prometheus-rw", "--tag", f"testid={name}"]
+    if t.get("vus"):
+        cmd += ["--vus", str(int(t["vus"]))]
+    if t.get("duration"):
+        cmd += ["--duration", str(t["duration"])]
+    for k, v in t.get("env", {}).items():
+        cmd += ["-e", f"{k}={v}"]
+    cmd.append(str(script))
+    return {"command": shlex.join(cmd), "namespace": "loadtest", "working_dir": str(config.path(cfg, "loadtest_dir")),
+            "disabled": True, "availability": {"restart": "no"},
+            "environment": [f"K6_PROMETHEUS_RW_SERVER_URL=http://localhost:9090/api/v1/write",
+                            "K6_PROMETHEUS_RW_TREND_STATS=avg,p(95),p(99),max"]}

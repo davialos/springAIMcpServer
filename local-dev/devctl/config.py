@@ -21,14 +21,17 @@ DEFAULTS = {
     "repos": {},     # name -> {build_cmd, artifact_globs, java_home, in_place, env}
     "services": {},  # name -> see config.example.json
     "stacks": {},    # name -> [service, ...]
-    "infra": {"enabled": ["prometheus", "loki", "grafana"], "prometheus_scrape_path": "/actuator/prometheus"},
+    "infra": {"enabled": ["prometheus", "loki", "grafana"], "prometheus_scrape_path": "/actuator/prometheus",
+              "loki_url": "http://localhost:3100", "ship_logs": True},
+    "loadtest_dir": "~/localdev/loadtests",  # k6 scripts live here (relative script paths resolve against it)
+    "loadtests": {},                          # name -> {script, vus, duration, env}
 }
 
 
 def _merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in over.items():
-        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) and k not in ("repos", "services", "stacks") else v
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) and k not in ("repos", "services", "stacks", "loadtests") else v
     return out
 
 

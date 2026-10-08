@@ -58,6 +58,8 @@ $('#main').onclick=e=>{const b=e.target.closest('button[data-a]');if(!b)return;c
   if(a==='stack-up')return act(()=>api('POST',`/stacks/${n}/up`));if(a==='stack-down')return act(()=>api('POST',`/stacks/${n}/down`));
   if(a==='sync')return act(()=>api('POST','/project/sync'));if(a==='down'){if(confirm('Stop everything?'))return act(()=>api('POST','/project/down'))}
   if(a==='logs'){tab='Logs';localStorage.tab=tab;window.logTarget=S.services[n]?.kind==='war'?'jboss-eap':n;render()}
+  if(a==='lt')return act(()=>api('POST',`/loadtests/${n}/${b.dataset.v}`));
+  if(a==='logs-k6'){tab='Logs';localStorage.tab=tab;window.logTarget='k6-'+n;render()}
   if(a==='infra')return act(()=>api('POST',`/infra/${n}/${b.dataset.v}`));
   if(a==='build')return startBuild();
   if(a==='showlog'){showBuild(b.dataset.n)}};
@@ -88,9 +90,13 @@ function Infra(){const rows=Object.entries(S.infra).map(([n,v])=>`<tr><td><b>${n
   const links={grafana:'http://localhost:3000',prometheus:'http://localhost:9090',loki:'http://localhost:3100/ready'};
   $('#main').innerHTML=`<div class="card"><table><thead><tr><th>Service</th><th>Config</th><th>Process</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>
   <p class="mut">Open: ${Object.entries(links).map(([k,u])=>`<a href="${u}" target="_blank" rel="noopener">${k}</a>`).join(' · ')}</p></div>
+  <div class="card"><b>Load tests (k6 → Prometheus → Grafana)</b><table><tbody>${Object.entries(S.loadtests||{}).map(([n,v])=>`<tr><td><b>${esc(n)}</b><div class="mut">${esc(v.script)} ${v.vus?v.vus+' VUs':''} ${esc(v.duration||'')}</div></td><td>${procBadge(v.process)}</td>
+  <td class="row"><button class="p" data-a="lt" data-n="${esc(n)}" data-v="start">Run</button><button data-a="lt" data-n="${esc(n)}" data-v="stop">Stop</button><button data-a="logs-k6" data-n="${esc(n)}">Output</button></td></tr>`).join('')||'<tr><td class="mut">No loadtests in config.json</td></tr>'}</tbody></table></div>
+  <div class="card"><b>Log shipping → Loki</b> ${S.log_shipper?procBadge(S.log_shipper):'<span class="mut">not running (needs loki enabled + infra.ship_logs)</span>'}
+  <p class="mut">Grafana → Explore → Loki: <code>{job="devctl"}</code>, filter by <code>service</code> (each process, <code>jboss-server</code>, <code>build</code>).</p></div>
   <div class="card"><b>JBoss EAP</b> ${S.jboss.configured?procBadge(S.jboss.process):'<span class="mut">jboss.home not configured</span>'}</div>`}
 
-async function Logs(){const names=[...Object.keys(S.services),'jboss-eap',...Object.keys(S.infra)];
+async function Logs(){const names=[...Object.keys(S.services),'jboss-eap',...Object.keys(S.infra),'log-shipper',...Object.keys(S.loadtests||{}).map(k=>'k6-'+k)];
   $('#main').innerHTML=`<div class="card"><div class="row"><select id="ln">${names.map(n=>`<option ${n===window.logTarget?'selected':''}>${n}</option>`).join('')}</select><input id="lines" type="number" value="300" style="width:90px">
   <label><input type="checkbox" id="follow" checked> follow</label></div><pre id="plog"></pre></div>`;
   const load=async()=>{if(tab!=='Logs')return;try{const r=await api('GET',`/logs/${$('#ln').value}?n=${$('#lines').value}`);const p=$('#plog');if(!p)return;p.textContent=r.text;p.scrollTop=p.scrollHeight}catch(e){const p=$('#plog');if(p)p.textContent=e.message}};

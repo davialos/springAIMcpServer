@@ -18,6 +18,8 @@ logs and health checks from a TUI, a web UI and AI agents (Claude, Cursor).
 - All `war` services share **one JBoss EAP process with a private base dir**; deploy = copy into `deployments/`.
 - Infra runs as docker containers under process-compose; Prometheus targets are generated from the services.
 - Dashboard is loopback-only with Host and `X-Devctl` header checks because it can execute configured commands.
+- **k6** runs as on-demand process-compose processes writing to Prometheus remote-write; **logs** go to Loki via a
+  small stdlib shipper tailing process-compose `log_location` files (chosen over Promtail/Alloy: testable here, no extra image).
 
 ## Consequences
 Not a Spring module: no effect on the starter, BOM or offline repo. process-compose CLI behaviour is verified

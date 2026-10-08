@@ -118,6 +118,8 @@ def route(method: str, path: str, q: dict, body: dict):
             return {"result": ops.service_control(cfg, seg[1], seg[2])}
         if len(seg) == 3 and seg[0] == "stacks":
             return {"result": ops.stack_control(cfg, seg[1], seg[2])}
+        if len(seg) == 3 and seg[0] == "loadtests":
+            return {"result": ops.loadtest_control(cfg, seg[1], seg[2])}
         if len(seg) == 3 and seg[0] == "infra":
             return {"result": ops.infra_control(cfg, seg[1], seg[2])}
         if seg == ["project", "sync"]:

@@ -41,6 +41,8 @@ def main(argv=None) -> int:
         add(a, f"{a} a service", "service")
     add("stack", "up|down a stack", "action", "name")
     add("infra", "start|stop|restart prometheus|loki|grafana|postgres", "action", "name")
+    add("loadtest", "start|stop a k6 load test", "action", "name")
+    add("ship-logs", "run the Loki log shipper (normally managed by process-compose)")
     add("logs", "process logs", "name")
     add("up", "(re)generate the project and start/update process-compose headless")
     add("down", "stop everything")
@@ -96,6 +98,11 @@ def _dispatch(a, cfg) -> int:
         _p(ops.stack_control(cfg, a.name, a.action))
     elif c == "infra":
         _p(ops.infra_control(cfg, a.name, a.action))
+    elif c == "loadtest":
+        _p(ops.loadtest_control(cfg, a.name, a.action))
+    elif c == "ship-logs":
+        from . import shipper
+        shipper.Shipper(cfg).run()
     elif c == "logs":
         _p(pc.logs(cfg, a.name))
     elif c == "up":
@@ -137,5 +144,7 @@ def _status(s) -> None:
         state = (v["process"] or {}).get("status", "-")
         print(f"{n:24} {v['kind']:7} {state:10} health={h.get('detail', '-'):18} "
               f"{(dep['branch'] + '@' + str(dep['commit'])) if dep else 'not deployed'}")
+    for n, v in s["loadtests"].items():
+        print(f"k6/{n:21} {(v['process'] or {}).get('status', 'idle')}")
     for n, v in s["infra"].items():
         print(f"infra/{n:18} {(v['process'] or {}).get('status', 'off' if not v['enabled'] else '-')}")

@@ -34,6 +34,8 @@ Put `local-dev/bin` on your PATH (or alias `devctl`).
 | `services.<name>` | `kind`: `jar` (own process, `SERVER_PORT`), `war` (hot-deployed into JBoss), `command` (any process: `cmd`, `cwd`); `repo`, `artifact` (glob over build artifacts), `port`, `health` (`{url}` or `{port}`), `env`, `depends_on`, `context` (war) |
 | `stacks.<name>` | services started/stopped together (e.g. several WARs that must run side by side) |
 | `jboss` | `home` (EAP install), `port_offset`, `java_opts`, `always_on` |
+| `loadtests.<name>` | k6 run: `script` (relative to `loadtest_dir`), `vus`, `duration`, `env` → process `k6-<name>`, started on demand |
+| `infra.ship_logs` / `loki_url` | ship all process, JBoss and build logs to Loki (default on when `loki` is enabled) |
 | `infra.enabled` | any of `prometheus`, `loki`, `grafana`, `postgres` (docker containers; Prometheus auto-scrapes every jar service on `/actuator/prometheus`; Grafana comes with Prometheus + Loki datasources) |
 
 ### Multiple WARs on JBoss EAP
@@ -42,6 +44,19 @@ All `kind: war` services share **one** JBoss EAP process (`jboss-eap` in process
 Deploying a WAR copies it to `deployments/<context>.war` (hot deploy); undeploy removes it. Readiness is
 `http://127.0.0.1:9990/health/ready` (+ `port_offset`). Each WAR gets its own health URL
 (default `http://localhost:8080/<context>/`). Different Java versions per service: set `java_home` on `jboss`.
+
+## Load tests (k6)
+Define runs under `loadtests` and put the scripts in `loadtest_dir` (the repo's own generator can produce them:
+`scripts/loadtest.sh`, docs/integration/load-testing-guide.md). `devctl loadtest start orders-smoke` (or **Infra → Run**)
+runs `k6 run -o experimental-prometheus-rw --tag testid=<name>`; Prometheus is started with the remote-write receiver
+so k6 metrics (`k6_*`, filter `testid`) show up in Grafana next to your services' `/actuator/prometheus` metrics.
+Needs `k6` on PATH and `prometheus` in `infra.enabled`. Output: **Logs → k6-<name>**.
+
+## Logs in Loki
+The `log-shipper` process (`devctl ship-logs`, stdlib, no Promtail/Alloy) tails `~/.localdev/logs/<process>.log`
+(process-compose writes one per process via `log_location`), JBoss `server.log` and every build log, and pushes to
+Loki's HTTP API. Grafana → Explore → Loki: `{job="devctl"}`, narrow with `service` (`orders-api`, `jboss-server`,
+`build`, …). Existing log history at start-up is not replayed; if Loki is down lines are buffered (5000 per stream) and retried.
 
 ## Use it
 
@@ -78,6 +93,6 @@ shell profile. Branch names are validated (no option injection). Grafana runs wi
 
 ## Verified vs. not
 Unit/integration tests cover discovery, worktree builds, artifact collection, multi-WAR deploy, project generation,
-MCP and the dashboard guards (Linux, Python 3.13). **Not yet run against a real process-compose, Docker or JBoss EAP
-on a Mac** — the process-compose CLI flags (`up -D --tui=false`, `project update`, `process list -o json`) follow its
+MCP and the dashboard guards (Linux, Python 3.13). **k6, the Loki push and the generated project are tested without the real tools (a fake Loki HTTP server for the shipper). **Not yet run against a real process-compose, Docker or JBoss EAP
+on a Mac**, nor k6 → Prometheus remote-write or the Loki datasource in Grafana — the process-compose CLI flags (`up -D --tui=false`, `project update`, `process list -o json`) follow its
 documented v1.x CLI; check `devctl up` / `devctl status` first and see docs/open-questions.md OQ-LD-1.

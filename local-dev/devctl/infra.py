@@ -62,6 +62,7 @@ def catalog(cfg: dict) -> dict:
     return {
         "prometheus": _docker("prometheus", "prom/prometheus:latest", ["9090:9090"],
                               [f"{d}/prometheus.yml:/etc/prometheus/prometheus.yml:ro"],
+                              args="--config.file=/etc/prometheus/prometheus.yml --web.enable-remote-write-receiver",
                               health={"url": "http://localhost:9090/-/ready"}),
         "loki": _docker("loki", "grafana/loki:latest", ["3100:3100"], [f"{d}/loki.yaml:/etc/loki/local-config.yaml:ro"],
                         args="-config.file=/etc/loki/local-config.yaml", health={"url": "http://localhost:3100/ready"}),

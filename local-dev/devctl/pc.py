@@ -26,6 +26,7 @@ def _run(cfg: dict, *args: str, timeout=30) -> subprocess.CompletedProcess:
 def write_project(cfg: dict) -> dict:
     proj = compose.build_project(cfg, config.state())
     config.HOME.mkdir(parents=True, exist_ok=True)
+    compose.log_dir().mkdir(parents=True, exist_ok=True)
     config.PC_FILE.write_text(json.dumps(proj, indent=2))  # JSON is valid YAML
     return proj
 

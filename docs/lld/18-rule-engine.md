@@ -76,6 +76,8 @@ alphabetically first available text.
   `poll-interval` per tenant and reloads only what moved. Rules compile lazily once per snapshot. If the store is down the
   last snapshot is served (fail the feature, not the host); a tenant never loaded throws `RuleCatalogUnavailableException`.
   Memory is bounded by `max-tenants`.
+- The CEL standard macros (`has`, `all`, `exists`, `exists_one`, `map`, `filter`) are enabled in both environments (ADR-0030; they were
+  previously off, so comprehensions were rejected at save time). The extension libraries (strings, math, sets) are not.
 - Limits: expression ≤ 8192 chars, parse depth 64, comprehension iterations ≤ 10 000.
 
 ## 6. Communications

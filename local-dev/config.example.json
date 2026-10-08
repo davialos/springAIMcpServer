@@ -109,5 +109,15 @@
   },
   "metrics": {
     "interval_seconds": 2
+  },
+  "ai": {
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "confirm_writes": true,
+    "max_steps": 15,
+    "fallbacks": true
+  },
+  "mcp": {
+    "http_token": ""
   }
 }

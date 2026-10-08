@@ -103,3 +103,4 @@ Deployment criticality:
 | OQ-12 | Write capability in v1 | Reviewed change proposals only → ADR-0009, LLD-11 |
 | OQ-32 | Consolidate the three independent canonical-JSON writers on one implementation | **Done — `core.json.CanonicalJson` is now the single writer, verified against the three existing test suites plus new cross-module regression tests** | lld-chief-architect | ADR-0020 | RESOLVED → ADR-0020 |
 | OQ-LD-1 | local-dev: validate process-compose CLI usage (`up -D --tui=false`, `project update`, `process list -o json`), JBoss EAP `/health/ready`, and real k6 `--summary-export` + remote-write metric names against real installs on macOS | OPEN | — | ADR-0029 | OPEN |
+| OQ-LD-2 | local-dev MCP: confirm the generated configs against live Cursor, Antigravity (config file path varies by version; `serverUrl` for HTTP), VS Code, Claude Desktop, Windsurf, Gemini CLI and Codex - only Claude Code was exercised (stdio + HTTP) | OPEN | — | ADR-0029 | OPEN |

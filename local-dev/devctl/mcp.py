@@ -1,127 +1,152 @@
-"""Stdio MCP server (JSON-RPC 2.0, newline-delimited) so Claude / Cursor / other agents can drive local builds & deploys.
+"""MCP server for devctl - lets Claude Code, Cursor, Antigravity, VS Code, Windsurf, Codex, Gemini CLI ... drive local
+builds, deploys, logs, load tests and profiling.
 
-Registered in an agent as:  command "python3", args ["/path/to/local-dev/bin/devctl-mcp"]  (see README).
+Transports: stdio (``bin/devctl-mcp``, newline-delimited JSON-RPC) and Streamable HTTP (``POST /mcp`` on the dashboard,
+stateless, JSON responses). Both call :func:`handle`. Tools come from tools.py; resources and prompts give agents
+context and ready-made workflows.
 """
 from __future__ import annotations
 
 import json
 import sys
 
-from . import __version__, builds, config, jfr, jvm, loadgen, loadrun, metrics, ops, pc, repos
+from . import __version__, agentops, builds, config, loadrun, ops, tools
 
-PROTOCOL = "2025-06-18"
-S = {"type": "string"}
+VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
+INSTRUCTIONS = """devctl controls the developer's LOCAL machine: git worktree builds of any repo@branch, deployments (Spring Boot
+jars as processes, WARs into one JBoss EAP), process-compose processes, logs, live service metrics, k6 load tests and
+Java Flight Recorder profiling with an analyzer that names the hot code lines.
 
-def _t(desc, props=None, req=()):
-    return {"description": desc, "inputSchema": {"type": "object", "properties": props or {}, "required": list(req)}}
+How to work with it:
+- Orient first: `status` (all services) or `diagnose <service>` (one service, everything relevant). Do not guess names -
+  `list_repos`, `list_branches`, `config_get` give the real ones.
+- To run a branch: `ship repo branch service` (build -> deploy -> wait healthy) instead of chaining calls yourself.
+  After `build` use `wait_build`; after `deploy`/start use `wait_healthy`.
+- Failures: read `log_tail` / `recent_errors`, then `search_logs` with a regex; report the root cause with the log line.
+- Performance: `perf_snapshot` for now, `loadtest_discover` -> `loadtest_create` -> `loadtest_run` -> `loadtest_result`
+  for a load test; the result's JFR verdict and `jfr_summary` give file:line hot spots - quote them.
+- New project: `config_set_workspace`, then `config_set` section=repos/services (read the repo's build files first to fill
+  artifact globs, ports and health URLs).
+- Tools marked destructive (undeploy, config_remove) change things the developer may care about - say what you will do first.
+Everything is local; nothing here deploys to shared environments."""
 
+RESOURCES = {
+    "devctl://status": ("Status of all services", "application/json", lambda c: ops.status(c)),
+    "devctl://config": ("devctl configuration (services, repos, stacks, load tests)", "application/json",
+                        lambda c: {k: c[k] for k in ("workspace", "services", "repos", "stacks", "loadtests", "jfr", "infra")}),
+    "devctl://builds/recent": ("Recent builds", "application/json", lambda c: builds.list_builds(c, 20)),
+    "devctl://loadruns/recent": ("Recent load-test runs", "application/json", lambda c: loadrun.list_runs(c, 20)),
+    "devctl://guide": ("How to use the devctl tools", "text/markdown", lambda c: INSTRUCTIONS),
+}
 
-TOOLS = {
-    "list_repos": (_t("List git repositories found in the configured workspace folder."), lambda c, a: repos.discover(c)),
-    "list_branches": (_t("List branches of a repo (optionally git fetch first).", {"repo": S, "fetch": {"type": "boolean"}}, ["repo"]),
-                      lambda c, a: repos.branches(c, a["repo"], a.get("fetch", False))),
-    "build": (_t("Start a local build of repo@branch in an isolated git worktree. Returns the build id; poll build_status.",
-                 {"repo": S, "branch": S}, ["repo", "branch"]), lambda c, a: builds.start(c, a["repo"], a["branch"])),
-    "build_status": (_t("Status of a build plus the last part of its log.", {"build_id": S, "tail_chars": {"type": "integer"}}, ["build_id"]),
-                     lambda c, a: {**builds.read_meta(c, a["build_id"]),
-                                   "log_tail": builds.read_log(c, a["build_id"])["text"][-int(a.get("tail_chars", 4000)):]}),
-    "list_builds": (_t("Recent builds (newest first).", {"repo": S, "only_success": {"type": "boolean"}}),
-                    lambda c, a: builds.list_builds(c, 20, a.get("repo", ""), a.get("only_success", False))),
-    "deploy": (_t("Deploy a build's artifact to a service (jar -> process, war -> JBoss EAP deployments). Omit build_id to use "
-                  "the newest successful build (optionally of a branch).", {"service": S, "build_id": S, "branch": S}, ["service"]),
-               lambda c, a: ops.deploy(c, a["service"], a["build_id"]) if a.get("build_id") else ops.deploy_latest(c, a["service"], a.get("branch", ""))),
-    "undeploy": (_t("Undeploy a service.", {"service": S}, ["service"]), lambda c, a: ops.undeploy(c, a["service"])),
-    "status": (_t("Everything: services (deployed build, process state, health), stacks, infra, JBoss."), lambda c, a: ops.status(c)),
-    "service_control": (_t("start | stop | restart a service.", {"service": S, "action": {"enum": ["start", "stop", "restart"]}}, ["service", "action"]),
-                        lambda c, a: ops.service_control(c, a["service"], a["action"])),
-    "stack_control": (_t("up | down a stack of services (multi-WAR apps share one JBoss).", {"stack": S, "action": {"enum": ["up", "down"]}}, ["stack", "action"]),
-                      lambda c, a: ops.stack_control(c, a["stack"], a["action"])),
-    "infra_control": (_t("start | stop | restart prometheus, loki, grafana or postgres.", {"name": S, "action": {"enum": ["start", "stop", "restart"]}}, ["name", "action"]),
-                      lambda c, a: ops.infra_control(c, a["name"], a["action"])),
-    "perf_snapshot": (_t("Live performance of a service right now (2 s window): req/s, avg/p95 latency, 5xx %, heap, CPU, "
-                         "threads, GC, pool, plus the busiest endpoints. Reads /actuator/prometheus (or /actuator/metrics).",
-                         {"service": S}, ["service"]), lambda c, a: metrics.snapshot(c, a["service"])),
-    "perf_readiness": (_t("Which observability/load-test endpoints a service exposes and the minimal change for each missing one.",
-                          {"service": S}, ["service"]), lambda c, a: metrics.readiness(c, a["service"])),
-    "jfr_list_jvms": (_t("Local JVMs (pid, main class, devctl service if started by devctl)."), lambda c, a: jvm.list_jvms(c)),
-    "jfr_snapshot": (_t("Dump the continuous JFR recording (last jfr.maxage) of a service or pid now; analysis starts automatically.",
-                        {"service": S, "pid": {"type": "integer"}}),
-                     lambda c, a: jfr.snapshot(c, a.get("service", ""), int(a.get("pid") or 0))),
-    "jfr_record": (_t("Timed JFR recording of a service or any local JVM pid.",
-                      {"service": S, "pid": {"type": "integer"}, "seconds": {"type": "integer"}}),
-                   lambda c, a: jfr.record(c, int(a.get("seconds", 60)), a.get("service", ""), int(a.get("pid") or 0))),
-    "jfr_list": (_t("JFR recordings with analysis status, health and score.", {"service": S}),
-                 lambda c, a: jfr.list_recordings(c, a.get("service", ""))),
-    "jfr_analyze": (_t("(Re)analyze a recording with the JFR analyzer.", {"id": S}, ["id"]), lambda c, a: jfr.analyze(c, a["id"])),
-    "jfr_summary": (_t("Analysis summary of a recording: status, score, key metrics, top issues, hot spots, findings.",
-                       {"id": S}, ["id"]), lambda c, a: jfr.summary(c, a["id"])),
-    "loadtest_discover": (_t("Discover a service's HTTP endpoints (OpenAPI or actuator mappings).", {"service": S, "base_url": S}),
-                          lambda c, a: loadgen.discover(c, a.get("service", ""), a.get("base_url", ""))),
-    "loadtest_create": (_t("Generate a k6 script and register it. endpoints: [{method, path, weight?, body?}]; profile: "
-                           "smoke|load|stress|spike|soak; path_values: {param: [values]}.",
-                           {"name": S, "service": S, "endpoints": {"type": "array", "items": {"type": "object"}},
-                            "profile": S, "vus": {"type": "integer"}, "duration": S, "path_values": {"type": "object"},
-                            "p95_ms": {"type": "integer"}, "max_error_rate": {"type": "number"}},
-                           ["name", "service", "endpoints"]),
-                        lambda c, a: loadgen.create(c, a["name"], a["service"], a["endpoints"],
-                                                    **{k: v for k, v in a.items() if k not in ("name", "service", "endpoints")})),
-    "loadtest_run": (_t("Run a load test: JFR on the target, k6, live service metrics, then JFR analysis. Returns the run id.",
-                        {"name": S, "vus": {"type": "integer"}, "duration": S}, ["name"]),
-                     lambda c, a: loadrun.start(c, a["name"], int(a.get("vus") or 0), a.get("duration", ""))),
-    "loadtest_result": (_t("Status/results of a load run: k6 figures, service-side peaks, JFR analysis.", {"run_id": S}, ["run_id"]),
-                        lambda c, a: loadrun.read(c, a["run_id"])),
-    "loadtest_runs": (_t("Recent load runs."), lambda c, a: loadrun.list_runs(c, 20)),
-    "loadtest_stop": (_t("Stop a running load run (k6 is interrupted; JFR is still saved and analyzed).", {"run_id": S}, ["run_id"]),
-                      lambda c, a: loadrun.stop(c, a["run_id"])),
-    "logs": (_t("Last N log lines of a process (service, jboss-eap, grafana...).", {"name": S, "lines": {"type": "integer"}}, ["name"]),
-             lambda c, a: pc.logs(c, a["name"], int(a.get("lines", 100)))),
-    "sync_project": (_t("Regenerate and apply the process-compose project (starts it headless if not running)."), lambda c, a: pc.sync(c)),
+PROMPTS = {
+    "ship-branch": ("Build a branch, deploy it locally and confirm it is healthy",
+                    [("repo", True), ("branch", True), ("service", True)],
+                    "Run {branch} of {repo} locally as {service}: call `ship`, then if it fails find the cause with "
+                    "`search_logs`/`diagnose` and tell me the exact error line and a fix. If it succeeds, give me the URL and "
+                    "a `perf_snapshot`."),
+    "investigate-service": ("Find out why a local service misbehaves", [("service", True)],
+                            "Investigate {service}: start with `diagnose`, then dig into logs (`search_logs` for exceptions) and, if it "
+                            "is slow, `perf_snapshot` and the latest JFR analysis. Finish with root cause, evidence and the fix."),
+    "performance-check": ("Load test a service and explain the bottleneck", [("service", True), ("vus", False), ("duration", False)],
+                          "Load test {service}: check `perf_readiness`, discover endpoints, create a 'load' test with the GET "
+                          "endpoints ({vus} VUs, {duration} hold), run it, wait for the result, then explain throughput, p95, errors "
+                          "and the JFR hot spots with file:line and what to change."),
+    "onboard-project": ("Register a repository of the workspace as a local service", [("repo", True)],
+                        "Onboard {repo}: read its build files (pom.xml/build.gradle/package.json) and application config to find the "
+                        "artifact, port, context path and health URL; then `config_set` the repo and service, `ship` its default "
+                        "branch and confirm it is healthy. Explain what you configured."),
 }
 
 
-def _reply(id_, result=None, error=None):
-    msg = {"jsonrpc": "2.0", "id": id_}
-    msg["error" if error else "result"] = error or result
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+def _ok(id_, result):
+    return {"jsonrpc": "2.0", "id": id_, "result": result}
 
 
-def handle(req: dict):
-    """Returns the response dict for a request, or None for notifications."""
-    m, id_ = req.get("method"), req.get("id")
+def _err(id_, code, msg):
+    return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": msg}}
+
+
+def _annotations(effect: str) -> dict:
+    return {"readOnlyHint": effect == "read", "destructiveHint": effect == "destroy",
+            "idempotentHint": effect == "read", "openWorldHint": False}
+
+
+def handle(req):
+    """One JSON-RPC message (or a batch list) in; the response (or None for notifications) out."""
+    if isinstance(req, list):
+        out = [r for r in (handle(x) for x in req) if r is not None]
+        return out or None
+    if not isinstance(req, dict):
+        return _err(None, -32600, "invalid request")
+    m, id_, p = req.get("method"), req.get("id"), req.get("params") or {}
     if id_ is None:
-        return None
-    if m == "initialize":
-        return {"jsonrpc": "2.0", "id": id_, "result": {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
-                                                         "serverInfo": {"name": "devctl", "version": __version__}}}
-    if m == "ping":
-        return {"jsonrpc": "2.0", "id": id_, "result": {}}
-    if m == "tools/list":
-        return {"jsonrpc": "2.0", "id": id_, "result": {"tools": [{"name": n, **spec} for n, (spec, _) in TOOLS.items()]}}
-    if m == "tools/call":
-        p = req.get("params", {})
-        name = p.get("name")
-        if name not in TOOLS:
-            return {"jsonrpc": "2.0", "id": id_, "error": {"code": -32602, "message": f"unknown tool {name}"}}
-        try:
-            out = TOOLS[name][1](config.load(), p.get("arguments") or {})
-            text, err = (out if isinstance(out, str) else json.dumps(out, indent=2, default=str)), False
-        except Exception as e:
-            text, err = f"{type(e).__name__}: {e}", True
-        return {"jsonrpc": "2.0", "id": id_, "result": {"content": [{"type": "text", "text": text}], "isError": err}}
-    return {"jsonrpc": "2.0", "id": id_, "error": {"code": -32601, "message": f"method not found: {m}"}}
+        return None  # notification (initialized, cancelled, ...)
+    try:
+        if m == "initialize":
+            v = p.get("protocolVersion")
+            return _ok(id_, {"protocolVersion": v if v in VERSIONS else VERSIONS[0],
+                             "capabilities": {"tools": {"listChanged": False}, "resources": {"listChanged": False},
+                                              "prompts": {"listChanged": False}},
+                             "serverInfo": {"name": "devctl", "title": "devctl - local dev control", "version": __version__},
+                             "instructions": INSTRUCTIONS})
+        if m == "ping":
+            return _ok(id_, {})
+        if m == "tools/list":
+            return _ok(id_, {"tools": [{"name": n, "description": t["description"], "inputSchema": tools.schema(n),
+                                        "annotations": _annotations(t["effect"])} for n, t in tools.TOOLS.items()]})
+        if m == "tools/call":
+            text, is_err = tools.call(p.get("name", ""), p.get("arguments") or {})
+            if p.get("name") not in tools.TOOLS:
+                return _err(id_, -32602, text)
+            return _ok(id_, {"content": [{"type": "text", "text": text}], "isError": is_err})
+        if m == "resources/list":
+            return _ok(id_, {"resources": [{"uri": u, "name": u.split("//")[1], "description": d, "mimeType": mt}
+                                           for u, (d, mt, _) in RESOURCES.items()]})
+        if m == "resources/templates/list":
+            return _ok(id_, {"resourceTemplates": [{"uriTemplate": "devctl://logs/{name}", "name": "logs",
+                                                     "description": "Last 200 log lines of a process", "mimeType": "text/plain"}]})
+        if m == "resources/read":
+            uri, cfg = p.get("uri", ""), config.load()
+            if uri.startswith("devctl://logs/"):
+                text, mt = agentops.read_logs(cfg, uri[len("devctl://logs/"):], 200), "text/plain"
+            elif uri in RESOURCES:
+                _, mt, fn = RESOURCES[uri]
+                v = fn(cfg)
+                text = v if isinstance(v, str) else json.dumps(v, indent=1, default=str)
+            else:
+                return _err(id_, -32002, f"resource not found: {uri}")
+            return _ok(id_, {"contents": [{"uri": uri, "mimeType": mt, "text": text}]})
+        if m == "prompts/list":
+            return _ok(id_, {"prompts": [{"name": n, "description": d, "arguments": [{"name": a, "required": r} for a, r in args]}
+                                         for n, (d, args, _) in PROMPTS.items()]})
+        if m == "prompts/get":
+            n = p.get("name")
+            if n not in PROMPTS:
+                return _err(id_, -32602, f"unknown prompt {n}")
+            d, args, tpl = PROMPTS[n]
+            vals = {"vus": "10", "duration": "1m", **(p.get("arguments") or {})}
+            missing = [a for a, r in args if r and not vals.get(a)]
+            if missing:
+                return _err(id_, -32602, f"missing arguments: {missing}")
+            return _ok(id_, {"description": d, "messages": [{"role": "user", "content": {"type": "text", "text": tpl.format(**vals)}}]})
+        return _err(id_, -32601, f"method not found: {m}")
+    except Exception as e:  # never break the transport
+        return _err(id_, -32603, f"{type(e).__name__}: {e}")
 
 
 def serve() -> None:
+    """stdio transport. stdout carries protocol messages only; anything else printed goes to stderr."""
+    proto, sys.stdout = sys.stdout, sys.stderr
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         try:
             resp = handle(json.loads(line))
-        except Exception as e:
-            resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(e)}}
+        except ValueError as e:
+            resp = _err(None, -32700, f"parse error: {e}")
         if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
+            proto.write(json.dumps(resp) + "\n")
+            proto.flush()

@@ -26,6 +26,12 @@ logs and health checks from a TUI, a web UI and AI agents (Claude, Cursor).
   dumped on demand with `jcmd`; analysis reuses `scripts/jfr-analyze.sh` and the dashboard renders its
   `jfr-analyzer/summary/1` JSON. A load run is one detached process (JFR start → k6 → metrics timeline → JFR stop →
   analysis) like a build, so k6 no longer runs as a process-compose process.
+- **AI**: one tool catalogue (`tools.py`, each tool tagged read/write/destroy) serves the MCP server over stdio
+  (default: every agent supports it, no daemon, no header auth - which several clients still drop) and stateless
+  Streamable HTTP on the dashboard (`/mcp`, loopback + Host/Origin checks, optional bearer token), and the dashboard
+  Assistant (official `anthropic` SDK as an optional dependency in `local-dev/.venv`, manual tool loop so write/destroy
+  calls wait for the developer's approval). Goal-level tools (`ship`, `diagnose`, `wait_*`) replace agent polling loops;
+  `initialize` instructions, resources and prompts teach agents the workflow. `devctl setup` is the single entry point.
 
 ## Consequences
 Not a Spring module: no effect on the starter, BOM or offline repo. process-compose CLI behaviour is verified

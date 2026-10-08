@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "devctl": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/springAIMcpServer/local-dev/bin/devctl-mcp",
+      "args": []
+    }
+  }
+}

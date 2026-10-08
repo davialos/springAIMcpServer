@@ -1,0 +1,3 @@
+[mcp_servers.devctl]
+command = "/ABSOLUTE/PATH/TO/springAIMcpServer/local-dev/bin/devctl-mcp"
+args = []

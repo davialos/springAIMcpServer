@@ -11,7 +11,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import builds, config, jfr, jvm, loadgen, loadrun, metrics, ops, pc, repos
+from . import agents, assistant, builds, config, jfr, jvm, loadgen, loadrun, mcp, metrics, ops, pc, repos
 
 COLLECTOR = metrics.Collector()
 
@@ -46,6 +46,12 @@ def make_handler(port: int):
             if not self._guard():
                 return
             u = urllib.parse.urlparse(self.path)
+            if u.path == "/mcp":  # no server-initiated stream in stateless mode
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if u.path in ("/", "/index.html"):
                 return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
             if u.path.startswith("/static/"):
@@ -64,7 +70,42 @@ def make_handler(port: int):
             self._dispatch("GET", u)
 
         def do_POST(self):
+            if urllib.parse.urlparse(self.path).path == "/mcp":
+                return self._mcp()
             self._mutating("POST")
+
+        def _mcp(self):
+            """MCP Streamable HTTP, stateless: one JSON-RPC message (or batch) per POST, JSON response."""
+            if not self._guard():
+                return
+            origin = self.headers.get("Origin")
+            if origin and origin.split("://", 1)[-1] not in allowed_hosts:
+                return self._send(403, {"error": "origin not allowed"})
+            token = (config.load().get("mcp") or {}).get("http_token")
+            if token and self.headers.get("Authorization", "") != f"Bearer {token}":
+                return self._send(401, {"error": "bearer token required (mcp.http_token)"})
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 4_000_000:
+                return self._send(413, {"error": "too large"})
+            try:
+                msg = json.loads(self.rfile.read(n) or b"null")
+            except ValueError as e:
+                return self._send(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(e)}})
+            resp = mcp.handle(msg)
+            if resp is None:  # notifications / responses only
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send(200, resp)
+
+        def do_DELETE(self):
+            if urllib.parse.urlparse(self.path).path == "/mcp":  # stateless server: nothing to terminate
+                self.send_response(405)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send(404, {"error": "not found"})
 
         def do_PUT(self):
             self._mutating("PUT")
@@ -137,6 +178,11 @@ def route(method: str, path: str, q: dict, body: dict):
             return [{"name": n, **t} for n, t in cfg.get("loadtests", {}).items()]
         if seg == ["loadtests", "discover"]:
             return loadgen.discover(cfg, q.get("service", ""), q.get("base_url", ""))
+        if seg == ["assistant", "status"]:
+            return assistant.status(cfg)
+        if seg == ["agents"]:
+            return {"mcp_bin": str(agents.MCP_BIN), "http_url": agents.http_url(cfg),
+                    "snippets": {k: {**v, "rendered": agents.render(v)} for k, v in agents.snippets(cfg).items()}}
         if seg == ["loadruns"]:
             return loadrun.list_runs(cfg, int(q.get("limit", 30)))
         if len(seg) == 2 and seg[0] == "loadruns":
@@ -159,6 +205,13 @@ def route(method: str, path: str, q: dict, body: dict):
             return {"result": ops.service_control(cfg, seg[1], seg[2])}
         if len(seg) == 3 and seg[0] == "stacks":
             return {"result": ops.stack_control(cfg, seg[1], seg[2])}
+        if seg == ["assistant", "chat"]:
+            return assistant.chat(cfg, body.get("session"), body.get("message", ""))
+        if seg == ["assistant", "decide"]:
+            return assistant.decide(cfg, body["session"], bool(body.get("approve")))
+        if seg == ["assistant", "reset"]:
+            assistant.reset(body.get("session", ""))
+            return {"reset": True}
         if seg == ["loadtests"]:
             b = dict(body)
             return loadgen.create(cfg, b.pop("name"), b.pop("service", ""), b.pop("endpoints"), **b)
@@ -188,7 +241,7 @@ def route(method: str, path: str, q: dict, body: dict):
 
 def serve(port: int) -> None:
     srv = ThreadingHTTPServer(("127.0.0.1", port), make_handler(port))
-    print(f"devctl dashboard: http://127.0.0.1:{port}  (Ctrl-C to stop)", flush=True)
+    print(f"devctl dashboard: http://127.0.0.1:{port}   MCP (HTTP): http://127.0.0.1:{port}/mcp   (Ctrl-C to stop)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

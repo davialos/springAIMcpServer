@@ -13,15 +13,24 @@ only, not part of the Maven reactor (ADR-0029).
    CLI / dashboard / MCP all use the same functions + the same files (no hidden state)
 ```
 
-## Set up (macOS)
+## Set up (macOS) - one command
 
 ```bash
-brew bundle --file local-dev/Brewfile          # process-compose, git, maven, JDKs, k6, OrbStack
-local-dev/bin/devctl init                      # writes ~/.localdev/config.json (edit it, see below)
-local-dev/bin/devctl doctor
-local-dev/bin/devctl dashboard                 # http://127.0.0.1:8765
+brew bundle --file local-dev/Brewfile
+local-dev/bin/devctl setup --with-ai --install claude-code,cursor,antigravity
 ```
-Put `local-dev/bin` on your PATH (or alias `devctl`).
+Creates `~/.localdev/config.json` (workspace = the folder this repo is cloned into; `--workspace ~/work` to change),
+checks prerequisites, sets up the optional AI assistant, self-tests the MCP server, writes/installs coding-agent configs
+and starts the dashboard at http://127.0.0.1:8765 in the background (`devctl dashboard start|stop|status`,
+`devctl autostart install` for login). Put `local-dev/bin` on your PATH or alias `devctl`.
+
+## AI: coding agents (MCP) and the dashboard Assistant
+Any coding agent - **Claude Code, Cursor, Antigravity, VS Code, Claude Desktop, Windsurf, Gemini CLI, Codex** - can
+control your local environment through the devctl MCP server (`local-dev/bin/devctl-mcp`, stdio; or
+`http://127.0.0.1:8765/mcp`): 36 tools (incl. one-call `ship` and `diagnose`), resources, prompts. Opening this repository
+in Claude Code / Cursor / VS Code picks it up from the committed `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json`.
+The dashboard's **Assistant** tab is Claude with the same tools (write actions need your approval); **Agents** tab has
+copy-ready configs. Complete guide: **[docs/mcp-agents.md](docs/mcp-agents.md)**.
 
 ## Config (`~/.localdev/config.json`, example: `config.example.json`)
 
@@ -37,6 +46,8 @@ Put `local-dev/bin` on your PATH (or alias `devctl`).
 | `loadtests.<name>` | k6 script (relative to `loadtest_dir`) + `service`, `profile`, `vus`, `duration`, `env`, `jfr`; usually created by the wizard |
 | `jfr` | `auto`, `settings`, `maxage`, `maxsize`, `packages`, `auto_analyze`, `analyzer_cmd`, `analyzer_java_home` (override per service under `services.<name>.jfr`) |
 | `metrics.interval_seconds` | live-metrics poll interval (default 2) |
+| `ai` | dashboard assistant: `model` (default `claude-opus-5-5`), `effort`, `confirm_writes`, `max_steps`, `fallbacks`, `enabled` |
+| `mcp.http_token` | optional bearer token required on `POST /mcp` |
 | `infra.ship_logs` / `loki_url` | ship all process, JBoss and build logs to Loki (default on when `loki` is enabled) |
 | `infra.enabled` | any of `prometheus`, `loki`, `grafana`, `postgres` (docker containers; Prometheus auto-scrapes every jar service on `/actuator/prometheus`; Grafana comes with Prometheus + Loki datasources) |
 
@@ -128,19 +139,12 @@ Loki's HTTP API. Grafana → Explore → Loki: `{job="devctl"}`, narrow with `se
 
 Builds are detached processes: closing the dashboard or the agent session does not kill them.
 
-## MCP (Claude Code, Cursor, …)
-
-```bash
-claude mcp add devctl -- /ABS/PATH/local-dev/bin/devctl-mcp
-```
-Cursor `~/.cursor/mcp.json`: `{"mcpServers":{"devctl":{"command":"/ABS/PATH/local-dev/bin/devctl-mcp"}}}`
-
-Tools: `list_repos`, `list_branches`, `build`, `build_status`, `list_builds`, `deploy`, `undeploy`, `status`,
-`service_control`, `stack_control`, `infra_control`, `logs`, `sync_project`, `perf_snapshot`, `perf_readiness`,
-`loadtest_discover`, `loadtest_create`, `loadtest_run`, `loadtest_result`, `loadtest_runs`, `loadtest_stop`,
-`jfr_list_jvms`, `jfr_snapshot`, `jfr_record`, `jfr_list`, `jfr_analyze`, `jfr_summary`. Example: *"build orders from
-feature/x, deploy it to orders-api and tell me when it's healthy"*, *"load test orders-api at 50 VUs for 2 minutes and
-tell me the slowest code line from the JFR"*.
+## MCP tools (summary - full guide [docs/mcp-agents.md](docs/mcp-agents.md))
+`status`, `diagnose`, `config_get`, `list_repos`, `list_branches`, `build`, `wait_build`, `build_status`, `list_builds`, `ship`,
+`deploy`, `undeploy`, `wait_healthy`, `service_control`, `stack_control`, `infra_control`, `sync_project`, `logs`,
+`search_logs`, `perf_snapshot`, `perf_readiness`, `loadtest_discover|create|run|result|runs|stop`,
+`jfr_list_jvms|snapshot|record|list|analyze|summary`, `config_set`, `config_remove`, `config_set_workspace`.
+Prompts: `ship-branch`, `investigate-service`, `performance-check`, `onboard-project`.
 
 ## Security
 Dashboard binds `127.0.0.1` only, checks the `Host` header (DNS rebinding) and requires `X-Devctl: 1` on every
@@ -148,7 +152,7 @@ mutating call. Build commands come from your own `config.json` and run with your
 shell profile. Branch names are validated (no option injection). Grafana runs with anonymous admin: local use only.
 
 ## Tests
-`python3 -m unittest discover -s local-dev/tests`. `test_perf.EndToEndTest` needs a JDK on PATH: it starts a real JVM
+`python3 -m unittest discover -s local-dev/tests` (run it with `local-dev/.venv/bin/python` to include the real-SDK assistant test). `test_perf.EndToEndTest` needs a JDK on PATH: it starts a real JVM
 (`tests/fixtures/Demo.java`) with devctl's JFR flags and runs live sampling, readiness, discovery, a full load run
 (`tests/fixtures/fake_k6.py` stands in for k6), snapshot and, with a JDK 25 available, the real analyzer.
 

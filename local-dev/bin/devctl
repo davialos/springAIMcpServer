@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+d="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHONPATH="$d" exec python3 -m devctl "$@"

@@ -93,6 +93,6 @@ shell profile. Branch names are validated (no option injection). Grafana runs wi
 
 ## Verified vs. not
 Unit/integration tests cover discovery, worktree builds, artifact collection, multi-WAR deploy, project generation,
-MCP and the dashboard guards (Linux, Python 3.13). **k6, the Loki push and the generated project are tested without the real tools (a fake Loki HTTP server for the shipper). **Not yet run against a real process-compose, Docker or JBoss EAP
+MCP and the dashboard guards (Linux, Python 3.13). k6 config, the Loki push (against a fake Loki server) and project generation are tested. **Not yet run against a real process-compose, Docker or JBoss EAP
 on a Mac**, nor k6 → Prometheus remote-write or the Loki datasource in Grafana — the process-compose CLI flags (`up -D --tui=false`, `project update`, `process list -o json`) follow its
 documented v1.x CLI; check `devctl up` / `devctl status` first and see docs/open-questions.md OQ-LD-1.

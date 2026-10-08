@@ -22,6 +22,17 @@ class ParameterLibraryTest {
     }
 
     @Test
+    void standardMacrosAreAvailable() throws Exception {
+        // has(), all(), exists(), exists_one(), map() and filter() were rejected before the macros were enabled (ADR-0030)
+        for (String macro : new String[]{
+                "[18, 30].exists(x, x == customer.age)", "[18, 30].all(x, x <= customer.age)",
+                "[18, 30].exists_one(x, x == customer.age)", "[18, 30].map(x, x + 1).exists(y, y > customer.age)",
+                "[18, 30].filter(x, x < customer.age).size() >= 0"}) {
+            assertThat(library.compileBoolean(macro).referenced()).extracting(Parameter::celName).contains("customer.age");
+        }
+    }
+
+    @Test
     void anUnknownParameterIsRejectedAtSaveTime() {
         assertThatThrownBy(() -> library.compileBoolean("customer.shoeSize > 40"))
                 .isInstanceOf(RuleCompilationException.class)

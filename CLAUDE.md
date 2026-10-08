@@ -62,6 +62,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 | `loadtest-maven-plugin` | `…loadtest.maven` | dev tool: `mvn loadtest:discover/generate/run/compare` over the loadtest public API (ADR-0024) | loadtest, maven-plugin-api (provided) |
 | `loadtest-junit` | `…loadtest.junit` | dev tool (test scope for hosts): `@K6LoadTest` JUnit 5 extension, `K6Suite` (ADR-0024) | loadtest, junit-jupiter-api (provided); **no Spring** |
 | `loadtest-mcp` | `…loadtest.mcp` | dev tool: stdio MCP server with load-test tools for coding agents; plugin in `claude-plugins/spring-loadtest` (ADR-0024) | loadtest, MCP Java SDK 2.0; **no Spring** |
+| `celfaker` | `…celfaker` | developer tool (not in the starter/BOM): payload JSON → parameter-library candidates (`sysObject.attribute` + CEL type), CEL expression faker (all operators/macros per type, compiled by the real checker), attribute value map (`valid`/`boundary`/`invalid`) + input→result cases, API data generator (rule-satisfying and negative), workflow model, k6 workflow suite generator (extract/inject between calls, validation APIs), loopback flow dashboard with drag-and-drop designer (ES modules in `META-INF/resources/celfaker/ui/`, no build step), CLI `scripts/celfaker.sh`; UI/runtime tests `scripts/celfaker-ui-test.sh` (ADR-0030, LLD-19) | ruleengine, jackson 3; **no Spring** |
 | `jfr-analyzer` | `…jfranalyzer` | developer CLI: JFR file → HTML/JSON hot-spot report (docs/tools/jfr-analyzer.md); not in the BOM | core (CanonicalJson only) |
 
 ## Coding conventions
@@ -90,6 +91,7 @@ Boot 4 auto-configuration packages: `org.springframework.boot.jdbc.autoconfigure
 - `docs/lld/18-rule-engine.md` — CEL rule engine (parameter library, policies, messages, channels, triggers); local DB + sample data: `scripts/rule-engine/` (`local-db.sh`, `sample-data.sql`); decision ADR-0025; §12 authoring API/console/logs ecosystem (ADR-0026), §15 AI assistant + Angular console (ADR-0028)
 - `docs/integration/rule-engine-ecosystem.md` — one-command local stack (`scripts/rule-engine/dev.sh up|smoke|dashboards|e2e|e2e-angular`), users, ports, troubleshooting · `docs/design/README.md` — console design tokens, Figma status (OQ-70)
 - `docs/lld/16-load-test-generator.md` — k6 load-test generator (`scripts/loadtest.sh`, `scripts/loadtest-mcp.sh`); guide `docs/integration/load-testing-guide.md`
+- `docs/lld/19-cel-faker-and-flow-studio.md` — CEL faker, data generator, k6 workflows, flow studio (`scripts/celfaker.sh serve`); guide `docs/integration/celfaker-guide.md`
 - `docs/tools/jfr-analyzer.md` — JFR recording analyzer (`scripts/jfr-analyze.sh`)
 - `docs/tools/perf-test.md` — universal performance test against any running service: k6 load + JFR profile +
   analysis in one command (`scripts/perf-test.sh`, config `scripts/perf-test.env.example`)

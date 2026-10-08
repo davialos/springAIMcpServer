@@ -1,0 +1,57 @@
+{
+  "name": "shop",
+  "baseUrl": "http://localhost:8080",
+  "apis": [
+    {
+      "id": "createCustomer",
+      "name": "Create customer",
+      "method": "POST",
+      "path": "/api/customers",
+      "role": "ACTION",
+      "sysObject": "customer",
+      "description": "Registers a customer. Adults only; the e-mail must be unique.",
+      "requestExample": {
+        "email": "ada@example.com",
+        "firstName": "Ada",
+        "age": 34,
+        "vip": false,
+        "birthTime": "1991-05-04T08:30:00Z"
+      },
+      "responseExample": { "id": 1001, "email": "ada@example.com" },
+      "rules": ["customer.age >= 18 && customer.age <= 120", "customer.email.matches(\"^[^@\\\\s]+@[^@\\\\s]+\\\\.[A-Za-z]{2,}$\")"],
+      "expectedStatus": [201]
+    },
+    {
+      "id": "createOrder",
+      "name": "Create order",
+      "method": "POST",
+      "path": "/api/orders",
+      "role": "ACTION",
+      "sysObject": "order",
+      "description": "Creates an order for an existing customer. Total must equal the sum of the line prices.",
+      "requestExample": {
+        "customerId": 1001,
+        "currency": "EUR",
+        "total": 59.98,
+        "quantity": 2,
+        "tags": ["gift", "express"],
+        "delivery": { "city": "London", "slaHours": 48 },
+        "placedAt": "2025-03-04T10:15:30Z"
+      },
+      "responseExample": { "id": 5001, "status": "NEW" },
+      "rules": ["order.quantity >= 1 && order.quantity <= 100", "order.total > 0.0"],
+      "expectedStatus": [201]
+    },
+    {
+      "id": "validateOrder",
+      "name": "Validate order",
+      "method": "GET",
+      "path": "/api/orders/{id}/validate",
+      "role": "VALIDATION",
+      "validates": "createOrder",
+      "description": "Server-side consistency check of a stored order.",
+      "expectedStatus": [200],
+      "expectBody": { "valid": true }
+    }
+  ]
+}

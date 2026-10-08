@@ -14,6 +14,7 @@ import dev.cel.common.types.CelType;
 import dev.cel.common.types.ListType;
 import dev.cel.common.types.MapType;
 import dev.cel.common.types.SimpleType;
+import dev.cel.parser.CelStandardMacro;
 import dev.cel.runtime.CelEvaluationException;
 
 import java.util.ArrayList;
@@ -60,7 +61,8 @@ public final class ParameterLibrary {
     }
 
     private static Cel environment(Collection<Parameter> parameters, CelType resultType) {
-        CelBuilder builder = CelFactory.standardCelBuilder().setOptions(OPTIONS).setResultType(resultType);
+        CelBuilder builder = CelFactory.standardCelBuilder().setOptions(OPTIONS).setStandardMacros(CelStandardMacro.STANDARD_MACROS)
+                .setResultType(resultType);
         for (Parameter p : parameters) {
             builder.addVar(p.celName(), celType(p.dataType()));
         }

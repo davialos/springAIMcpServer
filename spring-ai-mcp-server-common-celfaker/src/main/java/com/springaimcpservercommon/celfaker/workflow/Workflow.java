@@ -29,4 +29,15 @@ public record Workflow(String name, List<Step> steps, Load load) {
     public static Workflow fromJson(String json) {
         return JsonValues.MAPPER.readValue(json, Workflow.class);
     }
+
+    /**
+     * Reads a file holding one workflow (object) or several scenarios (array).
+     *
+     * @param json file content
+     * @return the workflows
+     */
+    public static List<Workflow> listFromJson(String json) {
+        return json.strip().startsWith("[")
+                ? List.of(JsonValues.MAPPER.readValue(json, Workflow[].class)) : List.of(fromJson(json));
+    }
 }

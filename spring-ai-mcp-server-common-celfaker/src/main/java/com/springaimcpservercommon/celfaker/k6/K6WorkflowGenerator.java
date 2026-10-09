@@ -48,30 +48,14 @@ public final class K6WorkflowGenerator {
             throw new IllegalArgumentException("workflow is not runnable: " + String.join("; ", problems));
         }
         Map<String, String> files = new LinkedHashMap<>();
-        files.put("lib/runtime.js", resource("/celfaker/k6/runtime.js"));
+        files.put("lib/runtime.js", resource("/META-INF/resources/celfaker/ui/runtime.js"));
         files.put("workflow.json", pretty(JsonValues.MAPPER.valueToTree(workflow)));
 
-        ObjectNode apisDoc = JsonValues.MAPPER.createObjectNode();
-        apisDoc.put("baseUrl", contract.baseUrl());
-        ObjectNode apis = apisDoc.putObject("apis");
+        ObjectNode apisDoc = apiDocument(contract, workflow);
         StringBuilder validPool = new StringBuilder();
         StringBuilder invalidPool = new StringBuilder();
         int negativeTotal = 0;
         for (ApiSpec a : usedApis(contract, workflow)) {
-            ObjectNode n = apis.putObject(a.id());
-            n.put("id", a.id());
-            n.put("name", a.name());
-            n.put("method", a.method());
-            n.put("path", a.path());
-            n.put("role", a.role().name());
-            n.put("description", a.description());
-            n.put("hasBody", a.hasBody());
-            n.set("headers", JsonValues.MAPPER.valueToTree(a.headers()));
-            n.set("expectedStatus", JsonValues.MAPPER.valueToTree(a.expectedStatus()));
-            n.set("invalidStatus", JsonValues.MAPPER.valueToTree(a.invalidStatus()));
-            if (a.role() == ApiRole.VALIDATION && !a.expectBody().isMissingNode()) {
-                n.set("expectBody", a.expectBody());
-            }
             ApiData d = data.get(a.id());
             if (a.hasBody() && d != null) {
                 ArrayNode valid = JsonValues.MAPPER.createArrayNode();
@@ -92,6 +76,37 @@ public final class K6WorkflowGenerator {
         files.put("main.js", main(workflow, validPool.toString(), invalidPool.toString(), negatives));
         files.put("README.md", readme(contract, workflow, negatives));
         return files;
+    }
+
+    /**
+     * The {@code apis.json} document: the APIs a workflow uses, as the runtime reads them (shared by the k6 suite and the
+     * dashboard's scenario runner).
+     *
+     * @param contract the APIs
+     * @param workflow the workflow
+     * @return {@code {baseUrl, apis: {id: {...}}}}
+     */
+    public static ObjectNode apiDocument(ApiContract contract, Workflow workflow) {
+        ObjectNode doc = JsonValues.MAPPER.createObjectNode();
+        doc.put("baseUrl", contract.baseUrl());
+        ObjectNode apis = doc.putObject("apis");
+        for (ApiSpec a : usedApis(contract, workflow)) {
+            ObjectNode n = apis.putObject(a.id());
+            n.put("id", a.id());
+            n.put("name", a.name());
+            n.put("method", a.method());
+            n.put("path", a.path());
+            n.put("role", a.role().name());
+            n.put("description", a.description());
+            n.put("hasBody", a.hasBody());
+            n.set("headers", JsonValues.MAPPER.valueToTree(a.headers()));
+            n.set("expectedStatus", JsonValues.MAPPER.valueToTree(a.expectedStatus()));
+            n.set("invalidStatus", JsonValues.MAPPER.valueToTree(a.invalidStatus()));
+            if (a.role() == ApiRole.VALIDATION && !a.expectBody().isMissingNode()) {
+                n.set("expectBody", a.expectBody());
+            }
+        }
+        return doc;
     }
 
     private static List<ApiSpec> usedApis(ApiContract contract, Workflow workflow) {
@@ -148,12 +163,12 @@ public final class K6WorkflowGenerator {
 
                 export const options = %s;
 
-                export function flow() {
-                  workflowOk.add(runtime.runFlow({ vu: __VU, iter: __ITER }));
+                export async function flow() {
+                  workflowOk.add(await runtime.runFlow({ vu: __VU, iter: __ITER }));
                 }
 
-                export function negative() {
-                  runtime.runNegative(exec.scenario.iterationInTest, { vu: __VU, iter: exec.scenario.iterationInTest });
+                export async function negative() {
+                  await runtime.runNegative(exec.scenario.iterationInTest, { vu: __VU, iter: exec.scenario.iterationInTest });
                 }
                 """.formatted(validPool, invalidPool, pretty(options));
     }

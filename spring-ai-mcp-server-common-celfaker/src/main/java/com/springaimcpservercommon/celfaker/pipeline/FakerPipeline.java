@@ -38,7 +38,7 @@ public final class FakerPipeline {
      * Generation request.
      *
      * @param contract           the user's APIs
-     * @param workflow           the flow to run; {@code null} proposes one from the contract
+     * @param workflows          the scenarios to generate (one k6 project each); empty proposes one from the contract
      * @param valueMap           a (hand-edited) attribute map to reuse; {@code null} generates it; parameters it does not
      *                           list are generated
      * @param seed               seed
@@ -46,8 +46,29 @@ public final class FakerPipeline {
      * @param expressionOptions  expression faker options
      * @param casesPerExpression input combinations evaluated per expression (0 = skip the case file)
      */
-    public record Request(ApiContract contract, Workflow workflow, AttributeValueMap valueMap, long seed,
+    public record Request(ApiContract contract, List<Workflow> workflows, AttributeValueMap valueMap, long seed,
                           int validCount, ExpressionFaker.Options expressionOptions, int casesPerExpression) {
+
+        /** Normalises omitted fields. */
+        public Request {
+            workflows = workflows == null ? List.of() : List.copyOf(workflows);
+        }
+
+        /**
+         * A request for at most one workflow.
+         *
+         * @param contract          the APIs
+         * @param workflow          the flow, or {@code null} to propose one
+         * @param valueMap          attribute map to reuse, or {@code null}
+         * @param seed              seed
+         * @param validCount        valid bodies per API
+         * @param expressionOptions expression options
+         * @param casesPerExpression cases per expression
+         */
+        public Request(ApiContract contract, Workflow workflow, AttributeValueMap valueMap, long seed, int validCount,
+                       ExpressionFaker.Options expressionOptions, int casesPerExpression) {
+            this(contract, workflow == null ? List.of() : List.of(workflow), valueMap, seed, validCount, expressionOptions, casesPerExpression);
+        }
 
         /**
          * A request with defaults: seed 42, 30 valid bodies per API, default expressions, 12 cases each.
@@ -56,7 +77,7 @@ public final class FakerPipeline {
          * @return the request
          */
         public static Request of(ApiContract contract) {
-            return new Request(contract, null, null, 42, 30, ExpressionFaker.Options.defaults(), 12);
+            return new Request(contract, List.of(), null, 42, 30, ExpressionFaker.Options.defaults(), 12);
         }
     }
 
@@ -164,7 +185,7 @@ public final class FakerPipeline {
         }
 
         // 6. workflow and k6
-        Workflow workflow = request.workflow() != null ? request.workflow() : WorkflowPlanner.propose(contract);
+        List<Workflow> flows = request.workflows().isEmpty() ? List.of(WorkflowPlanner.propose(contract)) : request.workflows();
         Map<String, String> files = new LinkedHashMap<>();
         files.put("parameters.json", parameters(all, bindings));
         files.put("attribute-map.json", valueMap.toJson());
@@ -172,7 +193,25 @@ public final class FakerPipeline {
         if (request.casesPerExpression() > 0) {
             files.put("cel-cases.json", pretty(caseDoc));
         }
-        K6WorkflowGenerator.generate(contract, workflow, data).forEach((path, content) -> files.put("k6/" + path, content));
+        if (flows.size() == 1) {
+            K6WorkflowGenerator.generate(contract, flows.getFirst(), data).forEach((path, content) -> files.put("k6/" + path, content));
+        } else {
+            // several scenarios: one self-contained k6 project each, side by side
+            Set<String> slugs = new HashSet<>();
+            StringBuilder index = new StringBuilder("# Scenarios\n\nRun one with `k6 run -e BASE_URL=" + contract.baseUrl() + " <folder>/main.js`.\n\n");
+            for (Workflow w : flows) {
+                String base = w.name().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("^-|-$", "");
+                String slug = base.isEmpty() ? "scenario" : base;
+                for (int n = 2; !slugs.add(slug); n++) {
+                    slug = (base.isEmpty() ? "scenario" : base) + "-" + n;
+                }
+                String folder = slug;
+                K6WorkflowGenerator.generate(contract, w, data).forEach((path, content) -> files.put("k6/" + folder + "/" + path, content));
+                index.append("- `").append(folder).append("/` — ").append(w.name()).append(" (").append(w.steps().size()).append(" steps, profile ")
+                        .append(w.load().profile()).append(")\n");
+            }
+            files.put("k6/README.md", index.toString());
+        }
 
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("parameters", all.size());

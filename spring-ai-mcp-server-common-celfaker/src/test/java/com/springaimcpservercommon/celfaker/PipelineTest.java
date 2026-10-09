@@ -92,4 +92,32 @@ class PipelineTest {
         assertThatThrownBy(() -> com.springaimcpservercommon.celfaker.k6.K6WorkflowGenerator.generate(c, w2, java.util.Map.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void severalScenariosBecomeSeparateK6Projects() throws IOException {
+        List<Workflow> scenarios = Workflow.listFromJson("""
+                [{"name":"Happy path","steps":[{"id":"o","api":"createOrder","extract":[{"name":"id","from":"body.id"}],
+                    "assertions":[{"from":"status","op":"==","value":"201"}]}]},
+                 {"name":"Order with quantity 0 is rejected","steps":[{"id":"o","api":"createOrder","body":{"quantity":0},"expectStatus":[422]}]},
+                 {"name":"Happy path","steps":[{"id":"c","api":"createCustomer"}]}]""");
+        FakerPipeline.Request d = FakerPipeline.Request.of(shop());
+        FakerPipeline.Output out = FakerPipeline.run(new FakerPipeline.Request(d.contract(), scenarios, null, 1, 5, d.expressionOptions(), 0));
+        assertThat(out.files()).containsKeys("k6/happy-path/main.js", "k6/order-with-quantity-0-is-rejected/main.js", "k6/happy-path-2/main.js", "k6/README.md");
+        assertThat(out.files().get("k6/order-with-quantity-0-is-rejected/workflow.json")).contains("\"expectStatus\" : [ 422 ]").contains("\"quantity\" : 0");
+        assertThat(out.files().get("k6/happy-path/workflow.json")).contains("\"op\" : \"==\"");
+    }
+
+    @Test
+    void validatorChecksAssertionsAndBodies() throws IOException {
+        Workflow w = Workflow.fromJson("""
+                {"name":"x","steps":[
+                  {"id":"a","api":"createOrder","assertions":[{"from":"nope","op":"~=","value":"1"},{"from":"body.id","op":"==","value":"{{ghost.id}}"}],"body":[1]},
+                  {"id":"v","api":"validateOrder","dependsOn":["a"],"body":{"x":1},"inject":[{"target":"path.id","value":"1"}]}]}""");
+        List<String> problems = WorkflowPlanner.validate(w, shop());
+        assertThat(problems).anyMatch(p -> p.contains("unknown assertion operator ~="))
+                .anyMatch(p -> p.contains("assertion source must be"))
+                .anyMatch(p -> p.contains("{{ghost.id}}"))
+                .anyMatch(p -> p.contains("custom body must be a JSON object"))
+                .anyMatch(p -> p.contains("has no JSON request body"));
+    }
 }

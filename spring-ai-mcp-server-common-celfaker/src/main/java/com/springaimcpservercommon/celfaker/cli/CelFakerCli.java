@@ -67,10 +67,10 @@ public final class CelFakerCli {
             }
             case "generate" -> {
                 ApiContract contract = ApiContract.fromJson(Files.readString(required(opt, "contract")));
-                Workflow workflow = opt.containsKey("workflow") ? Workflow.fromJson(Files.readString(Path.of(opt.get("workflow")))) : null;
+                List<Workflow> workflows = opt.containsKey("workflow") ? Workflow.listFromJson(Files.readString(Path.of(opt.get("workflow")))) : List.of();
                 AttributeValueMap map = opt.containsKey("value-map") ? AttributeValueMap.fromJson(Files.readString(Path.of(opt.get("value-map")))) : null;
                 FakerPipeline.Request d = FakerPipeline.Request.of(contract);
-                FakerPipeline.Output result = FakerPipeline.run(new FakerPipeline.Request(contract, workflow, map,
+                FakerPipeline.Output result = FakerPipeline.run(new FakerPipeline.Request(contract, workflows, map,
                         opt.containsKey("seed") ? Long.parseLong(opt.get("seed")) : d.seed(),
                         opt.containsKey("valid") ? Integer.parseInt(opt.get("valid")) : d.validCount(),
                         d.expressionOptions(),
@@ -133,7 +133,7 @@ public final class CelFakerCli {
             usage: celfaker <command> [options]
               example                                   print an example API contract
               analyze  --payload f.json [--object o]    list the parameters (object.attribute, CEL type) of a payload
-              generate --contract c.json [--workflow w.json] [--value-map m.json] [--out dir] [--seed n] [--valid n] [--cases n]
+              generate --contract c.json [--workflow w.json (one workflow or an array of scenarios)] [--value-map m.json] [--out dir] [--seed n] [--valid n] [--cases n]
                                                         parameters, attribute map, CEL expressions + cases, API data, k6 suite
               serve    [--port 8099] [--frame-ancestors http://127.0.0.1:8765]
                                                         the drag-and-drop flow dashboard (loopback only); env CELFAKER_SERVICES

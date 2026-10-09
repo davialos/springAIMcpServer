@@ -79,14 +79,31 @@ Options: categories, `maxPerParameter` (round-robin across categories), number o
   scenario `negative` (`shared-iterations`, ≤ `negatives` cases thinned evenly; each case first runs its ancestor steps with valid data).
   Thresholds: `checks`, `workflow_ok` > 99 %, `http_req_failed{kind:flow}` < 1 %, p95 `http_req_duration{kind:flow}` < 1500 ms. Expected statuses are
   declared to k6 per request (`http.expectedStatuses`) so a correctly rejected negative request is not counted as a failure.
-- `lib/runtime.js` is the single implementation of flow semantics (dependency-injected `http`, `check`, `sleep`).
+- `lib/runtime.js` is the single implementation of flow semantics (dependency-injected `http`, `check`, `sleep`, optional `trace`); every I/O call is `await`ed, so the synchronous k6
+  `http` and the dashboard's asynchronous adapter run the same file. Its source is `META-INF/resources/celfaker/ui/runtime.js`, which the dashboard serves as `/runtime.js` and the generator copies into the suite.
+
+### 7a. Scenarios (scenario testing)
+A **scenario** is a named workflow. A project holds several; the dashboard keeps them in tabs and the generator writes one self-contained k6 project per scenario that has steps
+(`k6/` for one, `k6/<slug>/` for several, plus `k6/README.md`). Beyond extract / inject, a step can carry:
+- **assertions** `{from, op, value}` — `from` is `status`, `header.X` or `body.<path>`; `op` is `== != exists absent contains > >= < <= matches` (regex); `value` may reference `{{step.var}}`.
+  Each assertion is a k6 check named `<step> assert <from> <op>` (no values in names, so no metric cardinality blow-up). A failing assertion fails the step and the flow.
+- **request body source**: generated valid data (default) · a named **generated invalid case** (`invalidCase`, a reason such as `customer.age:missing`) · **custom JSON** (`body`, values may use placeholders).
+  Combine with `expectStatus` (e.g. `[422]`) to assert that the API rejects it. `inject body.*` still applies to valid, custom and invalid-case bodies.
+`WorkflowPlanner.validate` additionally reports unknown assertion operators or sources, placeholders that refer to steps which do not run first, and a custom/invalid body on an API without a JSON body.
+
+### 7b. Running a scenario from the dashboard
+`POST /api/scenario/prepare {contract, workflow, seed, count}` validates the scenario and returns what the runtime needs: the normalised workflow, the `apis.json` document
+(`K6WorkflowGenerator.apiDocument` — the same structure the k6 suite loads), generated valid bodies and invalid cases of the APIs it uses. The browser (`scenario-runner.js`) creates the
+shared runtime with an `http` adapter over `POST /api/send` (browsers cannot call the service directly: CORS) and a `trace` callback; each step reports request, response, checks, extracted
+values and timing, which the UI shows as coloured nodes (green / red / dashed while running) and an expandable result list. Iterations use successive generated data rows. The environment for
+`{{env.NAME}}` is typed in the run panel and kept in memory only. "Run all" runs every scenario in turn.
 
 ## 8. Dashboard (`server`, UI `META-INF/resources/celfaker/ui/`)
 Tabs: **APIs** (contract editor, docs, rules) → **Parameters** (tick payload values; `sysObject.attribute`, CEL type, sample) →
 **CEL expressions** (generate, filter by category, "inputs → results" matrix, "+ rule" into an API) → **Attribute map** (edit valid / boundary / invalid) →
 **Flow designer** (drag APIs onto the canvas, drag from a node's right dot to another node to run it after, inspector for
 extract / inject / auto-wire, live validation, keyboard alternative: "Runs after" checkboxes, Delete key) → **Generate** (summary, file
-preview, `.zip`). Endpoints (all JSON, stateless): `POST /api/analyze | attribute-map | expressions | cases | workflow/propose | workflow/validate | generate | generate.zip | import/curl | import/openapi | fake | send`, `GET /api/example`.
+preview, `.zip`). Endpoints (all JSON, stateless): `POST /api/analyze | attribute-map | expressions | cases | workflow/propose | workflow/validate | scenario/prepare | generate | generate.zip | import/curl | import/openapi | fake | send`, `GET /api/example`.
 Hardening: loopback bind, `Host` allow-list, `application/json` required, 8 MiB body cap, caps on `validCount` (1000) and `casesPerExpression` (100), no `innerHTML` with data (text nodes only), CSP `default-src 'self'`.
 
 ## 8a. Adding APIs: cURL, Swagger / OpenAPI, fake input, send (`importer`)

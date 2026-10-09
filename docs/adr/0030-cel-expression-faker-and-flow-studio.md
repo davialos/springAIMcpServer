@@ -60,3 +60,9 @@ The dashboard can add APIs from a cURL command, a Swagger 2 / OpenAPI 3 document
 service under test (LLD-19 §8a). Decisions: (a) the importer lives in the same module (`importer` package; only new dependency is `jackson-dataformat-yaml`, already vendored for the
 load-test module); (b) imported secrets are replaced by `{{env.NAME}}` placeholders and the dashboard's environment box is in-memory only; (c) the `send` and `import/openapi` endpoints make
 outbound HTTP calls to an address the developer types — acceptable for a loopback developer tool guarded by the Host / Content-Type checks, and limited to `http(s)`, no redirects on send, 10 MiB / 64 KiB caps.
+
+## Addendum 2026-10-09 (2): scenarios and the in-browser runner
+Scenario testing needed (a) several named workflows, (b) per-step assertions and body sources (generated / invalid case / custom), and (c) running them from the dashboard. To keep **one owner of the
+flow semantics** the runtime (`runtime.js`) became asynchronous and moved next to the UI modules; k6 runs it (async scenario functions are supported by k6) and the dashboard runs the same file through
+an `http` adapter over `/api/send`. Rejected alternatives: a second executor in Java (two implementations to keep in step), and calling the service from the browser (CORS). Verified with k6 1.3 (58k iterations,
+all checks) and in headless Chromium (chained scenario, rejection scenario, failing assertion).

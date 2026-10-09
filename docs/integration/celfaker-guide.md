@@ -65,6 +65,16 @@ Draw them in the dashboard (**Flow designer**) or write `workflow.json`:
 Profiles: `smoke` (one iteration), `load`, `stress`, `spike`, `custom` (constant VUs). The `negative` scenario sends each invalid body after running
 its prerequisite steps and expects a rejection status. Secrets: `k6 run -e TOKEN=… main.js` and `{{env.TOKEN}}`.
 
+## 4a. Scenario testing in the dashboard (tab 5)
+1. **Scenarios** are tabs above the canvas: `+ Scenario`, Duplicate, Rename, Delete. Build one per behaviour you want to test (“happy path”, “quantity 0 is rejected”, “validation API agrees”).
+2. **Drag** APIs from the left onto the canvas; **drag from a node's right dot** to another node to run it after; the right panel edits the selected step:
+   *Runs after*, *Extract* (response → variable), *Inject* (variable → path / query / header / body), **Request body** (generated valid · a generated **invalid case** · **custom JSON**),
+   **Assertions** (status / header / body field against a value or `{{step.var}}`), expected status, think time. “Auto-wire” fills path parameters from earlier steps.
+3. **Run** — press `▶ Run` (iterations, `NAME=value` environment for `{{env.TOKEN}}`) or `▶▶ Run all scenarios`: real requests go to the base URL with generated data; nodes turn green or red,
+   and every step lists its request, response, extracted values and each check (failed ones are named).
+4. **Generate** exports one k6 project per scenario (`k6/<scenario>/main.js`) that runs the same flow under load.
+CLI: `--workflow scenarios.json` takes one workflow or an array of scenarios.
+
 ## 5. Tips
 - Teach the faker your domain: put real ids and business values into `attribute-map.json` `valid`; add rules to APIs so valid data satisfies them.
 - A negative case the API legitimately accepts (an optional field) fails its check: remove it from `data/*.invalid.json` or change `invalidStatus`.

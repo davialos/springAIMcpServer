@@ -54,3 +54,9 @@ in-memory HTTP double and exercised for real with k6. *(chosen — one owner of 
   the generated `*.invalid.json` or, better, in the attribute map.
 - Generated data is only as realistic as the attribute map; ids that must exist in the system under test (e.g. a customer id) are
   supplied by workflow injection (`body.customerId = {{customer.id}}`) or by editing the map.
+
+## Addendum 2026-10-09: importing APIs and fake input
+The dashboard can add APIs from a cURL command, a Swagger 2 / OpenAPI 3 document (URL or pasted, JSON or YAML) and fake input for one API on its own, and can send a request to the
+service under test (LLD-19 §8a). Decisions: (a) the importer lives in the same module (`importer` package; only new dependency is `jackson-dataformat-yaml`, already vendored for the
+load-test module); (b) imported secrets are replaced by `{{env.NAME}}` placeholders and the dashboard's environment box is in-memory only; (c) the `send` and `import/openapi` endpoints make
+outbound HTTP calls to an address the developer types — acceptable for a loopback developer tool guarded by the Host / Content-Type checks, and limited to `http(s)`, no redirects on send, 10 MiB / 64 KiB caps.

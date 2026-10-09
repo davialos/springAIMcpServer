@@ -2,6 +2,7 @@ import { api as server } from './api.js';
 import { clear, debounce, download, h, pickFile } from './dom.js';
 import { prune } from './flow-model.js';
 import { apiById, notify, save, state } from './state.js';
+import { fakePanel, importCard, sendPanel } from './view-import.js';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
@@ -58,8 +59,9 @@ export function render(root) {
     h('button', { class: 'btn', onclick: async () => { const t = await pickFile(); if (t) { try { await setContract(JSON.parse(t)); } catch (e) { alert('Not a contract file: ' + e.message); } } } }, 'Import contract'),
     h('button', { class: 'btn', onclick: () => download(state.contract.name + '-contract.json', JSON.stringify(state.contract, null, 2)) }, 'Export contract'));
 
-  root.append(h('p', { class: 'lead' }, 'Describe each API with its documentation, an example request body (its fields become CEL parameters), the rules it enforces and, for validation endpoints, the action they check.'),
-    bar, h('div', { class: 'split' }, list, spec ? editor(spec) : h('p', { class: 'empty' }, 'Add an API or load the example to start.')));
+  root.append(h('p', { class: 'lead' }, 'Add APIs from a cURL command or from the service’s own Swagger / OpenAPI documentation, or describe them by hand: documentation, an example request body (its fields become CEL parameters), the rules it enforces and, for validation endpoints, the action they check. Then generate fake input and try it against the service.'),
+    importCard(refreshCandidates), bar,
+    h('div', { class: 'split' }, list, spec ? h('div', {}, editor(spec), fakePanel(spec, refreshCandidates), sendPanel(spec)) : h('p', { class: 'empty' }, 'Import APIs above, add one by hand, or load the example.')));
 }
 
 function addApi() {

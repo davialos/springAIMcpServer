@@ -86,8 +86,25 @@ Tabs: **APIs** (contract editor, docs, rules) → **Parameters** (tick payload v
 **CEL expressions** (generate, filter by category, "inputs → results" matrix, "+ rule" into an API) → **Attribute map** (edit valid / boundary / invalid) →
 **Flow designer** (drag APIs onto the canvas, drag from a node's right dot to another node to run it after, inspector for
 extract / inject / auto-wire, live validation, keyboard alternative: "Runs after" checkboxes, Delete key) → **Generate** (summary, file
-preview, `.zip`). Endpoints (all JSON, stateless): `POST /api/analyze | attribute-map | expressions | cases | workflow/propose | workflow/validate | generate | generate.zip`, `GET /api/example`.
+preview, `.zip`). Endpoints (all JSON, stateless): `POST /api/analyze | attribute-map | expressions | cases | workflow/propose | workflow/validate | generate | generate.zip | import/curl | import/openapi | fake | send`, `GET /api/example`.
 Hardening: loopback bind, `Host` allow-list, `application/json` required, 8 MiB body cap, caps on `validCount` (1000) and `casesPerExpression` (100), no `innerHTML` with data (text nodes only), CSP `default-src 'self'`.
+
+## 8a. Adding APIs: cURL, Swagger / OpenAPI, fake input, send (`importer`)
+- **cURL** (`CurlParser`): tokenizes like a shell (quotes, `$'…'`, line continuations); reads `-X`, `-H`, `-d/--data*`, `--json`, `-G`, `-u`, `--url`;
+  ignores transport flags. URL → base URL + path (+ query). A JSON body becomes `requestExample` (non-JSON bodies are dropped with a warning).
+  **Secrets are never kept:** `Authorization`, `Cookie`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`, `X-Access-Token` values and `-u` credentials become `{{env.NAME}}` placeholders (a warning names each).
+- **Swagger / OpenAPI** (`SpecFetcher`, `OpenApiImporter`): Swagger 2 and OpenAPI 3, JSON or YAML, from a URL (the service root, its Swagger UI or the document — the
+  usual locations are tried: `/v3/api-docs`, `/v2/api-docs`, `/swagger.json`, `/openapi.json|yaml`, …) or pasted. Per operation: id (`operationId` or method+path), name/description
+  from `summary`/`description`, path with the server's base path, required query parameters appended with example values, request/response example bodies built from the
+  schemas (`example` > `default` > first `enum` > a value that satisfies type, format, bounds; `$ref`/`allOf`/`oneOf` resolved, recursion cut at depth 8, `readOnly` skipped),
+  accepted 2xx statuses, rejection statuses (declared 400/422), auth header placeholders from `security` (`Bearer {{env.TOKEN}}`, `{{env.API_KEY}}`, `Basic {{env.BASIC_AUTH}}`),
+  GET operations whose path ends in validate / verify / check become VALIDATION APIs, and **CEL rules from schema constraints** (`minimum`/`maximum`/exclusive bounds, `minLength`/`maxLength`,
+  `pattern` → `matches`, `enum` → `in`, `minItems`/`maxItems`) named exactly like the payload analyzer names parameters, so valid fake data satisfies them and negative data violates them.
+- **Fake input** (`FakeInput`): one API on its own — analyze its body, build values, solve its rules, return valid and invalid bodies. Rules that share parameters are solved
+  together, independent groups separately (a joint search over every body parameter almost never satisfies all rules at once).
+- **Send** (dashboard only): a REST-client style request to the service under test (`{{env.NAME}}` replaced from an in-memory environment box, never persisted; no redirects; 15 s;
+  64 KiB answer cap; only absolute `http(s)` URLs). The response can become the API's `responseExample`.
+- Limits: multipart/form bodies, GraphQL and non-JSON bodies are not faked; required/optional is not derived from the schema (OQ-83).
 
 ## 9. Failure modes
 - Expression rejected by the checker → listed in `rejected`, never emitted. Rule that does not compile → warning, rule skipped.

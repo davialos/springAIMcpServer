@@ -65,8 +65,10 @@ public final class DataGenerator {
         Map<String, Candidate> byName = new LinkedHashMap<>();
         candidates.forEach(c -> byName.put(c.celName(), c));
 
-        // 1. rules: inputs that satisfy all of them, and per-rule violating inputs
+        // 1. rules: group the ones that share parameters; each group is solved on its own (a joint search over every
+        //    parameter of the body would almost never hit a combination that satisfies all rules at once)
         List<String> rules = new ArrayList<>();
+        Map<String, Set<String>> paramsOf = new LinkedHashMap<>();
         for (String rule : api.rules()) {
             List<CelCase> probe = cases.build(rule, 1);
             if (probe.isEmpty()) {
@@ -74,13 +76,17 @@ public final class DataGenerator {
                 continue;
             }
             rules.add(rule);
+            paramsOf.put(rule, new LinkedHashSet<>(probe.getFirst().inputs().keySet()));
         }
-        List<Map<String, Object>> satisfying = List.of();
-        if (!rules.isEmpty()) {
-            String all = rules.stream().map(r -> "(" + r + ")").collect(Collectors.joining(" && "));
-            satisfying = onlyOwn(cases.build(all, 600).stream().filter(CelCase::isTrue).toList(), byName);
-            if (satisfying.isEmpty()) {
-                warnings.add("no input combination satisfies all rules together; valid data ignores them: " + all);
+        List<List<Map<String, Object>>> satisfying = new ArrayList<>();
+        for (List<String> group : groups(rules, paramsOf)) {
+            String all = group.stream().map(r -> "(" + r + ")").collect(Collectors.joining(" && "));
+            List<Map<String, Object>> solutions = onlyOwn(cases.build(all, 600).stream().filter(CelCase::isTrue).toList(), byName);
+            if (solutions.isEmpty()) {
+                warnings.add("no input combination satisfies these rules together; valid data ignores them: " + all);
+            } else {
+                Collections.shuffle(solutions, rnd);
+                satisfying.add(solutions);
             }
         }
 
@@ -100,8 +106,8 @@ public final class DataGenerator {
                     facts.put(e.getKey(), pool.get(i % pool.size()));
                 }
             }
-            if (!satisfying.isEmpty()) {
-                facts.putAll(satisfying.get(i % satisfying.size()));
+            for (List<Map<String, Object>> solutions : satisfying) {
+                facts.putAll(solutions.get(i % solutions.size()));
             }
             valid.add(body(api, byName, facts));
         }
@@ -147,6 +153,25 @@ public final class DataGenerator {
             }
         }
         return new ApiData(api.id(), valid, invalid, warnings);
+    }
+
+    /** Connected components of rules that share at least one parameter. */
+    private static List<List<String>> groups(List<String> rules, Map<String, Set<String>> paramsOf) {
+        List<List<String>> out = new ArrayList<>();
+        List<Set<String>> params = new ArrayList<>();
+        for (String rule : rules) {
+            Set<String> mine = new LinkedHashSet<>(paramsOf.get(rule));
+            List<String> group = new ArrayList<>(List.of(rule));
+            for (int i = out.size() - 1; i >= 0; i--) {
+                if (!Collections.disjoint(params.get(i), mine)) {
+                    group.addAll(0, out.remove(i));
+                    mine.addAll(params.remove(i));
+                }
+            }
+            out.add(group);
+            params.add(mine);
+        }
+        return out;
     }
 
     private static List<Map<String, Object>> onlyOwn(List<CelCase> found, Map<String, Candidate> own) {

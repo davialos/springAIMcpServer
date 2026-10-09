@@ -9,6 +9,10 @@ async function post(path, body) {
 
 export const api = {
   example: async () => (await fetch('/api/example')).json(),
+  importCurl: (curl) => post('/api/import/curl', { curl }),
+  importOpenApi: (url, spec) => post('/api/import/openapi', { url, spec }),
+  fake: (apiSpec, seed, count) => post('/api/fake', { api: apiSpec, seed, count }),
+  send: (req) => post('/api/send', req),
   analyze: (payload, object, mapPaths) => post('/api/analyze', { payload, object, mapPaths }),
   attributeMap: (candidates, seed) => post('/api/attribute-map', { candidates, seed }),
   expressions: (candidates, valueMap, seed, options) => post('/api/expressions', { candidates, valueMap, seed, options }),

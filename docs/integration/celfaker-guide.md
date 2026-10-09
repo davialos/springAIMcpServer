@@ -11,6 +11,10 @@ k6 run -e BASE_URL=http://localhost:8080 build/celfaker/k6/main.js
 ```
 Needs JDK 25 and (to run the suite) [k6](https://k6.io). Node is only needed for the UI tests (`scripts/celfaker-ui-test.sh`).
 
+## 1b. On a Mac with the local-dev control plane
+`local-dev/bin/devctl dashboard` shows the studio as a **Faker** tab and runs it as the process-compose service `celfaker` (port 8110, JDK 25, self-compiling on first start); your other
+local services appear as one-click “Running locally” import sources. See `local-dev/README.md`.
+
 ## 1a. Add APIs the easy way (dashboard, tab 1)
 - **Swagger / OpenAPI URL** — type the service address (`http://localhost:8080`) or its docs URL; the dashboard finds `/v3/api-docs`, `/swagger.json`, … reads every operation, builds example bodies from the schemas,
   turns schema constraints into CEL rules and proposes which GET operations are validation APIs. Tick the ones to add.

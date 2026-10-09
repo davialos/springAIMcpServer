@@ -106,6 +106,12 @@ Hardening: loopback bind, `Host` allow-list, `application/json` required, 8 MiB 
   64 KiB answer cap; only absolute `http(s)` URLs). The response can become the API's `responseExample`.
 - Limits: multipart/form bodies, GraphQL and non-JSON bodies are not faked; required/optional is not derived from the schema (OQ-83).
 
+## 8b. Local-dev integration (ADR-0029)
+`devctl` (local-dev/, macOS, process-compose) registers the faker as a built-in `command` service: command `PATH="$JAVA_HOME/bin:$PATH" exec ./scripts/celfaker.sh serve --port <port>`
+in the checkout, readiness probe `GET /api/example` (120 × 5 s: first start compiles), environment `JAVA_HOME` (`auto:25`), `CELFAKER_SERVICES` (JSON `[{name,url}]` of the configured services, shown as import chips via
+`GET /api/local-services`) and `CELFAKER_FRAME_ANCESTORS` (the dashboard's loopback origins; anything but a loopback `http(s)` origin is refused at start-up; default CSP stays `frame-ancestors 'none'`).
+The service list is refreshed whenever devctl regenerates the project (`devctl sync`).
+
 ## 9. Failure modes
 - Expression rejected by the checker → listed in `rejected`, never emitted. Rule that does not compile → warning, rule skipped.
 - Workflow not runnable → generation refuses (`IllegalArgumentException`, HTTP 400 with the list of problems).

@@ -1,11 +1,12 @@
-import { newWorkflow } from './flow-model.js';
+import { newWorkflow, normalizeWorkflow, prune } from './flow-model.js';
 
 const KEY = 'saimcp-celfaker-v1';
 const listeners = new Set();
 
 export const state = {
   contract: { name: 'my-api', baseUrl: 'http://localhost:8080', apis: [] },
-  workflow: newWorkflow('workflow'),
+  scenarios: [], // named workflows, each one a test scenario; `workflow` is the one on the canvas
+  workflow: newWorkflow('Scenario 1'),
   candidates: {}, // api id -> analyzed candidates
   skipped: {},
   valueMap: null, // attribute map (editable JSON)
@@ -14,6 +15,7 @@ export const state = {
   settings: { seed: 42, valid: 30, cases: 12, combined: 30, maxPerParameter: 0 },
   ui: { tab: 'apis', api: null, step: null },
 };
+state.scenarios = [state.workflow];
 
 export function subscribe(fn) {
   listeners.add(fn);
@@ -27,14 +29,19 @@ export function notify() {
 
 export function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ contract: state.contract, workflow: state.workflow, valueMap: state.valueMap, settings: state.settings }));
+    localStorage.setItem(KEY, JSON.stringify({ contract: state.contract, scenarios: state.scenarios, active: Math.max(0, state.scenarios.indexOf(state.workflow)), valueMap: state.valueMap, settings: state.settings }));
   } catch (e) { /* storage unavailable: the page works without it */ }
 }
 
 export function restore() {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
-    if (saved) Object.assign(state, saved);
+    if (saved) {
+      const { scenarios, active, workflow, ...rest } = saved;
+      Object.assign(state, rest);
+      state.scenarios = (scenarios?.length ? scenarios : [workflow ?? newWorkflow('Scenario 1')]).map(normalizeWorkflow);
+      state.workflow = state.scenarios[Math.min(active ?? 0, state.scenarios.length - 1)];
+    }
   } catch (e) { /* ignore a corrupt or blocked store */ }
 }
 
@@ -52,4 +59,16 @@ export function selectedCandidates() {
     }
   }
   return [...byName.values()].map((c) => ({ path: c.path, objectCode: c.objectCode, attributeCode: c.attributeCode, type: c.type, sample: c.sample }));
+}
+
+/** Makes scenario `i` the one on the canvas. */
+export function selectScenario(i) {
+  state.workflow = state.scenarios[i];
+  state.ui.step = null;
+}
+
+/** Drops steps whose API no longer exists from every scenario. */
+export function pruneAll() {
+  const ids = state.contract.apis.map((a) => a.id);
+  state.scenarios.forEach((w) => prune(w, ids));
 }

@@ -18,6 +18,7 @@ export const api = {
   attributeMap: (candidates, seed) => post('/api/attribute-map', { candidates, seed }),
   expressions: (candidates, valueMap, seed, options) => post('/api/expressions', { candidates, valueMap, seed, options }),
   cases: (candidates, valueMap, seed, expression, max) => post('/api/cases', { candidates, valueMap, seed, expression, max }),
+  prepare: (contract, workflow, seed, count) => post('/api/scenario/prepare', { contract, workflow, seed, count }),
   propose: (contract) => post('/api/workflow/propose', { contract }),
   validate: (contract, workflow) => post('/api/workflow/validate', { contract, workflow }),
   generate: (body) => post('/api/generate', body),

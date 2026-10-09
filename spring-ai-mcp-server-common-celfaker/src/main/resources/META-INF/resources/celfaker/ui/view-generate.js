@@ -9,7 +9,7 @@ function request() {
   const s = state.settings;
   return {
     contract: state.contract,
-    workflow: state.workflow.steps.length ? toWorkflow(state.workflow) : null,
+    workflows: state.scenarios.filter((w) => w.steps.length).map(toWorkflow),
     valueMap: state.valueMap,
     seed: Number(s.seed), validCount: Number(s.valid), casesPerExpression: Number(s.cases),
     options: { categories: [], maxPerParameter: Number(s.maxPerParameter) || 0, combined: Number(s.combined) || 0 },
@@ -49,7 +49,7 @@ export function render(root) {
   const s = state.settings;
   const num = (key, min = 0) => h('input', { type: 'number', min, value: s[key], onchange: (e) => { s[key] = Number(e.target.value); save(); } });
   root.append(
-    h('p', { class: 'lead' }, 'Generates the parameter library, attribute map, CEL expressions with input/result cases, request data for every API (valid, rule-satisfying and negative) and a k6 project that runs your workflow.'),
+    h('p', { class: 'lead' }, 'One k6 project per scenario that has steps (a single scenario goes to <code>k6/</code>, several to <code>k6/&lt;scenario&gt;/</code>). Generates the parameter library, attribute map, CEL expressions with input/result cases, request data for every API (valid, rule-satisfying and negative) and a k6 project that runs your workflow.'),
     h('div', { class: 'card' },
       h('div', { class: 'toolbar' },
         h('label', { class: 'inline' }, 'Seed ', num('seed', -2147483648)),

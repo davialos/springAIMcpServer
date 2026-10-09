@@ -5,6 +5,39 @@ export function newWorkflow(name = 'workflow') {
   return { name, steps: [], load: { profile: 'smoke', vus: 5, duration: '30s', negatives: 100 } };
 }
 
+/** Fills in the fields older saved workflows lack, so the rest of the UI can rely on them. */
+export function normalizeStep(s) {
+  s.dependsOn ??= []; s.extract ??= []; s.inject ??= []; s.expectStatus ??= []; s.assertions ??= [];
+  s.body ??= null; s.invalidCase ??= ''; s.thinkTime ??= 0; s.x ??= 40; s.y ??= 40;
+  return s;
+}
+
+export function normalizeWorkflow(wf) {
+  wf.name ||= 'scenario';
+  wf.load ??= { profile: 'smoke', vus: 5, duration: '30s', negatives: 100 };
+  wf.steps = (wf.steps ?? []).map(normalizeStep);
+  return wf;
+}
+
+/** A scenario name not used yet: "name", "name 2", ... */
+export function uniqueName(list, base) {
+  const names = new Set(list.map((w) => w.name));
+  if (!names.has(base)) return base;
+  let n = 2;
+  while (names.has(base + ' ' + n)) n++;
+  return base + ' ' + n;
+}
+
+export function duplicateScenario(list, wf) {
+  const copy = JSON.parse(JSON.stringify(wf));
+  copy.name = uniqueName(list, wf.name + ' copy');
+  return copy;
+}
+
+/** Operators of a response assertion, with the label shown in the inspector. */
+export const ASSERT_OPS = [['==', 'equals'], ['!=', 'differs from'], ['exists', 'exists'], ['absent', 'is absent'], ['contains', 'contains'],
+  ['>', 'is greater than'], ['>=', 'is at least'], ['<', 'is less than'], ['<=', 'is at most'], ['matches', 'matches regex']];
+
 export function findStep(wf, id) {
   return wf.steps.find((s) => s.id === id);
 }
@@ -18,7 +51,7 @@ export function newStepId(wf, apiId) {
 }
 
 export function addStep(wf, apiId, x = 40, y = 40) {
-  const step = { id: newStepId(wf, apiId), api: apiId, dependsOn: [], extract: [], inject: [], expectStatus: [], thinkTime: 0, x, y };
+  const step = normalizeStep({ id: newStepId(wf, apiId), api: apiId, thinkTime: 0, x, y });
   wf.steps.push(step);
   return step;
 }
@@ -165,6 +198,9 @@ export function toWorkflow(wf) {
       extract: s.extract.filter((e) => e.name && e.from),
       inject: s.inject.filter((i) => i.target),
       expectStatus: s.expectStatus.map(Number).filter(Number.isFinite),
+      assertions: (s.assertions ?? []).filter((a) => a.from && a.op).map((a) => ({ from: a.from, op: a.op, value: a.value ?? '' })),
+      body: s.body && typeof s.body === 'object' ? s.body : null,
+      invalidCase: s.invalidCase || '',
       thinkTime: Number(s.thinkTime) || 0, x: Math.round(s.x), y: Math.round(s.y),
     })),
   };

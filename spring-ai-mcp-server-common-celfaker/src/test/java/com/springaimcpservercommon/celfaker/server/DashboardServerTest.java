@@ -55,6 +55,10 @@ class DashboardServerTest {
                 HttpResponse.BodyHandlers.ofString());
         assertThat(js.statusCode()).isEqualTo(200);
         assertThat(js.headers().firstValue("Content-Type")).hasValueSatisfying(v -> assertThat(v).startsWith("text/javascript"));
+        HttpResponse<String> runtime = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + "/runtime.js")).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(runtime.statusCode()).isEqualTo(200);
+        assertThat(runtime.body()).contains("export function createRuntime");
         HttpResponse<String> missing = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + "/nope.js")).build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(missing.statusCode()).isEqualTo(404);
@@ -189,5 +193,24 @@ class DashboardServerTest {
         assertThat(plain.headers().firstValue("Content-Security-Policy")).hasValueSatisfying(v -> assertThat(v).contains("frame-ancestors 'none'"));
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new DashboardServer(0, List.of("https://evil.example"), List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void preparesAScenarioForTheBrowserRunner() throws Exception {
+        String contract;
+        try (var in = getClass().getResourceAsStream("/celfaker/examples/shop-contract.json")) {
+            contract = new String(in.readAllBytes());
+        }
+        String wf = "{\"name\":\"s\",\"steps\":[{\"id\":\"c\",\"api\":\"createCustomer\",\"extract\":[{\"name\":\"id\",\"from\":\"body.id\"}],"
+                + "\"assertions\":[{\"from\":\"status\",\"op\":\"==\",\"value\":\"201\"}]}]}";
+        JsonNode ok = json(post("/api/scenario/prepare", "{\"contract\":" + contract + ",\"workflow\":" + wf + ",\"count\":6}", "application/json"));
+        assertThat(ok.path("problems")).isEmpty();
+        assertThat(ok.path("valid").path("createCustomer")).hasSize(6);
+        assertThat(ok.path("invalid").path("createCustomer").size()).isGreaterThan(5);
+        assertThat(ok.path("apis").path("createCustomer").path("hasBody").asBoolean()).isTrue();
+        assertThat(ok.path("apis").has("createOrder")).as("only APIs the scenario uses").isFalse();
+        assertThat(ok.path("workflow").path("steps").get(0).path("assertions").get(0).path("op").asString()).isEqualTo("==");
+        JsonNode bad = json(post("/api/scenario/prepare", "{\"contract\":" + contract + ",\"workflow\":{\"name\":\"s\",\"steps\":[{\"id\":\"x\",\"api\":\"ghost\"}]}}", "application/json"));
+        assertThat(bad.path("problems").get(0).asString()).contains("unknown api ghost");
     }
 }

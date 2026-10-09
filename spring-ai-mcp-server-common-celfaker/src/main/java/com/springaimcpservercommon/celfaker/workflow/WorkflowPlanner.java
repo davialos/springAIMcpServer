@@ -111,6 +111,21 @@ public final class WorkflowPlanner {
                     pathParams.add(pm.group(1));
                 }
             }
+            for (Assertion a : s.assertions()) {
+                if (!Assertion.OPS.contains(a.op())) {
+                    problems.add("step " + s.id() + ": unknown assertion operator " + a.op());
+                }
+                if (a.from() == null || !(a.from().equals("status") || a.from().startsWith("body.") || a.from().startsWith("header."))) {
+                    problems.add("step " + s.id() + ": assertion source must be status, body.<path> or header.<Name>: " + a.from());
+                }
+                checkRefs(s, a.value(), ancestors, byId, problems);
+            }
+            if (api != null && !api.hasBody() && (s.body() != null || !s.invalidCase().isEmpty())) {
+                problems.add("step " + s.id() + ": api " + api.id() + " has no JSON request body, so a custom or invalid body is meaningless");
+            }
+            if (s.body() != null && !s.body().isObject()) {
+                problems.add("step " + s.id() + ": the custom body must be a JSON object");
+            }
             Set<String> injectedPath = new HashSet<>();
             for (Inject in : s.inject()) {
                 if (in.target() == null || !in.target().matches("(path|query|header|body)\\..+")) {
@@ -120,21 +135,7 @@ public final class WorkflowPlanner {
                 if (in.target().startsWith("path.")) {
                     injectedPath.add(in.target().substring(5));
                 }
-                Matcher m = PLACEHOLDER.matcher(in.value() == null ? "" : in.value());
-                while (m.find()) {
-                    String ref = m.group(1);
-                    if (BUILTIN.contains(ref) || ref.startsWith("env.")) {
-                        continue;
-                    }
-                    int dot = ref.indexOf('.');
-                    String stepId = dot < 0 ? ref : ref.substring(0, dot);
-                    String var = dot < 0 ? "" : ref.substring(dot + 1);
-                    if (!ancestors.contains(stepId)) {
-                        problems.add("step " + s.id() + ": {{" + ref + "}} refers to a step that does not run before it");
-                    } else if (byId.get(stepId).extract().stream().noneMatch(e -> e.name().equals(var))) {
-                        problems.add("step " + s.id() + ": step " + stepId + " does not extract " + var);
-                    }
-                }
+                checkRefs(s, in.value(), ancestors, byId, problems);
             }
             for (String pp : pathParams) {
                 if (!injectedPath.contains(pp)) {
@@ -143,6 +144,24 @@ public final class WorkflowPlanner {
             }
         }
         return problems;
+    }
+
+    private static void checkRefs(Step s, String text, Set<String> ancestors, Map<String, Step> byId, List<String> problems) {
+        Matcher m = PLACEHOLDER.matcher(text == null ? "" : text);
+        while (m.find()) {
+            String ref = m.group(1);
+            if (BUILTIN.contains(ref) || ref.startsWith("env.")) {
+                continue;
+            }
+            int dot = ref.indexOf('.');
+            String stepId = dot < 0 ? ref : ref.substring(0, dot);
+            String var = dot < 0 ? "" : ref.substring(dot + 1);
+            if (!ancestors.contains(stepId)) {
+                problems.add("step " + s.id() + ": {{" + ref + "}} refers to a step that does not run before it");
+            } else if (byId.get(stepId).extract().stream().noneMatch(e -> e.name().equals(var))) {
+                problems.add("step " + s.id() + ": step " + stepId + " does not extract " + var);
+            }
+        }
     }
 
     private static Set<String> ancestors(Step s, Map<String, Step> byId) {
@@ -182,7 +201,7 @@ public final class WorkflowPlanner {
                 }
             }
             steps.add(new Step(a.id(), a.id(), previous == null ? List.of() : List.of(previous), extract, List.of(),
-                    List.of(), 0.2, x, 80));
+                    List.of(), List.of(), null, "", 0.2, x, 80));
             stepOfApi.put(a.id(), a.id());
             previous = a.id();
             x += 220;
@@ -201,7 +220,7 @@ public final class WorkflowPlanner {
                     inject.add(new Inject("path." + pm.group(1), "{{" + t.id() + "." + t.extract().getFirst().name() + "}}"));
                 }
             }
-            steps.add(new Step(a.id(), a.id(), target == null ? List.of() : List.of(target), List.of(), inject, List.of(), 0.1,
+            steps.add(new Step(a.id(), a.id(), target == null ? List.of() : List.of(target), List.of(), inject, List.of(), List.of(), null, "", 0.1,
                     40 + 220.0 * (steps.size() % 4), y));
             y += 40;
         }

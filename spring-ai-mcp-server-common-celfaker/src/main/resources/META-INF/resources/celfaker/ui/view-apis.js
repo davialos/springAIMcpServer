@@ -1,7 +1,6 @@
 import { api as server } from './api.js';
 import { clear, debounce, download, h, pickFile } from './dom.js';
-import { prune } from './flow-model.js';
-import { apiById, notify, save, state } from './state.js';
+import { apiById, notify, pruneAll, save, state } from './state.js';
 import { fakePanel, importCard, sendPanel } from './view-import.js';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
@@ -24,7 +23,7 @@ export async function setContract(contract) {
   state.contract = { name: contract.name ?? 'my-api', baseUrl: contract.baseUrl ?? 'http://localhost:8080', apis: contract.apis ?? [] };
   state.candidates = {};
   for (const a of state.contract.apis) await refreshCandidates(a);
-  prune(state.workflow, state.contract.apis.map((a) => a.id));
+  pruneAll();
   state.ui.api = state.contract.apis[0]?.id ?? null;
   notify();
 }
@@ -107,7 +106,7 @@ function renameApi(spec, id) {
   spec.id = id;
   state.candidates[id] = state.candidates[old];
   delete state.candidates[old];
-  for (const s of state.workflow.steps) if (s.api === old) s.api = id;
+  for (const w of state.scenarios) for (const s of w.steps) if (s.api === old) s.api = id;
   for (const a of state.contract.apis) if (a.validates === old) a.validates = id;
   state.ui.api = id;
   notify();
@@ -116,7 +115,7 @@ function renameApi(spec, id) {
 function removeApi(spec) {
   state.contract.apis = state.contract.apis.filter((a) => a !== spec);
   delete state.candidates[spec.id];
-  prune(state.workflow, state.contract.apis.map((a) => a.id));
+  pruneAll();
   state.ui.api = state.contract.apis[0]?.id ?? null;
   notify();
 }

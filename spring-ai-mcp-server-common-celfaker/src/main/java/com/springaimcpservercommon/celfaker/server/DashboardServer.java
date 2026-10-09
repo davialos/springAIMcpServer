@@ -6,7 +6,9 @@ import com.springaimcpservercommon.celfaker.data.FakeInput;
 import com.springaimcpservercommon.celfaker.expr.CaseBuilder;
 import com.springaimcpservercommon.celfaker.expr.CelCase;
 import com.springaimcpservercommon.celfaker.expr.ExpressionFaker;
+import com.springaimcpservercommon.celfaker.data.ApiData;
 import com.springaimcpservercommon.celfaker.importer.CurlParser;
+import com.springaimcpservercommon.celfaker.k6.K6WorkflowGenerator;
 import com.springaimcpservercommon.celfaker.importer.Imported;
 import com.springaimcpservercommon.celfaker.importer.OpenApiImporter;
 import com.springaimcpservercommon.celfaker.importer.SpecFetcher;
@@ -80,6 +82,9 @@ public final class DashboardServer implements AutoCloseable {
     private record OpenApiRequest(@Nullable String url, @Nullable String spec) {
     }
 
+    private record PrepareRequest(ApiContract contract, Workflow workflow, @Nullable Long seed, @Nullable Integer count) {
+    }
+
     private record FakeRequest(ApiSpec api, @Nullable Long seed, @Nullable Integer count) {
     }
 
@@ -100,7 +105,7 @@ public final class DashboardServer implements AutoCloseable {
     private record ValidateRequest(ApiContract contract, Workflow workflow) {
     }
 
-    private record GenerateRequest(ApiContract contract, @Nullable Workflow workflow, @Nullable AttributeValueMap valueMap,
+    private record GenerateRequest(ApiContract contract, @Nullable Workflow workflow, @Nullable List<Workflow> workflows, @Nullable AttributeValueMap valueMap,
                                    @Nullable Long seed, @Nullable Integer validCount, ExpressionFaker.@Nullable Options options,
                                    @Nullable Integer casesPerExpression) {
     }
@@ -247,6 +252,33 @@ public final class DashboardServer implements AutoCloseable {
                 }
                 sendJson(ex, 200, imported);
             }
+            case "/api/scenario/prepare" -> {
+                PrepareRequest r = read(body, PrepareRequest.class);
+                List<String> problems = WorkflowPlanner.validate(r.workflow(), r.contract());
+                if (!problems.isEmpty()) {
+                    sendJson(ex, 200, Map.of("problems", problems));
+                    return;
+                }
+                // everything the shared flow runtime needs to run the scenario right here: the same documents the k6 suite gets
+                Map<String, Object> valid = new LinkedHashMap<>();
+                Map<String, Object> invalid = new LinkedHashMap<>();
+                long seed = r.seed() == null ? 42 : r.seed();
+                for (ApiSpec api : r.contract().apis()) {
+                    if (r.workflow().steps().stream().anyMatch(s -> s.api().equals(api.id())) && api.hasBody()) {
+                        ApiData d = FakeInput.generate(api, seed, r.count() == null ? 20 : Math.min(r.count(), 200));
+                        valid.put(api.id(), d.valid());
+                        invalid.put(api.id(), d.invalid());
+                    }
+                }
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("problems", List.of());
+                out.put("workflow", r.workflow());
+                out.put("apis", K6WorkflowGenerator.apiDocument(r.contract(), r.workflow()).path("apis"));
+                out.put("baseUrl", r.contract().baseUrl());
+                out.put("valid", valid);
+                out.put("invalid", invalid);
+                sendJson(ex, 200, out);
+            }
             case "/api/fake" -> {
                 FakeRequest r = read(body, FakeRequest.class);
                 sendJson(ex, 200, FakeInput.generate(r.api(), r.seed() == null ? 42 : r.seed(), r.count() == null ? 5 : r.count()));
@@ -350,7 +382,9 @@ public final class DashboardServer implements AutoCloseable {
 
     private static FakerPipeline.Output generate(GenerateRequest r) {
         FakerPipeline.Request d = FakerPipeline.Request.of(r.contract());
-        return FakerPipeline.run(new FakerPipeline.Request(r.contract(), r.workflow(), r.valueMap(),
+        List<Workflow> flows = r.workflows() != null && !r.workflows().isEmpty() ? r.workflows()
+                : r.workflow() == null ? List.of() : List.of(r.workflow());
+        return FakerPipeline.run(new FakerPipeline.Request(r.contract(), flows, r.valueMap(),
                 r.seed() == null ? d.seed() : r.seed(),
                 r.validCount() == null ? d.validCount() : Math.min(r.validCount(), 1000),
                 r.options() == null ? d.expressionOptions() : r.options(),
@@ -406,6 +440,7 @@ public final class DashboardServer implements AutoCloseable {
             send(ex, 400, "text/plain", "bad path".getBytes(StandardCharsets.UTF_8));
             return;
         }
+        // runtime.js lives next to the UI modules: the dashboard's scenario runner and the generated k6 suite run the same file
         try (InputStream in = DashboardServer.class.getResourceAsStream(UI_ROOT + p.substring(1))) {
             if (in == null) {
                 send(ex, 404, "text/plain", "not found".getBytes(StandardCharsets.UTF_8));

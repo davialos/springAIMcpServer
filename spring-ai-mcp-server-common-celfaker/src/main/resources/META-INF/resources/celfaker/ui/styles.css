@@ -81,3 +81,21 @@ fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 10px; 
 
 @media (max-width: 1000px) { .flow { grid-template-columns: 1fr; } .split { grid-template-columns: 1fr; } .palette, .inspector { max-height: none; } }
 @media (prefers-reduced-motion: no-preference) { .btn, .node { transition: border-color .12s, box-shadow .12s; } }
+
+/* scenarios and runs */
+.scenario-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.scenario-tab { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px 6px 0 0; padding: 5px 10px; cursor: pointer; }
+.scenario-tab.active { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); font-weight: 600; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--line); vertical-align: middle; }
+.dot.ok { background: var(--ok); } .dot.fail { background: var(--err); } .dot.running { background: var(--accent); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } }
+.node.run-ok { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok); } .node.run-fail { border-color: var(--err); box-shadow: 0 0 0 2px var(--err); }
+.node.run-running { border-color: var(--accent); border-style: dashed; }
+.node.selected.run-ok, .node.selected.run-fail { box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--line); }
+.run-panel { margin-top: 10px; } .run-rows { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.run-row { border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; padding: 4px 8px; background: var(--bg); }
+.run-row.ok { border-left-color: var(--ok); } .run-row.fail { border-left-color: var(--err); }
+.run-row summary { cursor: pointer; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.run-detail { margin-top: 6px; } .run-detail ul { margin: 4px 0 0; padding-left: 18px; list-style: none; } .run-detail li.ok { color: var(--ok); }
+.row2-inner { display: grid; grid-template-columns: auto 1fr; gap: 4px; }

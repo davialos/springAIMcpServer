@@ -1,10 +1,11 @@
 import { api as server } from './api.js';
 import { clear, debounce, download, h, pickFile } from './dom.js';
 import {
-  addStep, autoWire, availableVariables, connect, disconnect, findStep, layout, removeStep, renameStep,
+  addStep, ASSERT_OPS, autoWire, availableVariables, connect, disconnect, findStep, layout, normalizeWorkflow, removeStep, renameStep,
   suggestExtracts, toWorkflow, wouldCycle,
 } from './flow-model.js';
 import { apiById, notify, save, state } from './state.js';
+import { invalidReasons, loadInvalidReasons, nodeStatus, runPanel, scenarioBar } from './view-run.js';
 
 const NODE_W = 200;
 const NODE_H = 64;
@@ -42,18 +43,19 @@ export function render(root) {
       h('div', {}, h('button', { class: 'btn sm', onclick: () => { const s = addStep(wf, a.id, 40 + (wf.steps.length % 4) * 30, 40 + wf.steps.length * 20); select(s.id); } }, 'Add'))))
   );
 
-  const centre = h('div', { class: 'flow-centre' }, h('div', { class: 'toolbar' },
+  const centre = h('div', { class: 'flow-centre' }, scenarioBar(), h('div', { class: 'toolbar' },
     h('button', { class: 'btn', title: 'Chain actions and their validation APIs from the contract', onclick: async () => {
       if (wf.steps.length && !confirm('Replace the current workflow?')) return;
-      state.workflow = { ...(await server.propose(state.contract)), load: state.workflow.load };
+      replaceCurrent({ ...(await server.propose(state.contract)), name: state.workflow.name, load: state.workflow.load });
       state.ui.step = null;
       notify();
     } }, 'Propose from contract'),
     h('button', { class: 'btn', onclick: () => { layout(wf); notify(); } }, 'Auto layout'),
     h('button', { class: 'btn', onclick: () => download(wf.name + '-workflow.json', JSON.stringify(toWorkflow(wf), null, 2)) }, 'Export workflow'),
-    h('button', { class: 'btn', onclick: async () => { const t = await pickFile(); if (t) { try { state.workflow = JSON.parse(t); notify(); } catch (e) { alert('Not a workflow file: ' + e.message); } } } }, 'Import workflow'),
+    h('button', { class: 'btn', title: 'All scenarios in one file', onclick: () => download(state.contract.name + '-scenarios.json', JSON.stringify(state.scenarios.map(toWorkflow), null, 2)) }, 'Export all'),
+    h('button', { class: 'btn', onclick: async () => { const t = await pickFile(); if (t) { try { importScenarios(JSON.parse(t)); notify(); } catch (e) { alert('Not a workflow file: ' + e.message); } } } }, 'Import workflow'),
     h('button', { class: 'btn danger', onclick: () => { if (confirm('Remove all steps?')) { wf.steps = []; state.ui.step = null; notify(); } } }, 'Clear')),
-    canvas, problemBox);
+    canvas, problemBox, runPanel());
   root.append(h('div', { class: 'flow' }, palette, centre, inspector));
 
   // ---- canvas ----------------------------------------------------------------------------------------------
@@ -142,7 +144,7 @@ export function render(root) {
   function nodeEl(s) {
     const a = apiById(s.api);
     const selected = state.ui.step === s.id;
-    const el = h('div', { class: 'node' + (selected ? ' selected' : '') + (a?.role === 'VALIDATION' ? ' validation' : ''), dataset: { id: s.id }, style: `left:${s.x}px;top:${s.y}px;width:${NODE_W}px;height:${NODE_H}px`, tabindex: 0, role: 'button',
+    const el = h('div', { class: 'node' + (selected ? ' selected' : '') + (a?.role === 'VALIDATION' ? ' validation' : '') + (nodeStatus(s.id) ? ' run-' + nodeStatus(s.id) : ''), dataset: { id: s.id }, style: `left:${s.x}px;top:${s.y}px;width:${NODE_W}px;height:${NODE_H}px`, tabindex: 0, role: 'button',
       'aria-label': 'Step ' + s.id + ' calls ' + s.api,
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(s.id); } } },
       h('div', { class: 'node-head' }, h('span', { class: 'badge m-' + (a?.method ?? 'GET') }, a?.method ?? '?'), ' ', h('b', {}, s.id)),
@@ -202,6 +204,21 @@ export function render(root) {
   }
 }
 
+function replaceCurrent(wf) {
+  const i = state.scenarios.indexOf(state.workflow);
+  state.scenarios[i] = normalizeWorkflow(wf);
+  state.workflow = state.scenarios[i];
+}
+
+/** A file may hold one workflow or an array of scenarios. */
+function importScenarios(json) {
+  const list = (Array.isArray(json) ? json : [json]).map(normalizeWorkflow);
+  if (!list.length) throw new Error('no workflow in the file');
+  if (!state.workflow.steps.length && state.scenarios.length === 1) { state.scenarios.splice(0, 1, ...list); } else { state.scenarios.push(...list); }
+  state.workflow = list[0];
+  state.ui.step = null;
+}
+
 function field(label, control, hint) {
   return h('label', { class: 'field' }, h('span', { class: 'label' }, label), control, hint ? h('small', {}, hint) : null);
 }
@@ -244,11 +261,45 @@ function inspectStep(el, step, select) {
       h('input', { value: r.target, class: 'mono', placeholder: 'path.id | query.x | header.X | body.a.b', 'aria-label': 'target', oninput: (e) => { r.target = e.target.value; save(); } }),
       h('input', { value: r.value, class: 'mono', list: listId, placeholder: '{{step.var}}', 'aria-label': 'value', oninput: (e) => { r.value = e.target.value; save(); } })],
       [h('button', { class: 'btn sm', onclick: () => { const n = autoWire(wf, state.contract.apis, step.id); if (!n) alert('Nothing to wire: no unmapped path parameter, or no variable extracted by an earlier step.'); notify(); } }, 'Auto-wire path parameters')]),
+    bodySection(step, spec),
+    rows('Assertions — check the response', step.assertions, () => ({ from: 'body.id', op: '==', value: '' }), (r) => [
+      h('input', { value: r.from, class: 'mono', placeholder: 'status | body.a.b | header.X', 'aria-label': 'response value', oninput: (e) => { r.from = e.target.value; save(); } }),
+      h('div', { class: 'row2-inner' },
+        h('select', { 'aria-label': 'operator', onchange: (e) => { r.op = e.target.value; notify(); } }, ASSERT_OPS.map(([op, label]) => h('option', { value: op, selected: op === r.op }, label))),
+        r.op === 'exists' || r.op === 'absent' ? null : h('input', { value: r.value, class: 'mono', list: listId, placeholder: 'expected, e.g. NEW or {{step.var}}', 'aria-label': 'expected value', oninput: (e) => { r.value = e.target.value; save(); } }))],
+      [h('button', { class: 'chip toggle', title: 'The response status must be 2xx', onclick: () => { step.assertions.push({ from: 'status', op: '==', value: '201' }); notify(); } }, '+ status'),
+        ...(spec?.responseExample && typeof spec.responseExample === 'object' ? suggestExtracts(spec).slice(0, 4).map((x) => h('button', { class: 'chip toggle', title: 'Assert ' + x.from + ' exists', onclick: () => { step.assertions.push({ from: x.from, op: 'exists', value: '' }); notify(); } }, '+ ' + x.from)) : [])]),
     field('Expected status (empty = API default)', h('input', { value: step.expectStatus.join(', '), onchange: (e) => { step.expectStatus = e.target.value.split(',').map((s) => parseInt(s.trim(), 10)).filter(Number.isFinite); save(); } })),
     field('Think time after (seconds)', h('input', { type: 'number', min: 0, step: '0.1', value: step.thinkTime, onchange: (e) => { step.thinkTime = Number(e.target.value); save(); } })),
     h('div', { class: 'toolbar' },
       h('button', { class: 'btn', onclick: () => { state.ui.step = null; notify(); } }, 'Done'),
       h('button', { class: 'btn danger', onclick: () => { removeStep(wf, step.id); state.ui.step = null; notify(); } }, 'Delete step')));
+}
+
+/** Which request body a step sends: generated valid data, a generated invalid case, or JSON typed here. */
+function bodySection(step, spec) {
+  if (!spec || !spec.requestExample || spec.role === 'VALIDATION' || typeof spec.requestExample !== 'object') return null;
+  const mode = step.body ? 'custom' : step.invalidCase ? 'invalid' : 'valid';
+  const set = (m) => {
+    if (m === 'valid') { step.body = null; step.invalidCase = ''; }
+    if (m === 'invalid') { step.body = null; step.invalidCase ||= invalidReasons(spec)[0] ?? ''; loadInvalidReasons(spec); }
+    if (m === 'custom') { step.invalidCase = ''; step.body ??= JSON.parse(JSON.stringify(spec.requestExample)); }
+    notify();
+  };
+  const err = h('small', { class: 'error' });
+  return h('fieldset', {}, h('legend', {}, 'Request body'),
+    h('div', { class: 'chips', role: 'radiogroup', 'aria-label': 'Request body source' }, [['valid', 'Generated (valid)'], ['invalid', 'Invalid case'], ['custom', 'Custom JSON']].map(([m, label]) =>
+      h('button', { role: 'radio', 'aria-checked': mode === m, class: 'chip toggle' + (mode === m ? ' on' : ''), onclick: () => set(m) }, label))),
+    mode === 'invalid' ? h('div', {},
+      h('datalist', { id: 'inv-' + step.id }, invalidReasons(spec).map((r) => h('option', { value: r }))),
+      h('input', { class: 'mono', list: 'inv-' + step.id, value: step.invalidCase, placeholder: 'e.g. customer.age:missing', 'aria-label': 'invalid case', oninput: (e) => { step.invalidCase = e.target.value; save(); } }),
+      h('small', { class: 'muted' }, invalidReasons(spec).length ? invalidReasons(spec).length + ' generated cases — pick one, then set the expected status (e.g. 422) below.'
+        : 'Loading the generated cases… (or type a reason). Set the expected status (e.g. 422) below.')) : null,
+    mode === 'custom' ? h('div', {},
+      h('textarea', { rows: 8, class: 'mono', spellcheck: 'false', 'aria-label': 'custom request body',
+        oninput: (e) => { try { const v = JSON.parse(e.target.value); if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error('must be a JSON object'); step.body = v; err.textContent = ''; save(); } catch (x) { err.textContent = x.message; } } },
+        JSON.stringify(step.body, null, 2)), err,
+      h('small', { class: 'muted' }, 'Values may use {{step.var}}, {{env.NAME}}, {{iter}}, {{uuid}}.')) : null);
 }
 
 function rows(title, list, make, cells, extras = []) {

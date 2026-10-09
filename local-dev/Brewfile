@@ -6,4 +6,5 @@ brew "gradle"
 brew "k6"
 brew "openjdk@21"
 brew "openjdk@17"
+brew "openjdk@25"   # the CEL faker (scripts/celfaker.sh) builds and runs on JDK 25
 cask "orbstack"   # or docker / colima: needed for grafana, loki, prometheus, postgres

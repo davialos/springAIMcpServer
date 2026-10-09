@@ -43,6 +43,23 @@ Deploying a WAR copies it to `deployments/<context>.war` (hot deploy); undeploy 
 `http://127.0.0.1:9990/health/ready` (+ `port_offset`). Each WAR gets its own health URL
 (default `http://localhost:8080/<context>/`). Different Java versions per service: set `java_home` on `jboss`.
 
+## CEL Faker / Flow Studio (built-in service)
+The checkout that contains `local-dev/` also contains the **CEL faker** (`spring-ai-mcp-server-common-celfaker`, ADR-0030): import a service's
+Swagger / OpenAPI or a cURL, generate fake input, draw API flows and export a k6 suite. `devctl` runs it as a built-in `command` service named
+**`celfaker`** — a process-compose process on `http://localhost:8110` with a readiness probe, logs, start/stop/restart, and:
+
+- a **Faker** tab in the dashboard that embeds the studio (the faker allows framing only from the dashboard's loopback origin) plus an "open in new tab" link;
+- one-click import: the other services of your `config.json` (jar/war/command with a port) are handed to the studio as **“Running locally”** chips on its Swagger import card;
+- `devctl start|stop|restart|logs celfaker` and the MCP `service_control` tool work like for any service.
+
+It runs `scripts/celfaker.sh` with **JDK 25** (`brew bundle` installs `openjdk@25`; `auto:25` also finds Homebrew's keg-only JDK) and compiles itself with Maven
+on first start (a minute or two; the probe waits ~10 min). Config (all optional):
+```json
+"celfaker": {"enabled": true, "port": 8110, "autostart": true, "java_home": "auto:25", "repo_root": ""}
+```
+`autostart: false` keeps it stopped until you press Start; `enabled: false` removes it; defining your own `services.celfaker` replaces the built-in. The service is derived at load time and never written to `config.json`.
+Guide: `docs/integration/celfaker-guide.md`.
+
 ## Use it
 
 | Task | Dashboard | CLI |

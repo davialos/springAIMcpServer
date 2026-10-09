@@ -93,6 +93,58 @@ class DevctlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.deploy(self.cfg, "core", "nope")
 
+    def test_celfaker_is_a_builtin_service(self):
+        import tempfile
+        from devctl import compose, ops
+        cfg = self.config.load()
+        svc = cfg["services"]["celfaker"]
+        self.assertEqual((svc["kind"], svc["builtin"], svc["port"]), ("command", "celfaker", 8110))
+        proj = compose.build_project(cfg, self.config.state())
+        p = proj["processes"]["celfaker"]
+        self.assertIn("scripts/celfaker.sh serve --port 8110", p["command"])
+        self.assertEqual(sum(e.startswith("JAVA_HOME=") for e in p["environment"]), 1)  # auto:25 resolves (here: falls back to the env)
+        self.assertEqual(p["readiness_probe"]["http_get"]["path"], "/api/example")
+        self.assertEqual(p["readiness_probe"]["failure_threshold"], 120)  # first start compiles with Maven
+        self.assertNotIn("disabled", p)
+        env = dict(e.split("=", 1) for e in p["environment"])
+        self.assertIn("http://127.0.0.1:8765", env["CELFAKER_FRAME_ANCESTORS"])
+        names = {s["name"]: s["url"] for s in json.loads(env["CELFAKER_SERVICES"])}
+        self.assertEqual(names["api"], "http://localhost:8081")
+        self.assertEqual(names["core"], "http://localhost:8080/core")  # war behind JBoss
+        self.assertNotIn("celfaker", names)
+        # the dashboard row links to the studio, not to the probe endpoint
+        import devctl.pc as pc
+        pc.available = lambda: False
+        self.assertEqual(ops.status(cfg, with_health=False)["services"]["celfaker"]["url"], "http://localhost:8110/")
+        # built-ins are derived: saving the config never writes them
+        self.config.save(cfg)
+        self.assertNotIn("celfaker", json.loads(self.config.CONFIG_FILE.read_text())["services"])
+        # autostart off => disabled until started by hand; enabled=false => no service at all
+        cfg["celfaker"]["autostart"] = False
+        self.config.save(cfg)
+        cfg2 = self.config.load()
+        self.assertTrue(compose.build_project(cfg2, self.config.state())["processes"]["celfaker"]["disabled"])
+        cfg2["celfaker"]["enabled"] = False
+        self.config.save(cfg2)
+        self.assertNotIn("celfaker", self.config.load()["services"])
+
+    def test_user_defined_celfaker_service_wins(self):
+        cfg = self.config.load()
+        cfg["services"]["celfaker"] = {"kind": "command", "cmd": "echo mine", "cwd": "."}
+        self.config.save(cfg)
+        self.assertEqual(self.config.load()["services"]["celfaker"]["cmd"], "echo mine")
+
+    def test_java_home_falls_back_to_homebrew_keg(self):
+        from devctl import javahome
+        keg = self.tmp / "opt" / "openjdk@25" / "libexec" / "openjdk.jdk" / "Contents" / "Home"
+        keg.mkdir(parents=True)
+        real = javahome.os.path.isdir
+        javahome.os.path.isdir = lambda p: str(p).startswith("/opt/homebrew/opt/openjdk@25") or real(p)
+        try:
+            self.assertEqual(javahome.resolve("auto:25"), "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home")
+        finally:
+            javahome.os.path.isdir = real
+
     def test_failed_build_reported(self):
         from devctl import builds
         cfg = self.config.load()

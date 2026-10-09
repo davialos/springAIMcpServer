@@ -14,5 +14,10 @@ def resolve(spec: str) -> str:
                 return out.stdout.strip()
         except (OSError, subprocess.SubprocessError):
             pass
+        # Homebrew's openjdk@N is keg-only: not known to java_home unless symlinked into /Library/Java/JavaVirtualMachines
+        for prefix in ("/opt/homebrew", "/usr/local"):
+            home = f"{prefix}/opt/openjdk@{spec[5:]}/libexec/openjdk.jdk/Contents/Home"
+            if os.path.isdir(home):
+                return home
         return os.environ.get("JAVA_HOME", "")
     return os.path.expanduser(spec)

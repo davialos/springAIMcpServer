@@ -9,6 +9,7 @@ async function post(path, body) {
 
 export const api = {
   example: async () => (await fetch('/api/example')).json(),
+  localServices: async () => { try { return (await (await fetch('/api/local-services')).json()).services ?? []; } catch (e) { return []; } },
   importCurl: (curl) => post('/api/import/curl', { curl }),
   importOpenApi: (url, spec) => post('/api/import/openapi', { url, spec }),
   fake: (apiSpec, seed, count) => post('/api/fake', { api: apiSpec, seed, count }),

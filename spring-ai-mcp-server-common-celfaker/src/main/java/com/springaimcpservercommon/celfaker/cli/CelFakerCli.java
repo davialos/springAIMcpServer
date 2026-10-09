@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -89,7 +90,13 @@ public final class CelFakerCli {
                 return 0;
             }
             case "serve" -> {
-                try (DashboardServer server = new DashboardServer(Integer.parseInt(opt.getOrDefault("port", "8099")))) {
+                String ancestors = opt.getOrDefault("frame-ancestors", System.getenv().getOrDefault("CELFAKER_FRAME_ANCESTORS", ""));
+                List<String> origins = ancestors.isBlank() ? List.of() : List.of(ancestors.split("[,\\s]+"));
+                // services of the local-dev control plane (devctl): JSON [{"name":"orders","url":"http://localhost:8081"}]
+                String services = System.getenv().getOrDefault("CELFAKER_SERVICES", "");
+                List<DashboardServer.LocalService> local = services.isBlank() ? List.of()
+                        : List.of(JsonValues.MAPPER.readValue(services, DashboardServer.LocalService[].class));
+                try (DashboardServer server = new DashboardServer(Integer.parseInt(opt.getOrDefault("port", "8099")), origins, local)) {
                     out.println("flow dashboard: http://localhost:" + server.port() + "/   (Ctrl+C to stop)");
                     Thread.currentThread().join();
                 } catch (InterruptedException e) {
@@ -128,6 +135,8 @@ public final class CelFakerCli {
               analyze  --payload f.json [--object o]    list the parameters (object.attribute, CEL type) of a payload
               generate --contract c.json [--workflow w.json] [--value-map m.json] [--out dir] [--seed n] [--valid n] [--cases n]
                                                         parameters, attribute map, CEL expressions + cases, API data, k6 suite
-              serve    [--port 8099]                    the drag-and-drop flow dashboard (loopback only)
+              serve    [--port 8099] [--frame-ancestors http://127.0.0.1:8765]
+                                                        the drag-and-drop flow dashboard (loopback only); env CELFAKER_SERVICES
+                                                        (JSON [{name,url}]) lists local services for one-click import
             """;
 }

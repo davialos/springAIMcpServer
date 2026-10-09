@@ -152,7 +152,7 @@ def status(cfg: dict, with_health: bool = True) -> dict:
         proc = procs.get(compose.JBOSS if s.get("kind") == "war" else n)
         services[n] = {"kind": s.get("kind", "jar"), "repo": s.get("repo"), "port": s.get("port"), "deployed": st.get(n),
                        "process": proc, "health": hs.get(n), "health_target": health_cfg[n],
-                       "url": (health_cfg[n] or {}).get("url")}
+                       "url": s.get("open_url") or (health_cfg[n] or {}).get("url"), "builtin": s.get("builtin")}
     infra_list = {}
     for n in ("prometheus", "loki", "grafana", "postgres"):
         infra_list[n] = {"enabled": n in cfg["infra"]["enabled"], "process": procs.get(n)}
@@ -168,6 +168,11 @@ def doctor(cfg: dict) -> list:
                        ("docker", "install Docker Desktop / OrbStack / Colima (observability stack)"),
                        ("mvn", "brew install maven (or use ./mvnw)"), ("k6", "brew install k6 (load tests)")):
         out.append((tool, bool(shutil.which(tool)), hint))
+    if "celfaker" in cfg["services"] and cfg["services"]["celfaker"].get("builtin"):
+        from . import javahome
+        jh = javahome.resolve(cfg["services"]["celfaker"].get("java_home") or cfg["java_home"])
+        out.append(("JDK 25 for the CEL faker", bool(jh) and (Path(jh) / "bin" / "java").exists(),
+                    "brew install openjdk@25 (or set celfaker.java_home / enabled=false)"))
     ws = config.path(cfg, "workspace")
     out.append((f"workspace {ws}", ws.is_dir(), "set `workspace` in config.json"))
     out.append(("repos found", bool(repos.discover(cfg)), "workspace must contain git repositories"))

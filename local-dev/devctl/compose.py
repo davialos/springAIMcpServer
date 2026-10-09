@@ -1,6 +1,7 @@
 """Generate the process-compose project from config + deployed state."""
 from __future__ import annotations
 
+import json
 import shlex
 from pathlib import Path
 
@@ -17,7 +18,7 @@ def deploy_dir(cfg: dict, service: str) -> Path:
     return config.builds_root(cfg) / "deployed" / service
 
 
-def _probe(h: dict | None, period=5, delay=3) -> dict:
+def _probe(h: dict | None, period=5, delay=3, failures=30) -> dict:
     if not h:
         return {}
     if "url" in h:
@@ -25,9 +26,9 @@ def _probe(h: dict | None, period=5, delay=3) -> dict:
         u = urlparse(h["url"])
         hg = {"host": u.hostname or "127.0.0.1", "scheme": u.scheme, "path": u.path or "/", "port": str(u.port or 80)}
         return {"readiness_probe": {"http_get": hg, "initial_delay_seconds": delay, "period_seconds": period,
-                                    "failure_threshold": 30}}
+                                    "failure_threshold": failures}}
     return {"readiness_probe": {"exec": {"command": f"nc -z {h.get('host', '127.0.0.1')} {h['port']}"},
-                                "initial_delay_seconds": delay, "period_seconds": period, "failure_threshold": 30}}
+                                "initial_delay_seconds": delay, "period_seconds": period, "failure_threshold": failures}}
 
 
 def service_health(name: str, s: dict, cfg: dict) -> dict | None:
@@ -40,6 +41,32 @@ def service_health(name: str, s: dict, cfg: dict) -> dict | None:
         off = cfg["jboss"].get("port_offset", 0)
         return {"url": f"http://localhost:{8080 + off}/{s.get('context', name)}/"}
     return None
+
+
+def local_services(cfg: dict) -> list:
+    """Base URLs of the configured services, offered to the CEL faker as one-click Swagger import sources."""
+    out = []
+    for name, s in cfg["services"].items():
+        if s.get("builtin"):
+            continue
+        kind = s.get("kind", "jar")
+        if kind == "war":
+            out.append({"name": name, "url": f"http://localhost:{8080 + cfg['jboss'].get('port_offset', 0)}/{s.get('context', name)}"})
+        elif s.get("port"):
+            out.append({"name": name, "url": f"http://localhost:{s['port']}"})
+    return out
+
+
+def _celfaker(cfg: dict, s: dict) -> tuple:
+    """(command, extra environment) of the built-in CEL faker service."""
+    jh = javahome.resolve(s.get("java_home") or cfg["java_home"])
+    dash = cfg["dashboard_port"]
+    env = [f"CELFAKER_SERVICES={json.dumps(local_services(cfg), separators=(',', ':'))}",
+           f"CELFAKER_FRAME_ANCESTORS=http://127.0.0.1:{dash},http://localhost:{dash}"]
+    path = 'PATH="$JAVA_HOME/bin:$PATH" ' if jh else ""
+    if jh:
+        env.append(f"JAVA_HOME={jh}")
+    return f"{path}exec ./scripts/celfaker.sh serve --port {s['port']}", env
 
 
 def build_project(cfg: dict, st: dict) -> dict:
@@ -89,14 +116,19 @@ def build_project(cfg: dict, st: dict) -> dict:
             wd = str(dd)
             active = name in deployed
         else:  # command
-            cmd, wd, active = s["cmd"], str(Path(s.get("cwd", ".")).expanduser()), True
+            cmd, wd, active = s["cmd"], str(Path(s.get("cwd", ".")).expanduser()), s.get("autostart", True)
+            if s.get("builtin") == "celfaker":
+                cmd, extra = _celfaker(cfg, s)
+                env += extra
         deps = {d: {"condition": "process_healthy"} for d in s.get("depends_on", [])
                 if d in procs and not procs[d].get("disabled") and "readiness_probe" in procs[d]}
         if s.get("needs_jboss") and JBOSS in procs:
             deps[JBOSS] = {"condition": "process_healthy"}
         p = {"command": cmd.strip(), "working_dir": wd, "environment": env, "namespace": "services",
              "availability": {"restart": "on_failure", "backoff_seconds": 5, "max_restarts": 3},
-             **_probe(service_health(name, s, cfg)), **({"depends_on": deps} if deps else {})}
+             # the first start of a built-in tool compiles it with Maven: allow ~10 minutes before the probe gives up
+             **(_probe(service_health(name, s, cfg), 5, 5, 120) if s.get("builtin") else _probe(service_health(name, s, cfg))),
+             **({"depends_on": deps} if deps else {})}
         if not active:
             p["disabled"] = True
         procs[name] = p

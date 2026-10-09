@@ -22,7 +22,25 @@ DEFAULTS = {
     "services": {},  # name -> see config.example.json
     "stacks": {},    # name -> [service, ...]
     "infra": {"enabled": ["prometheus", "loki", "grafana"], "prometheus_scrape_path": "/actuator/prometheus"},
+    # CEL faker / flow studio (spring-ai-mcp-server-common-celfaker, ADR-0030): a built-in service of this repo checkout
+    "celfaker": {"enabled": True, "port": 8110, "autostart": True, "java_home": "auto:25", "repo_root": ""},
 }
+
+REPO_ROOT = Path(__file__).resolve().parents[2]  # local-dev/devctl/config.py -> the checkout that contains scripts/celfaker.sh
+
+
+def _with_builtins(cfg: dict) -> dict:
+    """Adds the CEL faker as a ``command`` service unless disabled, the checkout lacks it, or you defined ``services.celfaker``."""
+    fk = cfg.get("celfaker") or {}
+    root = Path(fk.get("repo_root") or REPO_ROOT).expanduser()
+    if fk.get("enabled", True) and "celfaker" not in cfg["services"] and (root / "scripts" / "celfaker.sh").exists():
+        port = int(fk.get("port", 8110))
+        cfg["services"]["celfaker"] = {
+            "kind": "command", "builtin": "celfaker", "port": port, "cwd": str(root), "cmd": "", "needs_build_tools": True,
+            "java_home": fk.get("java_home", "auto:25"), "autostart": bool(fk.get("autostart", True)),
+            "health": {"url": f"http://127.0.0.1:{port}/api/example"}, "open_url": f"http://localhost:{port}/",
+        }
+    return cfg
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -36,12 +54,13 @@ def load() -> dict:
     cfg = copy.deepcopy(DEFAULTS)
     if CONFIG_FILE.exists():
         cfg = _merge(cfg, json.loads(CONFIG_FILE.read_text()))
-    return cfg
+    return _with_builtins(cfg)
 
 
 def save(cfg: dict) -> None:
     HOME.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2) + "\n")
+    out = {**cfg, "services": {k: v for k, v in cfg["services"].items() if not v.get("builtin")}}  # built-ins are derived, never persisted
+    CONFIG_FILE.write_text(json.dumps(out, indent=2) + "\n")
 
 
 def path(cfg: dict, key: str) -> Path:

@@ -37,4 +37,6 @@ for a in dev/cel/cel dev/cel/common dev/cel/compiler dev/cel/protobuf dev/cel/ru
   if [ -z "$j" ]; then echo "celfaker: $a not found in $repo" >&2; exit 1; fi
   cp="$cp:$j"
 done
-exec java -cp "$cp" com.springaimcpservercommon.celfaker.cli.CelFakerCli "$@"
+# JAVA_HOME (set by local-dev/devctl, or by you) wins over whatever `java` is first on PATH
+JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+exec "$JAVA" -cp "$cp" com.springaimcpservercommon.celfaker.cli.CelFakerCli "$@"

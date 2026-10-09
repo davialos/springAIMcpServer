@@ -119,4 +119,55 @@ class DashboardServerTest {
             assertThat(status).contains("403");
         }
     }
+
+    @Test
+    void importsCurlAndOpenApiFromAUrlThenFakesInputAndSends() throws Exception {
+        JsonNode curl = json(post("/api/import/curl", "{\"curl\":\"curl -X POST http://localhost:1/orders -H 'Authorization: Bearer x' -d '{\\\"qty\\\":3}'\"}", "application/json"));
+        assertThat(curl.path("apis").get(0).path("headers").path("Authorization").asString()).isEqualTo("Bearer {{env.AUTHORIZATION}}");
+
+        // a tiny service that serves its Swagger document and echoes posted bodies
+        com.sun.net.httpserver.HttpServer svc = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0), 0);
+        svc.createContext("/v3/api-docs", ex -> {
+            byte[] doc = ("{\"openapi\":\"3.0.0\",\"info\":{\"title\":\"svc\"},\"paths\":{\"/echo\":{\"post\":{\"operationId\":\"echo\","
+                    + "\"requestBody\":{\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":9}}}}}},"
+                    + "\"responses\":{\"200\":{\"description\":\"ok\"}}}}}}").getBytes();
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(200, doc.length);
+            ex.getResponseBody().write(doc);
+            ex.close();
+        });
+        svc.createContext("/echo", ex -> {
+            byte[] in = ex.getRequestBody().readAllBytes();
+            String auth = ex.getRequestHeaders().getFirst("Authorization");
+            byte[] out = ("{\"got\":" + new String(in) + ",\"auth\":\"" + auth + "\"}").getBytes();
+            ex.sendResponseHeaders(201, out.length);
+            ex.getResponseBody().write(out);
+            ex.close();
+        });
+        svc.start();
+        try {
+            String origin = "http://localhost:" + svc.getAddress().getPort();
+            // the address is only the service root: the importer finds the document itself
+            JsonNode imported = json(post("/api/import/openapi", "{\"url\":\"" + origin + "/swagger-ui/index.html\"}", "application/json"));
+            assertThat(imported.path("baseUrl").asString()).isEqualTo(origin);
+            JsonNode api = imported.path("apis").get(0);
+            assertThat(api.path("id").asString()).isEqualTo("echo");
+
+            JsonNode fake = json(post("/api/fake", "{\"api\":" + api + ",\"count\":4,\"seed\":1}", "application/json"));
+            assertThat(fake.path("valid")).hasSize(4);
+            fake.path("valid").forEach(b -> assertThat(b.path("n").asInt()).isBetween(1, 9));
+
+            JsonNode sent = json(post("/api/send", "{\"method\":\"POST\",\"url\":\"" + origin + "/echo\",\"headers\":{\"Authorization\":\"Bearer {{env.TOKEN}}\"},"
+                    + "\"body\":" + fake.path("valid").get(0) + ",\"env\":{\"TOKEN\":\"t0k\"}}", "application/json"));
+            assertThat(sent.path("status").asInt()).isEqualTo(201);
+            assertThat(sent.path("body").asString()).contains("Bearer t0k");
+            assertThat(sent.path("unresolvedEnv")).isEmpty();
+            JsonNode unresolved = json(post("/api/send", "{\"method\":\"GET\",\"url\":\"" + origin + "/nothing\",\"headers\":{\"X\":\"{{env.MISSING}}\"}}", "application/json"));
+            assertThat(unresolved.path("unresolvedEnv").get(0).asString()).isEqualTo("MISSING");
+        } finally {
+            svc.stop(0);
+        }
+        assertThat(post("/api/send", "{\"method\":\"GET\",\"url\":\"file:///etc/passwd\"}", "application/json").statusCode()).isEqualTo(400);
+        assertThat(post("/api/import/openapi", "{}", "application/json").statusCode()).isEqualTo(400);
+    }
 }

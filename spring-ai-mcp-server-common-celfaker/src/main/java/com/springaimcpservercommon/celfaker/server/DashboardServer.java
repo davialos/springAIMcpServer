@@ -1,9 +1,15 @@
 package com.springaimcpservercommon.celfaker.server;
 
 import com.springaimcpservercommon.celfaker.contract.ApiContract;
+import com.springaimcpservercommon.celfaker.contract.ApiSpec;
+import com.springaimcpservercommon.celfaker.data.FakeInput;
 import com.springaimcpservercommon.celfaker.expr.CaseBuilder;
 import com.springaimcpservercommon.celfaker.expr.CelCase;
 import com.springaimcpservercommon.celfaker.expr.ExpressionFaker;
+import com.springaimcpservercommon.celfaker.importer.CurlParser;
+import com.springaimcpservercommon.celfaker.importer.Imported;
+import com.springaimcpservercommon.celfaker.importer.OpenApiImporter;
+import com.springaimcpservercommon.celfaker.importer.SpecFetcher;
 import com.springaimcpservercommon.celfaker.payload.Candidate;
 import com.springaimcpservercommon.celfaker.payload.JsonValues;
 import com.springaimcpservercommon.celfaker.payload.PayloadAnalyzer;
@@ -55,6 +61,19 @@ public final class DashboardServer implements AutoCloseable {
 
     private record ExpressionRequest(List<Candidate> candidates, @Nullable AttributeValueMap valueMap, @Nullable Long seed,
                                      ExpressionFaker.@Nullable Options options) {
+    }
+
+    private record CurlRequest(String curl) {
+    }
+
+    private record OpenApiRequest(@Nullable String url, @Nullable String spec) {
+    }
+
+    private record FakeRequest(ApiSpec api, @Nullable Long seed, @Nullable Integer count) {
+    }
+
+    private record SendRequest(String method, String url, @Nullable Map<String, String> headers, @Nullable JsonNode body,
+                               @Nullable Map<String, String> env) {
     }
 
     private record ValuesRequest(List<Candidate> candidates, @Nullable Long seed) {
@@ -173,6 +192,25 @@ public final class DashboardServer implements AutoCloseable {
                 out.put("attributeMap", map);
                 sendJson(ex, 200, out);
             }
+            case "/api/import/curl" -> sendJson(ex, 200, CurlParser.parse(read(body, CurlRequest.class).curl()));
+            case "/api/import/openapi" -> {
+                OpenApiRequest r = read(body, OpenApiRequest.class);
+                Imported imported;
+                if (r.spec() != null && !r.spec().isBlank()) {
+                    imported = OpenApiImporter.parse(SpecFetcher.parse(r.spec()), r.url() == null ? "" : r.url());
+                } else if (r.url() != null && !r.url().isBlank()) {
+                    SpecFetcher.Fetched f = SpecFetcher.fetch(r.url());
+                    imported = OpenApiImporter.parse(f.document(), f.source());
+                } else {
+                    throw new IllegalArgumentException("give a URL or paste the document");
+                }
+                sendJson(ex, 200, imported);
+            }
+            case "/api/fake" -> {
+                FakeRequest r = read(body, FakeRequest.class);
+                sendJson(ex, 200, FakeInput.generate(r.api(), r.seed() == null ? 42 : r.seed(), r.count() == null ? 5 : r.count()));
+            }
+            case "/api/send" -> sendJson(ex, 200, send(read(body, SendRequest.class)));
             case "/api/attribute-map" -> {
                 ValuesRequest r = read(body, ValuesRequest.class);
                 sendJson(ex, 200, new ValueFactory(r.seed() == null ? 42 : r.seed()).build(r.candidates()));
@@ -200,6 +238,73 @@ public final class DashboardServer implements AutoCloseable {
             }
             default -> sendJson(ex, 404, Map.of("error", "unknown endpoint"));
         }
+    }
+
+    /** Sends one request to the service under test, like a REST client; never follows redirects, caps the answer. */
+    private static Map<String, Object> send(SendRequest r) {
+        Map<String, String> env = r.env() == null ? Map.of() : r.env();
+        String url = subst(r.url(), env);
+        java.net.URI uri = java.net.URI.create(url.strip());
+        if (uri.getHost() == null || !(uri.getScheme().equals("http") || uri.getScheme().equals("https"))) {
+            throw new IllegalArgumentException("only absolute http(s) URLs can be sent: " + r.url());
+        }
+        if (!r.method().matches("GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS")) {
+            throw new IllegalArgumentException("unsupported method " + r.method());
+        }
+        java.net.http.HttpRequest.Builder b = java.net.http.HttpRequest.newBuilder(uri).timeout(java.time.Duration.ofSeconds(15));
+        boolean hasType = false;
+        if (r.headers() != null) {
+            for (Map.Entry<String, String> h : r.headers().entrySet()) {
+                if (h.getKey().equalsIgnoreCase("host") || h.getKey().equalsIgnoreCase("content-length")) {
+                    continue;
+                }
+                hasType |= h.getKey().equalsIgnoreCase("content-type");
+                b.header(h.getKey(), subst(h.getValue(), env));
+            }
+        }
+        boolean body = r.body() != null && !r.body().isMissingNode() && !r.body().isNull();
+        if (body && !hasType) {
+            b.header("Content-Type", "application/json");
+        }
+        b.method(r.method(), body ? java.net.http.HttpRequest.BodyPublishers.ofString(r.body().toString())
+                : java.net.http.HttpRequest.BodyPublishers.noBody());
+        Map<String, Object> out = new LinkedHashMap<>();
+        long start = System.nanoTime();
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(5))
+                    .followRedirects(java.net.http.HttpClient.Redirect.NEVER).build();
+            java.net.http.HttpResponse<byte[]> res = client.send(b.build(), java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            byte[] bytes = res.body();
+            out.put("status", res.statusCode());
+            out.put("millis", (System.nanoTime() - start) / 1_000_000);
+            Map<String, String> headers = new LinkedHashMap<>();
+            res.headers().map().forEach((k, v) -> headers.put(k, String.join(", ", v)));
+            out.put("headers", headers);
+            out.put("body", new String(bytes, 0, Math.min(bytes.length, 65_536), StandardCharsets.UTF_8));
+            out.put("truncated", bytes.length > 65_536);
+        } catch (IOException e) {
+            out.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            out.put("error", "interrupted");
+        }
+        List<String> unresolved = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\{\\{env\\.([A-Za-z0-9_]+)}}").matcher(r.url() + String.valueOf(r.headers()));
+        while (m.find()) {
+            if (!env.containsKey(m.group(1)) && !unresolved.contains(m.group(1))) {
+                unresolved.add(m.group(1));
+            }
+        }
+        out.put("unresolvedEnv", unresolved);
+        return out;
+    }
+
+    private static String subst(String text, Map<String, String> env) {
+        String out = text;
+        for (Map.Entry<String, String> e : env.entrySet()) {
+            out = out.replace("{{env." + e.getKey() + "}}", e.getValue());
+        }
+        return out;
     }
 
     private static FakerPipeline.Output generate(GenerateRequest r) {
@@ -267,7 +372,7 @@ public final class DashboardServer implements AutoCloseable {
             }
             String type = p.endsWith(".html") ? "text/html; charset=utf-8" : p.endsWith(".js") ? "text/javascript; charset=utf-8"
                     : p.endsWith(".css") ? "text/css; charset=utf-8" : p.endsWith(".json") ? "application/json" : "application/octet-stream";
-            ex.getResponseHeaders().set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
+            ex.getResponseHeaders().set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
             send(ex, 200, type, in.readAllBytes());
         }
     }

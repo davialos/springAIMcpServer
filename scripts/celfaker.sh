@@ -32,7 +32,7 @@ for a in dev/cel/cel dev/cel/common dev/cel/compiler dev/cel/protobuf dev/cel/ru
          com/google/protobuf/protobuf-java com/google/guava/guava com/google/guava/failureaccess com/google/re2j/re2j \
          org/antlr/antlr4-runtime org/threeten/threeten-extra org/yaml/snakeyaml org/slf4j/slf4j-api \
          tools/jackson/core/jackson-databind tools/jackson/core/jackson-core com/fasterxml/jackson/core/jackson-annotations \
-         org/jspecify/jspecify com/google/auto/value/auto-value-annotations com/google/errorprone/error_prone_annotations; do
+         org/jspecify/jspecify tools/jackson/dataformat/jackson-dataformat-yaml org/snakeyaml/snakeyaml-engine com/google/auto/value/auto-value-annotations com/google/errorprone/error_prone_annotations; do
   j="$(jar "$a")"
   if [ -z "$j" ]; then echo "celfaker: $a not found in $repo" >&2; exit 1; fi
   cp="$cp:$j"

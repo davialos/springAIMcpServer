@@ -13,6 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -169,5 +170,24 @@ class DashboardServerTest {
         }
         assertThat(post("/api/send", "{\"method\":\"GET\",\"url\":\"file:///etc/passwd\"}", "application/json").statusCode()).isEqualTo(400);
         assertThat(post("/api/import/openapi", "{}", "application/json").statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void embedsInLocalDevAndListsLocalServices() throws Exception {
+        try (DashboardServer embedded = new DashboardServer(0, List.of("http://127.0.0.1:8765", "http://localhost:8765"),
+                List.of(new DashboardServer.LocalService("orders", "http://localhost:8081")))) {
+            HttpResponse<String> page = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + embedded.port() + "/")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(page.headers().firstValue("Content-Security-Policy")).hasValueSatisfying(v ->
+                    assertThat(v).contains("frame-ancestors http://127.0.0.1:8765 http://localhost:8765"));
+            HttpResponse<String> svc = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + embedded.port() + "/api/local-services")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(JsonValues.MAPPER.readTree(svc.body()).path("services").get(0).path("url").asString()).isEqualTo("http://localhost:8081");
+        }
+        // the default refuses framing, and only loopback origins can be allowed
+        HttpResponse<String> plain = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + "/")).build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(plain.headers().firstValue("Content-Security-Policy")).hasValueSatisfying(v -> assertThat(v).contains("frame-ancestors 'none'"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new DashboardServer(0, List.of("https://evil.example"), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -7,6 +7,7 @@ const fake = { apiId: null, count: 5, data: null, tab: 'valid', busy: false, err
 const send = { apiId: null, url: '', body: '', env: '', result: null, busy: false, error: '' };
 
 const DEFAULT_URL = 'http://localhost:8080';
+let localServices = null; // services of the local-dev control plane, loaded once
 
 function field(label, control, hint) {
   return h('label', { class: 'field' }, h('span', { class: 'label' }, label), control, hint ? h('small', {}, hint) : null);
@@ -46,6 +47,7 @@ async function addPicked(refresh) {
 }
 
 export function importCard(refresh) {
+  if (localServices === null) { localServices = []; server.localServices().then((l) => { if (l.length) { localServices = l; notify(); } }); }
   const modes = [['swagger', 'Swagger / OpenAPI URL'], ['spec', 'Paste or open a spec'], ['curl', 'cURL command']];
   const readBtn = h('button', { class: 'btn primary', disabled: imp.busy || !imp.url.trim(), onclick: () => run(() => server.importOpenApi(imp.url.trim(), null)) }, imp.busy ? 'Reading…' : 'Read documentation');
   const curlBtn = h('button', { class: 'btn primary', disabled: imp.busy || !imp.curl.trim(), onclick: () => run(() => server.importCurl(imp.curl)) }, 'Import cURL');
@@ -54,6 +56,8 @@ export function importCard(refresh) {
         oninput: (e) => { imp.url = e.target.value; readBtn.disabled = imp.busy || !imp.url.trim(); },
         onkeydown: (e) => { if (e.key === 'Enter' && imp.url.trim()) readBtn.click(); } }),
         'Give the service root, its Swagger UI or the JSON/YAML document: the usual locations (/v3/api-docs, /swagger.json, /openapi.yaml …) are tried.'),
+      localServices.length ? h('div', { class: 'chips', 'aria-label': 'Local services' }, h('span', { class: 'muted' }, 'Running locally:'),
+        localServices.map((l) => h('button', { class: 'chip toggle', title: l.url, onclick: () => { imp.url = l.url; notify(); } }, l.name))) : null,
       readBtn)
     : imp.mode === 'spec'
       ? h('div', {}, field('Swagger 2 / OpenAPI 3 (JSON or YAML)', h('textarea', { rows: 6, class: 'mono', spellcheck: 'false', oninput: (e) => { imp.spec = e.target.value; } }, imp.spec)),

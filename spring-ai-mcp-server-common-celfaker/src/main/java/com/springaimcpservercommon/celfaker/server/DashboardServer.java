@@ -54,7 +54,18 @@ public final class DashboardServer implements AutoCloseable {
     private static final int MAX_BODY = 8 * 1024 * 1024;
     private static final String UI_ROOT = "/META-INF/resources/celfaker/ui/";
 
+    /**
+     * A service running on this machine, as the local-dev control plane knows it.
+     *
+     * @param name display name
+     * @param url  base URL
+     */
+    public record LocalService(String name, String url) {
+    }
+
     private final HttpServer server;
+    private final String csp;
+    private final List<LocalService> localServices;
 
     private record AnalyzeRequest(JsonNode payload, @Nullable String object, @Nullable List<String> mapPaths) {
     }
@@ -101,6 +112,32 @@ public final class DashboardServer implements AutoCloseable {
      * @throws IOException when the port cannot be bound
      */
     public DashboardServer(int port) throws IOException {
+        this(port, List.of(), List.of());
+    }
+
+    /**
+     * Starts the server for embedding in another local dashboard.
+     *
+     * @param port           TCP port on the loopback interface (0 = any free port)
+     * @param frameAncestors loopback origins ({@code http://127.0.0.1:8765}) allowed to show the UI in an iframe; others are rejected
+     * @param localServices  other local services (name, base URL) offered as one-click import sources in the UI
+     * @throws IOException when the port cannot be bound
+     * @throws IllegalArgumentException when an origin is not a loopback http(s) origin or a service URL is not http(s)
+     */
+    public DashboardServer(int port, List<String> frameAncestors, List<LocalService> localServices) throws IOException {
+        for (String o : frameAncestors) {
+            if (!o.matches("https?://(localhost|127\\.0\\.0\\.1|\\[::1])(:\\d{1,5})?")) {
+                throw new IllegalArgumentException("frame ancestor must be a loopback http(s) origin: " + o);
+            }
+        }
+        for (LocalService l : localServices) {
+            if (!l.url().matches("https?://[^\\s]+")) {
+                throw new IllegalArgumentException("local service URL must be http(s): " + l.url());
+            }
+        }
+        this.csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors "
+                + (frameAncestors.isEmpty() ? "'none'" : String.join(" ", frameAncestors));
+        this.localServices = List.copyOf(localServices);
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/", this::handle);
@@ -165,6 +202,10 @@ public final class DashboardServer implements AutoCloseable {
             try (InputStream in = DashboardServer.class.getResourceAsStream("/celfaker/examples/shop-contract.json")) {
                 send(ex, 200, "application/json", in.readAllBytes());
             }
+            return;
+        }
+        if ("GET".equals(method) && path.equals("/api/local-services")) {
+            sendJson(ex, 200, Map.of("services", localServices));
             return;
         }
         if (!"POST".equals(method)) {
@@ -372,7 +413,7 @@ public final class DashboardServer implements AutoCloseable {
             }
             String type = p.endsWith(".html") ? "text/html; charset=utf-8" : p.endsWith(".js") ? "text/javascript; charset=utf-8"
                     : p.endsWith(".css") ? "text/css; charset=utf-8" : p.endsWith(".json") ? "application/json" : "application/octet-stream";
-            ex.getResponseHeaders().set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
+            ex.getResponseHeaders().set("Content-Security-Policy", csp);
             send(ex, 200, type, in.readAllBytes());
         }
     }

@@ -74,6 +74,12 @@
             <artifactId>spring-ai-mcp-server-common-validation</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- Opt-in: annotation-driven mock data (Datafaker), AI fallback, virtual-thread load simulator (ADR-0031) -->
+        <dependency>
+            <groupId>com.springaimcpservercommon</groupId>
+            <artifactId>spring-ai-mcp-server-common-mockdata</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-jdbc</artifactId>

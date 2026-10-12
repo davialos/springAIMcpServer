@@ -34,6 +34,9 @@ Starting from an empty repository keeps stale artifacts out. Do not hand-edit fi
 
 ## Notes
 
+- 2026-10-12: Datafaker 2.7.0 (with rgxgen 3.1 and libphonenumber 9.0.33; snakeyaml 2.6 was already present) was added for the `mockdata` module by resolving it from Maven Central into an empty
+  repository and copying only the three new artifact directories (3.6 MB), so the rest of the vendored bytes are unchanged.
+
 - The project's own modules are not in the repository (the reactor builds them); a host application that
   consumes the starter should use the `bom` module and its own repository.
 - The `*.sha1` files and `_remote.repositories` markers are kept: Maven's enhanced local repository manager needs

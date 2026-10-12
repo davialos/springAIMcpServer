@@ -28,6 +28,9 @@ How to work with it:
   for a load test; the result's JFR verdict and `jfr_summary` give file:line hot spots - quote them.
 - New project: `config_set_workspace`, then `config_set` section=repos/services (read the repo's build files first to fill
   artifact globs, ports and health URLs).
+- Test data / API flows: the `apilab_*` tools (API Lab) - discover a repo's APIs, decide the threads between response and
+  request attributes (you are the deciding mind; heuristics only suggest), set realistic fake-data rules, generate,
+  build and run workflows, export them to k6. Prompt `design-test-data` walks the whole path.
 - Tools marked destructive (undeploy, config_remove) change things the developer may care about - say what you will do first.
 Everything is local; nothing here deploys to shared environments."""
 
@@ -53,6 +56,17 @@ PROMPTS = {
                           "Load test {service}: check `perf_readiness`, discover endpoints, create a 'load' test with the GET "
                           "endpoints ({vus} VUs, {duration} hold), run it, wait for the result, then explain throughput, p95, errors "
                           "and the JFR hot spots with file:line and what to change."),
+    "design-test-data": ("AI-designed fake data, API threads and test workflows for a repo or service (API Lab)",
+                         [("project", True), ("repo", False), ("service", False)],
+                         "Design test data for API Lab project {project} (repo: {repo}, service: {service}): "
+                         "1) apilab_create_project and apilab_discover; 2) read the APIs (apilab_apis, apilab_api) and the suggested "
+                         "threads (apilab_links) and decide like a domain expert which response attribute really feeds which request "
+                         "attribute - accept the right ones with apilab_link_status/apilab_link_set (add missing ones, reject wrong "
+                         "ones, always with a reason); 3) give every request field a realistic rule with apilab_set_rules (formats, "
+                         "enums, ranges, consistent names/emails, business codes); 4) apilab_generate; 5) apilab_workflow_auto (or "
+                         "design a workflow with apilab_workflow_save for the real business flow); 6) apilab_workflow_run once, fix "
+                         "rules/threads until every step passes; 7) apilab_export_k6 and tell me the load test name. Summarise the "
+                         "threads and the flow you built."),
     "onboard-project": ("Register a repository of the workspace as a local service", [("repo", True)],
                         "Onboard {repo}: read its build files (pom.xml/build.gradle/package.json) and application config to find the "
                         "artifact, port, context path and health URL; then `config_set` the repo and service, `ship` its default "
@@ -126,8 +140,9 @@ def handle(req):
             if n not in PROMPTS:
                 return _err(id_, -32602, f"unknown prompt {n}")
             d, args, tpl = PROMPTS[n]
-            vals = {"vus": "10", "duration": "1m", **(p.get("arguments") or {})}
-            missing = [a for a, r in args if r and not vals.get(a)]
+            given = {k: v for k, v in (p.get("arguments") or {}).items() if v not in (None, "")}
+            missing = [a for a, r in args if r and a not in given]
+            vals = {**{a: "-" for a, r in args if not r}, "vus": "10", "duration": "1m", **given}
             if missing:
                 return _err(id_, -32602, f"missing arguments: {missing}")
             return _ok(id_, {"description": d, "messages": [{"role": "user", "content": {"type": "text", "text": tpl.format(**vals)}}]})

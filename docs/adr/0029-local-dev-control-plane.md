@@ -32,6 +32,12 @@ logs and health checks from a TUI, a web UI and AI agents (Claude, Cursor).
   Assistant (official `anthropic` SDK as an optional dependency in `local-dev/.venv`, manual tool loop so write/destroy
   calls wait for the developer's approval). Goal-level tools (`ship`, `diagnose`, `wait_*`) replace agent polling loops;
   `initialize` instructions, resources and prompts teach agents the workflow. `devctl setup` is the single entry point.
+- **API Lab** (`devctl/lab/`): API discovery (OpenAPI, Spring sources with DTO/validation parsing, actuator mappings),
+  heuristic *suggestions* of response->request attribute threads that the AI (MCP `apilab_*` tools or the Assistant)
+  accepts/rejects, a seedable stdlib fake-data engine honouring code constraints (code enums authoritative), workflows
+  bound by threads and executed against the local service, and a k6 exporter that resolves threads per VU iteration.
+  Storage is JSON files in per-project folders (no database) so the data is inspectable, diffable and committable. The
+  repository's Java generator stays available as an optional DB-backed suite (`apilab_java_suite`).
 
 ## Consequences
 Not a Spring module: no effect on the starter, BOM or offline repo. process-compose CLI behaviour is verified

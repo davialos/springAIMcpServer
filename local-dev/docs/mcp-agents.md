@@ -9,7 +9,7 @@ The same tools power the **Assistant** tab in the devctl dashboard (Claude insid
 
 ```
  coding agent ──stdio──▶ local-dev/bin/devctl-mcp ─┐
- (or URL)     ──HTTP───▶ dashboard :8765/mcp ──────┤   36 tools · 5 resources · 4 prompts
+ (or URL)     ──HTTP───▶ dashboard :8765/mcp ──────┤   54 tools · 5 resources · 5 prompts
  dashboard Assistant tab ──────────────────────────┘
                                                    ▼
              git worktrees · builds · deploys · process-compose · JBoss · logs · k6 · JFR
@@ -116,6 +116,7 @@ Templates with placeholder paths are in [`local-dev/agents/`](../agents/).
 | Performance | `perf_snapshot` R · `perf_readiness` R |
 | Load tests | `loadtest_discover` R · `loadtest_create` W · `loadtest_run` W · `loadtest_result` R · `loadtest_runs` R · `loadtest_stop` W |
 | Profiling | `jfr_list_jvms` R · `jfr_snapshot` W · `jfr_record` W · `jfr_list` R · `jfr_analyze` W · `jfr_summary` R |
+| API Lab | `apilab_projects` R · `apilab_create_project` W · `apilab_discover` W · `apilab_apis` R · `apilab_api` R · `apilab_links` R · `apilab_link_set` W · `apilab_link_status` W · `apilab_set_rules` W · `apilab_generate` W · `apilab_data` R · `apilab_workflow_auto` W · `apilab_workflow_save` W · `apilab_workflows` R · `apilab_workflow_run` W · `apilab_runs` R · `apilab_export_k6` W · `apilab_java_suite` W ([API Lab guide](api-lab.md)) |
 | Configuration | `config_set` W (services / repos / stacks, validated) · `config_remove` D · `config_set_workspace` W |
 
 Effects are published as MCP tool annotations (`readOnlyHint`, `destructiveHint`). Agents that honour them ask before
@@ -132,6 +133,7 @@ the template `devctl://logs/{name}`.
 | `ship-branch` (repo, branch, service) | build, deploy, verify health; on failure, the exact error line and a fix |
 | `investigate-service` (service) | diagnose → logs → metrics → JFR → root cause with evidence |
 | `performance-check` (service, vus, duration) | readiness → discover → load test → p95/errors/hot spots with `file:line` |
+| `design-test-data` (project, repo, service) | API Lab: discover → decide threads → realistic rules → generate → workflow → run until green → k6 |
 | `onboard-project` (repo) | reads the build files, registers the repo and service, ships it, confirms health |
 
 The server also sends **instructions** at `initialize` (how to orient, prefer `ship`/`diagnose`, quote evidence), so
@@ -147,7 +149,7 @@ agents use the tools well without extra prompting.
 
 ## 4. The dashboard Assistant (Claude inside devctl)
 
-The **Assistant** tab is a chat with Claude that uses the same 36 tools.
+The **Assistant** tab is a chat with Claude that uses the same 54 tools.
 - **Read tools run immediately.**
 - **Write and destroy calls pause on an *Approve / Decline* card**, so nothing changes on your machine without a click.
   `ai.confirm_writes: false` turns this off.

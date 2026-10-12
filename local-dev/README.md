@@ -27,7 +27,7 @@ and starts the dashboard at http://127.0.0.1:8765 in the background (`devctl das
 ## AI: coding agents (MCP) and the dashboard Assistant
 Any coding agent - **Claude Code, Cursor, Antigravity, VS Code, Claude Desktop, Windsurf, Gemini CLI, Codex** - can
 control your local environment through the devctl MCP server (`local-dev/bin/devctl-mcp`, stdio; or
-`http://127.0.0.1:8765/mcp`): 36 tools (incl. one-call `ship` and `diagnose`), resources, prompts. Opening this repository
+`http://127.0.0.1:8765/mcp`): 54 tools (incl. one-call `ship` and `diagnose`, and the API Lab), resources, prompts. Opening this repository
 in Claude Code / Cursor / VS Code picks it up from the committed `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json`.
 The dashboard's **Assistant** tab is Claude with the same tools (write actions need your approval); **Agents** tab has
 copy-ready configs. Complete guide: **[docs/mcp-agents.md](docs/mcp-agents.md)**.
@@ -46,6 +46,7 @@ copy-ready configs. Complete guide: **[docs/mcp-agents.md](docs/mcp-agents.md)**
 | `loadtests.<name>` | k6 script (relative to `loadtest_dir`) + `service`, `profile`, `vus`, `duration`, `env`, `jfr`; usually created by the wizard |
 | `jfr` | `auto`, `settings`, `maxage`, `maxsize`, `packages`, `auto_analyze`, `analyzer_cmd`, `analyzer_java_home` (override per service under `services.<name>.jfr`) |
 | `metrics.interval_seconds` | live-metrics poll interval (default 2) |
+| `apilab_dir` | where API Lab projects live (default `~/localdev/apilab`); point it into a repo to commit test data |
 | `ai` | dashboard assistant: `model` (default `claude-opus-5-5`), `effort`, `confirm_writes`, `max_steps`, `fallbacks`, `enabled` |
 | `mcp.http_token` | optional bearer token required on `POST /mcp` |
 | `infra.ship_logs` / `loki_url` | ship all process, JBoss and build logs to Loki (default on when `loki` is enabled) |
@@ -57,6 +58,14 @@ All `kind: war` services share **one** JBoss EAP process (`jboss-eap` in process
 Deploying a WAR copies it to `deployments/<context>.war` (hot deploy); undeploy removes it. Readiness is
 `http://127.0.0.1:9990/health/ready` (+ `port_offset`). Each WAR gets its own health URL
 (default `http://localhost:8080/<context>/`). Different Java versions per service: set `java_home` on `jboss`.
+
+## API Lab - AI-designed test data, API threads, workflows
+A separate dashboard window (**API Lab ↗**, `/lab`): point it at a repo or a running service, discover the APIs (OpenAPI,
+Spring controllers + DTOs + validation annotations from the Java sources, or actuator mappings), let the AI decide which
+response attributes feed which request attributes (shown as **threads**), generate realistic fake payloads, build and run
+workflows against the local service, and export them as k6 load tests. Everything is JSON in folders under `apilab_dir`
+(default `~/localdev/apilab/<project>/`). Agents get it as the `apilab_*` MCP tools and the `design-test-data` prompt.
+Guide: **[docs/api-lab.md](docs/api-lab.md)**.
 
 ## Performance, load testing and profiling
 

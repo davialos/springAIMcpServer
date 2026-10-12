@@ -52,6 +52,8 @@ def make_handler(port: int):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+            if u.path in ("/lab", "/lab/"):
+                return self._send(200, (STATIC / "lab.html").read_bytes(), "text/html; charset=utf-8")
             if u.path in ("/", "/index.html"):
                 return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
             if u.path.startswith("/static/"):
@@ -143,6 +145,8 @@ def route(method: str, path: str, q: dict, body: dict):
     if seg[:1] != ["api"]:
         raise KeyError(path)
     seg = seg[1:]
+    if seg[:1] == ["lab"]:
+        return lab_route(cfg, method, seg[1:], q, body)
     if method == "GET":
         if seg == ["state"]:
             return ops.status(cfg)
@@ -237,6 +241,65 @@ def route(method: str, path: str, q: dict, body: dict):
             config.save(merged)
             return {"saved": True}
     raise KeyError(path)
+
+
+def lab_route(cfg: dict, method: str, seg: list, q: dict, body: dict):
+    from .lab import flow, service as lab, store
+    if seg == ["projects"]:
+        if method == "GET":
+            return lab.projects(cfg)
+        return lab.create(cfg, body["name"], body.get("repo", ""), body.get("service", ""), body.get("base_url", ""), body.get("headers"))
+    if not seg:
+        raise KeyError("lab")
+    p, rest = seg[0], seg[1:]
+    if method == "GET":
+        if rest == []:
+            return {**store.project(cfg, p), "pool": {k: len(v) for k, v in store.pool(cfg, p).items()}}
+        if rest == ["apis"]:
+            return lab.api_list(cfg, p)
+        if rest == ["graph"]:  # everything the threads view needs in one call
+            return {"apis": store.apis(cfg, p), "links": store.links(cfg, p)}
+        if len(rest) == 2 and rest[0] == "apis":
+            return lab.api_detail(cfg, p, rest[1])
+        if rest == ["links"]:
+            return lab.links_view(cfg, p, q.get("status", ""), q.get("api", ""), float(q.get("min", 0)))
+        if len(rest) == 2 and rest[0] == "data":
+            return lab.data_view(cfg, p, rest[1], int(q.get("limit", 100)))
+        if rest == ["workflows"]:
+            return store.workflows(cfg, p)
+        if len(rest) == 2 and rest[0] == "workflows":
+            return store.workflow(cfg, p, rest[1])
+        if rest == ["runs"]:
+            return store.runs(cfg, p, int(q.get("limit", 30)))
+        if len(rest) == 2 and rest[0] == "runs":
+            return store.run(cfg, p, rest[1])
+        if rest == ["pool"]:
+            return store.pool(cfg, p)
+    else:
+        if rest == ["discover"]:
+            return lab.run_discovery(cfg, p, body.get("source", "auto"))
+        if rest == ["links"]:
+            return lab.link_set(cfg, p, body["from_api"], body["from_field"], body["to_api"], body["to_field"],
+                                body.get("status", "accepted"), body.get("reason", ""), "user")
+        if rest == ["links", "status"]:
+            return lab.link_status(cfg, p, body["ids"], body["status"])
+        if len(rest) == 2 and rest[0] == "rules":
+            return lab.set_rules(cfg, p, rest[1], body.get("rules", {}), bool(body.get("replace")))
+        if rest == ["generate"]:
+            return lab.generate(cfg, p, body.get("api", ""), int(body.get("count", 20)))
+        if rest == ["workflows"]:
+            return lab.workflow_save(cfg, p, body)
+        if rest == ["workflows", "auto"]:
+            return flow.auto(cfg, p, body.get("name", ""), bool(body.get("include_unlinked")))
+        if len(rest) == 3 and rest[0] == "workflows" and rest[2] == "run":
+            r = flow.run(cfg, p, rest[1], int(body.get("iterations", 1)))
+            return {k: r[k] for k in ("id", "ok", "failed", "summary")}
+        if len(rest) == 3 and rest[0] == "workflows" and rest[2] == "k6":
+            return flow.export_k6(cfg, p, rest[1], body.get("name", ""), body.get("profile", "load"), int(body.get("vus", 10)),
+                                  body.get("duration", "1m"), int(body.get("rows", 200)))
+        if rest == ["java-suite"]:
+            return lab.java_suite(cfg, p)
+    raise KeyError("/".join(seg))
 
 
 def serve(port: int) -> None:

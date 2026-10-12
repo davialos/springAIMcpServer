@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API Lab</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--axis:#898781;--grid:#e4e3df;--bd:#dfe3ea;--acc:#2f5bea;--bad:#c0392b;
+--s1:#2a78d6;--s2:#eb6834;--good:#0ca30c;--warnst:#fab219;--crit:#d03b3b;--get:#1c7c54;--post:#2a78d6;--put:#9a5b00;--patch:#7a4fc7;--delete:#c0392b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d0d0d;--card:#1a1a19;--fg:#fff;--mut:#c3c2b7;--grid:#2e2e2c;--bd:#2f3542;--acc:#6c8cff;
+--s1:#3987e5;--s2:#d95926;--get:#3ecf8e;--post:#6aa8ff;--put:#e5b04a;--patch:#b48cff;--delete:#ff6b5e}}
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}body{background:var(--bg);color:var(--fg);font:13px/1.45 -apple-system,system-ui,sans-serif;display:flex;flex-direction:column}
+header{display:flex;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--bd);background:var(--card);flex-wrap:wrap}
+h1{font-size:15px;margin:0}select,button,input,textarea{font:inherit;padding:5px 9px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--fg)}
+button{cursor:pointer}button.p{background:var(--acc);color:#fff;border-color:var(--acc)}button.d{color:var(--bad)}button:disabled{opacity:.5}
+.mut{color:var(--mut)}code,.mono{font:12px ui-monospace,Menlo,monospace}
+#wrap{flex:1;display:flex;min-height:0}
+#side{width:280px;border-right:1px solid var(--bd);background:var(--card);display:flex;flex-direction:column;min-height:0}
+#side input{margin:8px}#apilist{overflow:auto;flex:1}
+.api{padding:6px 10px;border-bottom:1px solid var(--bd);cursor:pointer}.api:hover,.api.sel{background:var(--bg)}
+.m{display:inline-block;min-width:52px;font:600 11px ui-monospace,Menlo,monospace}.m.GET{color:var(--get)}.m.POST{color:var(--post)}.m.PUT{color:var(--put)}.m.PATCH{color:var(--patch)}.m.DELETE{color:var(--delete)}
+#center{flex:1;display:flex;flex-direction:column;min-width:0}
+nav{display:flex;gap:2px;padding:6px 10px;border-bottom:1px solid var(--bd)}nav button{border:0;background:none;color:var(--mut)}nav button.on{background:var(--acc);color:#fff}
+#view{flex:1;overflow:auto;position:relative}
+#detail{width:380px;border-left:1px solid var(--bd);background:var(--card);overflow:auto;padding:10px;display:none}#detail.open{display:block}
+#ai{width:360px;border-left:1px solid var(--bd);background:var(--card);display:none;flex-direction:column}#ai.open{display:flex}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--bd);background:var(--card);position:sticky;top:0;z-index:3}
+#canvas{position:relative}.node{position:absolute;width:270px;background:var(--card);border:1px solid var(--bd);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.node.sel{outline:2px solid var(--acc)}.node h4{margin:0;padding:6px 8px;border-bottom:1px solid var(--bd);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ports{display:grid;grid-template-columns:1fr 1fr}.ports>div{padding:4px 0;min-width:0}.ports>div+div{border-left:1px solid var(--bd)}
+.port{font:11px ui-monospace,Menlo,monospace;padding:2px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:4px}
+.port:hover{background:var(--bg)}.port.armed{background:var(--acc);color:#fff}.port.in{text-align:left}.port.out{text-align:right}
+.port .t{color:var(--axis)}.lbl{font-size:10px;color:var(--axis);padding:0 8px}
+svg.threads{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}svg.threads path{pointer-events:stroke;cursor:pointer;fill:none}
+.tip{position:fixed;z-index:20;background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:6px 8px;font-size:12px;max-width:360px;box-shadow:0 2px 8px rgba(0,0,0,.15);pointer-events:none}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mut);font-weight:500;font-size:12px;position:sticky;top:0;background:var(--card)}
+pre{background:#0b0e14;color:#d6deeb;padding:8px;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all;font:12px/1.4 ui-monospace,Menlo,monospace;max-height:420px;margin:6px 0}
+.chip{display:inline-block;padding:1px 7px;border-radius:10px;border:1px solid var(--bd);font-size:11px}
+.st{display:inline-block;padding:0 7px;border-radius:10px;font-size:11px;border:1px solid var(--bd)}.st.good{box-shadow:inset 3px 0 0 var(--good);border-color:var(--good)}
+.st.warn{box-shadow:inset 3px 0 0 var(--warnst);border-color:var(--warnst)}.st.crit{box-shadow:inset 3px 0 0 var(--crit);border-color:var(--crit)}
+.link{color:var(--s1);font:11px ui-monospace,Menlo,monospace}.sec{margin:12px 0 4px;font-weight:600}
+.step{position:relative;background:var(--card);border:1px solid var(--bd);border-radius:8px;margin:0 0 26px 0;padding:8px 10px;max-width:760px}
+.step .bind{font:11px ui-monospace,Menlo,monospace;margin:2px 0}.step .ok{float:right}
+#msg{position:fixed;right:14px;bottom:14px;z-index:30}#msg div{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--acc);padding:7px 10px;margin-top:6px;border-radius:6px;max-width:420px}
+.chat{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px}.msgb{padding:6px 9px;border-radius:8px;max-width:95%;overflow-wrap:anywhere}
+.msgb.user{align-self:flex-end;background:var(--acc);color:#fff}.msgb.ai{background:var(--bg);border:1px solid var(--bd)}.tool{font-size:11px}
+.legend{display:flex;gap:12px;font-size:12px;color:var(--mut)}.legend i{display:inline-block;width:18px;height:2px;margin-right:5px;vertical-align:middle}
+.empty{padding:40px;text-align:center;color:var(--mut)}
+@media (max-width:900px){#side{width:200px}#detail{position:fixed;right:0;top:44px;bottom:0;z-index:10;width:min(380px,100%)}#ai{position:fixed;right:0;top:44px;bottom:0;z-index:11;width:min(360px,100%)}}
+</style></head><body>
+<header><h1>API Lab</h1><select id="proj"></select><button id="newp">New project</button><button id="disc" class="p">Discover APIs</button>
+<span class="mut" id="pinfo"></span><span style="flex:1"></span><button id="aibtn">AI ✦</button><a href="/" class="mut">← Dashboard</a></header>
+<div id="wrap">
+  <aside id="side"><input id="q" placeholder="filter APIs…"><div id="apilist"></div></aside>
+  <main id="center"><nav id="tabs"></nav><div id="view"></div></main>
+  <aside id="detail"></aside>
+  <aside id="ai"><div class="bar"><b>AI</b><span class="mut" id="aistatus"></span><span style="flex:1"></span><button id="aireset">New</button></div>
+    <div class="bar" id="aiq"></div><div class="chat" id="aichat"></div>
+    <div style="padding:8px;display:flex;gap:6px"><textarea id="aitxt" rows="2" style="flex:1" placeholder="Ask about this project's APIs, data, threads…"></textarea><button class="p" id="aisend">Send</button></div></aside>
+</div>
+<div id="msg"></div>
+<script src="/static/lab.js"></script>
+</body></html>

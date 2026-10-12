@@ -11,12 +11,24 @@ from __future__ import annotations
 import json
 
 from . import agentops, builds, config, jfr, jvm, loadgen, loadrun, metrics, ops, pc, repos
+from .lab import flow as labflow, service as lab, store as labstore
 
 S, I, B = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}
 
 
 def _t(desc, fn, props=None, req=(), effect="read"):
     return {"description": desc, "fn": fn, "props": props or {}, "required": list(req), "effect": effect}
+
+
+def _run_summary(r: dict) -> dict:
+    fails = [s for it in r["iterations"] for s in it if not s["ok"]][:5]
+    return {"run_id": r["id"], "workflow": r["workflow"], "ok": r["ok"], "failed": r["failed"], "per_step": r["summary"],
+            "failures": [{"step": s["step"], "api": s["api"], "status": s.get("status"), "url": s.get("url"), "error": s.get("error"),
+                          "warnings": s.get("warnings"), "request_body": s["request"].get("body"),
+                          "response": str(s.get("response"))[:600]} for s in fails]}
+
+
+P = {"type": "string", "description": "API Lab project name"}
 
 
 def _cfg_view(c, a):
@@ -116,6 +128,79 @@ TOOLS = {
     "jfr_analyze": _t("(Re)analyze a recording.", lambda c, a: jfr.analyze(c, a["id"]), {"id": S}, ["id"], "write"),
     "jfr_summary": _t("Analysis of a recording: status, score, key metrics, top issues with actions, hot spots with file:line, GC, memory.",
                       lambda c, a: jfr.summary(c, a["id"]), {"id": S}, ["id"]),
+    # --- API Lab: test data, threads, workflows (JSON files under apilab_dir/<project>/)
+    "apilab_projects": _t("API Lab projects with counts (APIs, threads, accepted threads, workflows).", lambda c, a: lab.projects(c)),
+    "apilab_create_project": _t("Create/update an API Lab project for a repo (workspace repo name or path) and/or a running service "
+                                "(base_url from the service). headers: default request headers, e.g. {\"Authorization\": \"Bearer ...\"}.",
+                                lambda c, a: lab.create(c, a["name"], a.get("repo", ""), a.get("service", ""), a.get("base_url", ""), a.get("headers")),
+                                {"name": S, "repo": S, "service": S, "base_url": S, "headers": {"type": "object"}}, ["name"], "write"),
+    "apilab_discover": _t("Discover the project's APIs (source auto|openapi|source|mappings: OpenAPI of the running service, Spring "
+                          "controllers + DTOs from the repo, or actuator mappings) and suggest threads between them.",
+                          lambda c, a: lab.run_discovery(c, a["project"], a.get("source", "auto")), {"project": P, "source": S}, ["project"], "write"),
+    "apilab_apis": _t("APIs of a project: id, method, path, field counts, rules, generated rows, accepted incoming threads.",
+                      lambda c, a: lab.api_list(c, a["project"]), {"project": P}, ["project"]),
+    "apilab_api": _t("One API in full: request fields (path/query/header/body with types, formats, constraints), response fields, "
+                     "fake-data rules, incoming/outgoing threads and a sample payload.",
+                     lambda c, a: lab.api_detail(c, a["project"], a["api"]), {"project": P, "api": S}, ["project", "api"]),
+    "apilab_links": _t("Threads (response field of one API -> request field of another) with status suggested|accepted|rejected, "
+                       "confidence and reason. Filter by status, api, min_confidence.",
+                       lambda c, a: lab.links_view(c, a["project"], a.get("status", ""), a.get("api", ""), float(a.get("min_confidence", 0))),
+                       {"project": P, "status": S, "api": S, "min_confidence": {"type": "number"}}, ["project"]),
+    "apilab_link_set": _t("Create or decide one thread: from_api's response field from_field feeds to_api's request field to_field "
+                          "(fields exactly as apilab_api lists them, e.g. 'id' -> 'body.customerId' or 'path.id'). status accepted "
+                          "(default) | suggested | rejected. Give a short reason.",
+                          lambda c, a: lab.link_set(c, a["project"], a["from_api"], a["from_field"], a["to_api"], a["to_field"],
+                                                    a.get("status", "accepted"), a.get("reason", "")),
+                          {"project": P, "from_api": S, "from_field": S, "to_api": S, "to_field": S, "status": S, "reason": S},
+                          ["project", "from_api", "from_field", "to_api", "to_field"], "write"),
+    "apilab_link_status": _t("Accept, reject, reset (suggested) or delete several threads by id at once.",
+                             lambda c, a: lab.link_status(c, a["project"], a["ids"], a["status"]),
+                             {"project": P, "ids": {"type": "array", "items": {"type": "string"}},
+                              "status": {"type": "string", "enum": ["accepted", "rejected", "suggested", "delete"]}},
+                             ["project", "ids", "status"], "write"),
+    "apilab_set_rules": _t("Fake-data rules for an API's request fields: {field_path: rule}. Rule keys: kind (email, first_name, "
+                           "full_name, phone, company, city, country, iso_country, street, zip, uuid, date, datetime, past_date, "
+                           "future_date, url, word, words, sentence, paragraph, int, decimal, money, bool, currency, sku, code, ip, color, "
+                           "username, password, iban, lat, lon, time), enum, const, pattern ('ORD-####'), template "
+                           "('user{{seq}}@x.test'), min/max, pool ('<api>.<response field>'), null_rate, omit. Returns a preview.",
+                           lambda c, a: lab.set_rules(c, a["project"], a["api"], a["rules"], a.get("replace", False)),
+                           {"project": P, "api": S, "rules": {"type": "object"}, "replace": B}, ["project", "api", "rules"], "write"),
+    "apilab_generate": _t("Generate and save fake payloads (data/<api>.json) for one API or all; threads become {$link} markers or "
+                          "real values captured from earlier runs.",
+                          lambda c, a: lab.generate(c, a["project"], a.get("api", ""), int(a.get("count", 20))),
+                          {"project": P, "api": S, "count": I}, ["project"], "write"),
+    "apilab_data": _t("Generated payloads of an API (and the file they live in).",
+                      lambda c, a: lab.data_view(c, a["project"], a["api"], int(a.get("limit", 20))), {"project": P, "api": S, "limit": I},
+                      ["project", "api"]),
+    "apilab_workflow_auto": _t("Build a workflow from the accepted threads: producers first, every thread bound "
+                               "({{sN.response.field}}), DELETEs last.",
+                               lambda c, a: labflow.auto(c, a["project"], a.get("name", ""), a.get("include_unlinked", False)),
+                               {"project": P, "name": S, "include_unlinked": B}, ["project"], "write"),
+    "apilab_workflow_save": _t("Create/replace a workflow: {id, name, think_time_ms, steps: [{id, api, bind: {request_field: "
+                               "'{{s1.response.id}}' | '{{pool:api.field}}' | literal}, expect: {status: [200,201]}}]}. "
+                               "Validated: APIs and fields must exist, bindings may only use earlier steps.",
+                               lambda c, a: lab.workflow_save(c, a["project"], a["workflow"]),
+                               {"project": P, "workflow": {"type": "object"}}, ["project", "workflow"], "write"),
+    "apilab_workflows": _t("Workflows of a project (or one in full with id).",
+                           lambda c, a: labstore.workflow(c, a["project"], a["id"]) if a.get("id") else labstore.workflows(c, a["project"]),
+                           {"project": P, "id": S}, ["project"]),
+    "apilab_workflow_run": _t("Execute a workflow against the project's base_url (iterations, default 1): fresh fake data per "
+                              "iteration, threads resolved from earlier responses, every call stored in runs/; real ids are captured "
+                              "into the pool. Returns per-step results and the first failures with request/response.",
+                              lambda c, a: _run_summary(labflow.run(c, a["project"], a["workflow"], int(a.get("iterations", 1)))),
+                              {"project": P, "workflow": S, "iterations": I}, ["project", "workflow"], "write"),
+    "apilab_runs": _t("Recent workflow runs, or one run in full (run_id).",
+                      lambda c, a: labstore.run(c, a["project"], a["run_id"]) if a.get("run_id") else labstore.runs(c, a["project"]),
+                      {"project": P, "run_id": S}, ["project"]),
+    "apilab_export_k6": _t("Turn a workflow into a k6 load test (threads resolved per virtual-user iteration, payload rows from the "
+                           "generator + captured pool) and register it; run it with loadtest_run (JFR + live metrics).",
+                           lambda c, a: labflow.export_k6(c, a["project"], a["workflow"], a.get("name", ""), a.get("profile", "load"),
+                                                          int(a.get("vus", 10)), a.get("duration", "1m"), int(a.get("rows", 200))),
+                           {"project": P, "workflow": S, "name": S, "profile": S, "vus": I, "duration": S, "rows": I},
+                           ["project", "workflow"], "write"),
+    "apilab_java_suite": _t("Also generate the repository's full Java k6 suite (scripts/loadtest.sh: JPA entities, DB-backed real "
+                            "values, journeys) into the project folder. Needs JDK 25; takes minutes on first use.",
+                            lambda c, a: lab.java_suite(c, a["project"]), {"project": P}, ["project"], "write"),
     # --- configuration
     "config_set": _t("Create or replace a configuration entry. section=services: {kind jar|war|command, repo, artifact (glob), port, "
                      "base_url, health {url}|{port}, env, args, java_opts, depends_on, context (war), cmd/cwd (command), jfr "

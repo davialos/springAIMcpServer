@@ -151,7 +151,8 @@ async function showRun(id) {
       <div class="card"><b>JFR profile</b> ${j.status ? esc(j.status) : '<span class="mut">not recorded (load test has no service, or jfr off)</span>'} ${esc(j.reason || '')}
         ${j.recording ? `<button data-x="jfr-open" data-n="${esc(j.recording)}">View analysis</button><a href="/files/jfr?id=${encodeURIComponent(j.recording)}&f=report.html" target="_blank" rel="noopener">full report</a>` : ''}
         ${j.analysis ? ` ${j.analysis.health ? sevChip(j.analysis.health) : ''} ${j.analysis.score != null ? 'score ' + j.analysis.score : ''} <span class="mut">${esc(j.analysis.headline || j.analysis.status || '')}</span>` : ''}</div>
-      ${k.thresholds && k.thresholds.length ? `<div class="card"><b>Thresholds</b> <span class="mut">${m.status === 'thresholds_failed' ? 'at least one failed (k6 exit 99)' : 'all passed'}</span><ul>${k.thresholds.map(t => `<li><code>${esc(t)}</code></li>`).join('')}</ul></div>` : ''}
+      ${k.thresholds && k.thresholds.length ? `<div class="card"><b>Thresholds</b> <span class="mut">${m.status === 'thresholds_failed' ? 'at least one failed (k6 exit 99)' : 'all passed'}</span><ul>${k.thresholds.map(t => typeof t === 'string' ? `<li><code>${esc(t)}</code></li>`
+        : `<li>${t.ok ? '<span class="st good">✓ passed</span>' : '<span class="st crit">✕ crossed</span>'} <code>${esc(t.metric)}: ${esc(t.expr)}</code></li>`).join('')}</ul></div>` : ''}
       <div class="card"><b>Run log</b><pre id="rlog" data-off="${logOff}">${esc(logTxt)}</pre></div>`;
     drawCharts($('#rcharts'), tl, m.finished || undefined);
     const r = await api('GET', `/loadruns/${id}/log?offset=${logOff}`), pre = $('#rlog');

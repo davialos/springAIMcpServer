@@ -100,7 +100,7 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(r["rps"], 2.5)
         self.assertEqual(r["latency_ms"]["p(95)"], 9)
         self.assertAlmostEqual(r["error_rate"], 0.1)
-        self.assertEqual(r["thresholds"], ["http_req_duration: p(95)<500"])
+        self.assertEqual(r["thresholds"], [{"metric": "http_req_duration", "expr": "p(95)<500", "ok": True}])
 
     def test_jfr_flags_in_project(self):
         from devctl import compose, jfr

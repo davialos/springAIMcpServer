@@ -23,7 +23,7 @@ json.dump({"metrics": {
     "http_reqs": {"count": n, "rate": n / el},
     "http_req_duration": {"avg": sum(lat) / len(lat), "min": lat[0], "med": p(.5), "max": lat[-1], "p(90)": p(.9), "p(95)": p(.95), "p(99)": p(.99),
                           "thresholds": {"p(95)<500": False}},
-    "http_req_failed": {"passes": fail, "fails": n - fail, "value": fail / n, "thresholds": {"rate<0.01": True}},
+    "http_req_failed": {"passes": fail, "fails": n - fail, "value": fail / n, "thresholds": {"rate<0.01": fail / n >= 0.01}},
     "checks": {"passes": n - fail, "fails": fail, "value": (n - fail) / n},
     "vus_max": {"value": 1, "min": 1, "max": 1}, "iterations": {"count": n, "rate": n / el}}}, open(out, "w"))
 sys.exit(99 if fail / n >= 0.01 else 0)

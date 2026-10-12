@@ -161,9 +161,9 @@ def k6_results(summary: dict) -> dict:
            "error_rate": rate(failed) if failed else None, "checks_rate": rate(checks) if checks else None,
            "data_received": m.get("data_received", {}).get("count"), "data_sent": m.get("data_sent", {}).get("count")}
     th = []
-    for metric, body in m.items():
-        for expr in (body.get("thresholds") or {}):
-            th.append(f"{metric}: {expr}")
+    for metric, body in m.items():  # summary-export maps each threshold to true when it was crossed (verified k6 v1.3)
+        for expr, crossed in (body.get("thresholds") or {}).items():
+            th.append({"metric": metric, "expr": expr, "ok": not crossed})
     out["thresholds"] = th
     return out
 

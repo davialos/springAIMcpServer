@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "devctl": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/local-dev/bin/devctl-mcp",
+      "args": []
+    }
+  }
+}

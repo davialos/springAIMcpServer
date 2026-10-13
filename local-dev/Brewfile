@@ -6,4 +6,6 @@ brew "gradle"
 brew "k6"
 brew "openjdk@21"
 brew "openjdk@17"
+brew "openjdk"         # JDK 25: the JFR analyzer (scripts/jfr-analyze.sh)
+brew "python@3.12"     # dashboard AI assistant (anthropic SDK needs Python >= 3.10)
 cask "orbstack"   # or docker / colima: needed for grafana, loki, prometheus, postgres

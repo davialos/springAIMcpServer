@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import shlex
+import sys
 from pathlib import Path
 
-from . import config, infra, javahome
+from . import config, infra, javahome, jfr
 
 JBOSS = "jboss-eap"
+SHIPPER = "log-shipper"
+
+
+def log_dir() -> Path:
+    return config.HOME / "logs"
 
 
 def jboss_base(cfg: dict) -> Path:
@@ -42,6 +48,17 @@ def service_health(name: str, s: dict, cfg: dict) -> dict | None:
     return None
 
 
+def service_base_url(name: str, s: dict, cfg: dict) -> str | None:
+    """Root URL of the service's HTTP API (where /actuator/... and the app's endpoints live)."""
+    if s.get("base_url"):
+        return s["base_url"].rstrip("/")
+    if s.get("kind", "jar") == "war":
+        return f"http://localhost:{8080 + cfg['jboss'].get('port_offset', 0)}/{s.get('context', name)}"
+    if s.get("port"):
+        return f"http://localhost:{s['port']}"
+    return None
+
+
 def build_project(cfg: dict, st: dict) -> dict:
     procs: dict = {}
     deployed = st.get("deployed", {})
@@ -65,7 +82,7 @@ def build_project(cfg: dict, st: dict) -> dict:
                        f"-Djboss.server.base.dir={shlex.quote(str(jboss_base(cfg)))} "
                        f"-Djboss.socket.binding.port-offset={off} -b 0.0.0.0",
             "namespace": "jboss",
-            "environment": [f"JAVA_HOME={jh}", f"JAVA_OPTS={jb.get('java_opts', '')}", "NOPAUSE=true"],
+            "environment": [f"JAVA_HOME={jh}", f"JAVA_OPTS={jb.get('java_opts', '')} {jfr.jvm_flags(cfg, JBOSS, jb)}", "NOPAUSE=true"],
             "readiness_probe": {"http_get": {"host": "127.0.0.1", "scheme": "http", "path": "/health/ready",
                                              "port": str(9990 + off)},
                                 "initial_delay_seconds": 15, "period_seconds": 5, "failure_threshold": 60},
@@ -85,7 +102,8 @@ def build_project(cfg: dict, st: dict) -> dict:
             if s.get("port"):
                 env.append(f"SERVER_PORT={s['port']}")
             env.append(f"JAVA_HOME={jh}")
-            cmd = f"exec {shlex.quote(jh + '/bin/java') if jh else 'java'} {s.get('java_opts', '')} -jar app.jar {s.get('args', '')}"
+            cmd = (f"exec {shlex.quote(jh + '/bin/java') if jh else 'java'} {jfr.jvm_flags(cfg, name, s)} "
+                   f"{s.get('java_opts', '')} -jar app.jar {s.get('args', '')}")
             wd = str(dd)
             active = name in deployed
         else:  # command
@@ -100,4 +118,16 @@ def build_project(cfg: dict, st: dict) -> dict:
         if not active:
             p["disabled"] = True
         procs[name] = p
+    if cfg["infra"].get("ship_logs", True) and "loki" in cfg["infra"]["enabled"]:
+        root = Path(__file__).resolve().parent.parent
+        procs[SHIPPER] = {"command": f"PYTHONPATH={shlex.quote(str(root))} exec {shlex.quote(sys.executable)} -m devctl ship-logs",
+                          "namespace": "infra", "depends_on": {"loki": {"condition": "process_healthy"}},
+                          "availability": {"restart": "always", "backoff_seconds": 5}}
+    for name, p in procs.items():
+        p.setdefault("log_location", str(log_dir() / f"{name}.log"))
+        # raw application lines in the per-process files (not process-compose's JSON envelope), so log search, diagnose
+        # and the Loki shipper see the real text; per process - a top-level block is ignored by v1.75
+        p.setdefault("log_configuration", {"disable_json": True, "no_metadata": True, "no_color": True, "flush_each_line": True,
+                                                "fields_order": ["message"]})
     return {"version": "0.5", "is_strict": False, "processes": procs}
+

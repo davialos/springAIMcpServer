@@ -108,6 +108,77 @@ class DevctlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             builds.start(self.cfg, "billing", "--upload-pack=x")
 
+    def test_prometheus_remote_write_and_log_shipping(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from devctl import compose, shipper
+        cfg = self.config.load()
+        cfg["loadtests"] = {"smoke": {"script": "smoke.js", "vus": 5, "duration": "30s", "env": {"BASE_URL": "http://x"}}}
+        proj = compose.build_project(cfg, self.config.state())
+        self.assertNotIn("k6-smoke", proj["processes"])  # k6 runs through the load-run pipeline (loadrun.py)
+        self.assertIn("web.enable-remote-write-receiver", proj["processes"]["prometheus"]["command"])
+        self.assertEqual(proj["processes"]["log-shipper"]["depends_on"], {"loki": {"condition": "process_healthy"}})
+        self.assertTrue(proj["processes"]["grafana"]["log_location"].endswith("logs/grafana.log"))
+        # raw application lines, set per process (a top-level block is ignored by process-compose v1.75)
+        self.assertEqual(proj["processes"]["grafana"]["log_configuration"]["fields_order"], ["message"])
+        import inspect
+        from devctl import pc
+        self.assertIn("--keep-project", inspect.getsource(pc.sync))  # else the server exits while its only service restarts
+
+        got = []
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                got.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                self.send_response(204); self.end_headers()
+            def log_message(self, *a): pass
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            compose.log_dir().mkdir(parents=True)
+            f = compose.log_dir() / "orders-api.log"
+            f.write_text("old line\n")
+            sh_ = shipper.Shipper(cfg, f"http://127.0.0.1:{srv.server_address[1]}")
+            self.assertEqual(sh_.poll(), 0)  # history at startup is not replayed
+            with open(f, "a") as fh:
+                fh.write("\x1b[32mhello\x1b[0m\nsecond\npart")
+            self.assertEqual(sh_.poll(), 2)  # incomplete trailing line is held back
+            self.assertTrue(sh_.flush())
+            st = got[0]["streams"][0]
+            self.assertEqual(st["stream"]["service"], "orders-api")
+            self.assertEqual([v[1] for v in st["values"]], ["hello", "second"])
+            with open(f, "a") as fh:
+                fh.write("ial\n")
+            sh_.poll()
+            sh_.flush()
+            self.assertEqual(got[1]["streams"][0]["values"][0][1], "partial")
+        finally:
+            srv.shutdown()
+        down = shipper.Shipper(cfg, "http://127.0.0.1:1")
+        down.pending[(("service", "x"),)] = [(1, "l")]
+        self.assertFalse(down.flush())
+        self.assertEqual(len(down.pending), 1)  # retained for retry
+
+    def test_grafana_dashboards_provisioned(self):
+        from devctl import compose
+        cfg = self.config.load()
+        proj = compose.build_project(cfg, self.config.state())
+        cmd = proj["processes"]["grafana"]["command"]
+        self.assertIn("dashboards-devctl", cmd)
+        d = self.config.HOME / "infra" / "grafana"
+        for name, uid in (("k6.json", "devctl-k6"), ("logs.json", "devctl-logs")):
+            dash = json.loads((d / "dashboards" / name).read_text())
+            self.assertEqual(dash["uid"], uid)
+            ids = [p["id"] for p in dash["panels"]]
+            self.assertEqual(len(ids), len(set(ids)))
+            for p in dash["panels"]:
+                self.assertIn(p["datasource"]["uid"], ("prometheus", "loki"))
+                self.assertTrue(all(t["expr"] for t in p["targets"]))
+                self.assertTrue(p["gridPos"]["x"] + p["gridPos"]["w"] <= 24)
+        ds = json.loads((d / "datasources.yaml").read_text())["datasources"]
+        self.assertEqual({x["uid"] for x in ds}, {"prometheus", "loki"})
+        self.assertIn("/var/lib/grafana/dashboards-devctl", json.loads((d / "dashboards.yaml").read_text())["providers"][0]["options"]["path"])
+
     def test_mcp(self):
         from devctl import mcp
         r = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

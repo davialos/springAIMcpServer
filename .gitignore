@@ -7,7 +7,8 @@ out/
 # IDE
 .idea/
 *.iml
-.vscode/
+.vscode/*
+!.vscode/mcp.json
 .project
 .classpath
 .settings/

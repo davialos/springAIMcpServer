@@ -26,6 +26,7 @@ def _run(cfg: dict, *args: str, timeout=30) -> subprocess.CompletedProcess:
 def write_project(cfg: dict) -> dict:
     proj = compose.build_project(cfg, config.state())
     config.HOME.mkdir(parents=True, exist_ok=True)
+    compose.log_dir().mkdir(parents=True, exist_ok=True)
     config.PC_FILE.write_text(json.dumps(proj, indent=2))  # JSON is valid YAML
     return proj
 
@@ -46,7 +47,9 @@ def sync(cfg: dict) -> str:
         if r.returncode != 0:
             raise PcError(r.stderr.strip() or r.stdout.strip())
         return "updated"
-    subprocess.Popen(["process-compose", "up", "-f", f, "-p", str(cfg["process_compose_port"]), "-D", "--tui=false"],
+    # --keep-project: without it process-compose exits as soon as no process runs (e.g. during the restart of the only
+    # deployed service), orphaning the JVM it was restarting - found running spring-petclinic-rest under v1.75.
+    subprocess.Popen(["process-compose", "up", "-f", f, "-p", str(cfg["process_compose_port"]), "-D", "--tui=false", "--keep-project"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     return "started"
 

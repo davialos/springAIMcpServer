@@ -18,6 +18,26 @@ logs and health checks from a TUI, a web UI and AI agents (Claude, Cursor).
 - All `war` services share **one JBoss EAP process with a private base dir**; deploy = copy into `deployments/`.
 - Infra runs as docker containers under process-compose; Prometheus targets are generated from the services.
 - Dashboard is loopback-only with Host and `X-Devctl` header checks because it can execute configured commands.
+- **k6** runs as on-demand process-compose processes writing to Prometheus remote-write; **logs** go to Loki via a
+  small stdlib shipper tailing process-compose `log_location` files (chosen over Promtail/Alloy: testable here, no extra image).
+- **Performance / profiling** (no new runtime dependency): services are polled for their own Micrometer metrics
+  (`/actuator/prometheus`, falling back to `/actuator/metrics`, then a probe) - the minimal service change is actuator +
+  Prometheus registry. Every devctl-started JVM runs a continuous JFR ring buffer (`-XX:StartFlightRecording`),
+  dumped on demand with `jcmd`; analysis reuses `scripts/jfr-analyze.sh` and the dashboard renders its
+  `jfr-analyzer/summary/1` JSON. A load run is one detached process (JFR start → k6 → metrics timeline → JFR stop →
+  analysis) like a build, so k6 no longer runs as a process-compose process.
+- **AI**: one tool catalogue (`tools.py`, each tool tagged read/write/destroy) serves the MCP server over stdio
+  (default: every agent supports it, no daemon, no header auth - which several clients still drop) and stateless
+  Streamable HTTP on the dashboard (`/mcp`, loopback + Host/Origin checks, optional bearer token), and the dashboard
+  Assistant (official `anthropic` SDK as an optional dependency in `local-dev/.venv`, manual tool loop so write/destroy
+  calls wait for the developer's approval). Goal-level tools (`ship`, `diagnose`, `wait_*`) replace agent polling loops;
+  `initialize` instructions, resources and prompts teach agents the workflow. `devctl setup` is the single entry point.
+- **API Lab** (`devctl/lab/`): API discovery (OpenAPI, Spring sources with DTO/validation parsing, actuator mappings),
+  heuristic *suggestions* of response->request attribute threads that the AI (MCP `apilab_*` tools or the Assistant)
+  accepts/rejects, a seedable stdlib fake-data engine honouring code constraints (code enums authoritative), workflows
+  bound by threads and executed against the local service, and a k6 exporter that resolves threads per VU iteration.
+  Storage is JSON files in per-project folders (no database) so the data is inspectable, diffable and committable. The
+  repository's Java generator stays available as an optional DB-backed suite (`apilab_java_suite`).
 
 ## Consequences
 Not a Spring module: no effect on the starter, BOM or offline repo. process-compose CLI behaviour is verified

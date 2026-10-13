@@ -1,3 +1,9 @@
 #!/usr/bin/env bash
+# devctl MCP server (stdio). Point any coding agent's MCP config at this file - see local-dev/docs/mcp-agents.md.
 d="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHONPATH="$d" exec python3 -m devctl mcp
+# GUI-launched agents (Cursor, Antigravity, Claude Desktop) start this with a minimal PATH: add Homebrew and the
+# environment captured by `devctl setup` so mvn, java, k6, docker, process-compose are found.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+env_file="${LOCALDEV_HOME:-$HOME/.localdev}/env.sh"; [ -f "$env_file" ] && . "$env_file"
+py="python3"; [ -x "$d/.venv/bin/python" ] && py="$d/.venv/bin/python"
+PYTHONPATH="$d" exec "$py" -m devctl mcp

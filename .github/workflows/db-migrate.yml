@@ -1,0 +1,93 @@
+name: db-migrate
+
+# PR touching db-migrations/  -> validate + migrate/rollback/re-migrate on a throwaway Postgres.
+# push to main                -> deploy to dev.
+# manual (workflow_dispatch)  -> deploy to staging / prod (use GitHub Environment approvals).
+# Deploy = tag -> liquibase update -> deploy app -> health check; any failure rolls the DB back to the tag.
+
+on:
+  pull_request:
+    paths: ['db-migrations/**', 'scripts/db/**', '.github/workflows/db-migrate.yml']
+  push:
+    branches: [main]
+    paths: ['db-migrations/**', 'scripts/db/**']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, staging, prod]
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  LIQUIBASE_IMAGE: liquibase/liquibase:4.31.1   # script runs the CLI through docker
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci, POSTGRES_DB: app_ci }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: dev
+      DB_HOST: localhost
+      DB_NAME: app_ci
+      DB_USERNAME: postgres
+      DB_PASSWORD: ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate changelog
+        run: scripts/db/liquibase.sh validate
+      - name: Migrate up
+        run: DEPLOY_ID=ci-1 scripts/db/liquibase.sh migrate
+      - name: Prove every changeset is reversible (rollback to empty)
+        run: scripts/db/liquibase.sh rollback pre-deploy-ci-1
+      - name: Migrate again (idempotent from scratch)
+        run: DEPLOY_ID=ci-2 scripts/db/liquibase.sh migrate
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: db-deploy-${{ inputs.environment || 'dev' }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment || 'dev' }}
+    env:
+      APP_ENV: ${{ inputs.environment || 'dev' }}
+      DEPLOY_ID: ${{ github.sha }}
+      DB_USERNAME: ${{ secrets.DB_USERNAME }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      # Optional per-environment overrides (GitHub Environment variables): DB_TYPE, DB_HOST, DB_PORT, DB_NAME, DB_URL
+      DB_TYPE: ${{ vars.DB_TYPE }}
+      DB_HOST: ${{ vars.DB_HOST }}
+      DB_PORT: ${{ vars.DB_PORT }}
+      DB_NAME: ${{ vars.DB_NAME }}
+      DB_URL: ${{ vars.DB_URL }}
+      DB_SCHEMA: ${{ vars.DB_SCHEMA }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Migrate database (auto-rollback if a changeset fails)
+        id: migrate
+        run: scripts/db/liquibase.sh migrate
+
+      # ---- Replace with your real application deploy -------------------------------------------
+      - name: Deploy application
+        run: |
+          echo "TODO: deploy the build (helm upgrade / kubectl rollout / ssh / cloud deploy)"
+      - name: Health check
+        run: |
+          echo "TODO: curl --fail --retry 10 --retry-delay 6 \"$HEALTH_URL\""
+        # env: { HEALTH_URL: ${{ vars.HEALTH_URL }} }
+      # -------------------------------------------------------------------------------------------
+
+      - name: Roll back database (deployment failed)
+        if: failure() && steps.migrate.outcome == 'success'
+        run: scripts/db/liquibase.sh rollback "$(scripts/db/liquibase.sh tag-name)"

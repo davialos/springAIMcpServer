@@ -21,6 +21,10 @@ DEFAULTS = {
     "repos": {},     # name -> {build_cmd, artifact_globs, java_home, in_place, env}
     "services": {},  # name -> see config.example.json
     "stacks": {},    # name -> [service, ...]
+    "environments": {},  # name -> {description, services[], db{type,host,port,name,schema,url,username,username_env,password_env},
+                         #          contexts, allowed_branches[], health_timeout, auto_rollback}
+    "liquibase": {"script": "", "migrations_dir": ""},  # defaults: scripts/db/liquibase.sh, db-migrations/ of this checkout
+    "scheduler": {"poll_seconds": 10},
     "infra": {"enabled": ["prometheus", "loki", "grafana"], "prometheus_scrape_path": "/actuator/prometheus"},
 }
 
@@ -28,7 +32,7 @@ DEFAULTS = {
 def _merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in over.items():
-        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) and k not in ("repos", "services", "stacks") else v
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) and k not in ("repos", "services", "stacks", "environments") else v
     return out
 
 

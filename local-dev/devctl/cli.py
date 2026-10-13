@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from . import builds, config, ops, pc, repos
+from . import builds, config, dbrun, deployments, envs, ops, pc, repos
 
 
 def _p(o):
@@ -47,7 +47,23 @@ def main(argv=None) -> int:
     add("tui", "attach the process-compose TUI")
     add("dashboard", "run the web dashboard")
     add("mcp", "run the stdio MCP server")
+    add("envs", "list environments")
+    sp = add("db", "run Liquibase for an environment: validate|status|history|migrate|rollback <tag>|rollback-count <n>",
+             "environment", "action")
+    sp.add_argument("arg", nargs="?", default=""); sp.add_argument("--build", default=""); sp.add_argument("--local", action="store_true",
+                   help="run in this terminal instead of through process-compose")
+    sp = add("schedule", "schedule a deployment (build+migrate+deploy+verify, rollback on failure)", "environment", "repo", "branch")
+    sp.add_argument("--at", default=""); sp.add_argument("--build", default=""); sp.add_argument("--services", default="")
+    sp.add_argument("--no-migrate", action="store_true")
+    add("deployments", "list deployments")
+    add("deployment", "show a deployment and its log", "deployment_id")
+    add("cancel", "cancel a scheduled deployment", "deployment_id")
+    add("run-deployment", "start a scheduled deployment now", "deployment_id")
+    sp = add("scheduler", "run the deployment scheduler loop (hosted by process-compose)")
+    sp.add_argument("--once", action="store_true")
     add("_run-build", "internal", "build_id")
+    add("_run-deploy", "internal", "deployment_id")
+    add("_db", "internal: process body of liquibase-<environment>", "environment")
     a = ap.parse_args(argv)
     cfg = config.load()
     try:
@@ -110,6 +126,34 @@ def _dispatch(a, cfg) -> int:
     elif c == "mcp":
         from . import mcp
         mcp.serve()
+    elif c == "envs":
+        for n, e in cfg["environments"].items():
+            print(f"{n:14} services={','.join(e['services']) or '-':30} db={'yes' if dbrun.db_configured(cfg, n) else 'no'}  {e.get('description', '')}")
+    elif c == "db":
+        if a.local:
+            return dbrun.job(cfg, a.environment, a.action, a.arg, a.build)
+        _p(dbrun.submit(cfg, a.environment, a.action, a.arg, a.build))
+    elif c == "schedule":
+        m = deployments.create(cfg, a.environment, a.repo, a.branch, a.at or None, a.build,
+                               [x for x in a.services.split(",") if x] or None, not a.no_migrate)
+        if not a.at:
+            m = deployments.start(cfg, m["id"])
+        print(f"{m['id']} {m['status']}")
+    elif c == "deployments":
+        for m in deployments.list_all(cfg):
+            print(f"{m['id']:55} {m['status']:16} {m['phase']:12} {m['branch']}")
+    elif c == "deployment":
+        _p(deployments.read(cfg, a.deployment_id)); print(deployments.read_log(cfg, a.deployment_id)["text"])
+    elif c == "cancel":
+        _p(deployments.cancel(cfg, a.deployment_id))
+    elif c == "run-deployment":
+        _p(deployments.start(cfg, a.deployment_id))
+    elif c == "scheduler":
+        deployments.scheduler_loop(a.once)
+    elif c == "_run-deploy":
+        return deployments.run(cfg, a.deployment_id)
+    elif c == "_db":
+        return dbrun.process_request(cfg, a.environment)
     elif c == "_run-build":
         return builds.run(cfg, a.build_id)
     return 0

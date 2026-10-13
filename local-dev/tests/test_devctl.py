@@ -119,6 +119,11 @@ class DevctlTest(unittest.TestCase):
         self.assertIn("web.enable-remote-write-receiver", proj["processes"]["prometheus"]["command"])
         self.assertEqual(proj["processes"]["log-shipper"]["depends_on"], {"loki": {"condition": "process_healthy"}})
         self.assertTrue(proj["processes"]["grafana"]["log_location"].endswith("logs/grafana.log"))
+        # raw application lines, set per process (a top-level block is ignored by process-compose v1.75)
+        self.assertEqual(proj["processes"]["grafana"]["log_configuration"]["fields_order"], ["message"])
+        import inspect
+        from devctl import pc
+        self.assertIn("--keep-project", inspect.getsource(pc.sync))  # else the server exits while its only service restarts
 
         got = []
 

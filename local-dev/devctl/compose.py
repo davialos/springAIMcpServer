@@ -125,5 +125,9 @@ def build_project(cfg: dict, st: dict) -> dict:
                           "availability": {"restart": "always", "backoff_seconds": 5}}
     for name, p in procs.items():
         p.setdefault("log_location", str(log_dir() / f"{name}.log"))
+        # raw application lines in the per-process files (not process-compose's JSON envelope), so log search, diagnose
+        # and the Loki shipper see the real text; per process - a top-level block is ignored by v1.75
+        p.setdefault("log_configuration", {"disable_json": True, "no_metadata": True, "no_color": True, "flush_each_line": True,
+                                                "fields_order": ["message"]})
     return {"version": "0.5", "is_strict": False, "processes": procs}
 

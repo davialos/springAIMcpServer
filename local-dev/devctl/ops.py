@@ -51,14 +51,30 @@ def deploy(cfg: dict, service: str, build_id: str, restart: bool = True) -> dict
     config.save_state(st)
     msg = pc.sync(cfg) if pc.available() else "process-compose not installed; files deployed only"
     if restart and pc.available() and kind == "jar":
-        _settle()
-        pc.control(cfg, "restart", service) if pc.processes(cfg).get(service, {}).get("status") == "Running" \
-            else pc.control(cfg, "start", service)
+        # a project update that changed this process restarts it by itself; acting before it settles races with that
+        # (seen with process-compose v1.75: update + immediate restart left the service Completed)
+        status = _settled_status(cfg, service)
+        pc.control(cfg, "restart" if status == "Running" else "start", service)
     elif restart and pc.available() and kind == "war" and compose.JBOSS in pc.processes(cfg) \
             and pc.processes(cfg)[compose.JBOSS]["status"] != "Running":
         _settle()
         pc.control(cfg, "start", compose.JBOSS)
     return {"service": service, "build": build_id, "branch": meta["branch"], "target": str(dest), "project": msg}
+
+
+TRANSIENT = {"Pending", "Launching", "Launched", "Restarting", "Terminating", "Foreground", ""}
+
+
+def _settled_status(cfg: dict, name: str, timeout: float = 30.0) -> str:
+    _settle()
+    end = time.time() + timeout
+    status = ""
+    while time.time() < end:
+        status = pc.processes(cfg).get(name, {}).get("status", "")
+        if status not in TRANSIENT:
+            return status
+        time.sleep(0.5)
+    return status
 
 
 def _settle() -> None:

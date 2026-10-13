@@ -47,7 +47,9 @@ def sync(cfg: dict) -> str:
         if r.returncode != 0:
             raise PcError(r.stderr.strip() or r.stdout.strip())
         return "updated"
-    subprocess.Popen(["process-compose", "up", "-f", f, "-p", str(cfg["process_compose_port"]), "-D", "--tui=false"],
+    # --keep-project: without it process-compose exits as soon as no process runs (e.g. during the restart of the only
+    # deployed service), orphaning the JVM it was restarting - found running spring-petclinic-rest under v1.75.
+    subprocess.Popen(["process-compose", "up", "-f", f, "-p", str(cfg["process_compose_port"]), "-D", "--tui=false", "--keep-project"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     return "started"
 

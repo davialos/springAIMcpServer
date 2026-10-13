@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sys
 
-from . import __version__, builds, config, ops, pc, repos
+from . import __version__, builds, config, dbrun, deployments, ops, pc, repos
 
 PROTOCOL = "2025-06-18"
 S = {"type": "string"}
@@ -41,8 +41,33 @@ TOOLS = {
                       lambda c, a: ops.infra_control(c, a["name"], a["action"])),
     "logs": (_t("Last N log lines of a process (service, jboss-eap, grafana...).", {"name": S, "lines": {"type": "integer"}}, ["name"]),
              lambda c, a: pc.logs(c, a["name"], int(a.get("lines", 100)))),
+    "list_environments": (_t("Environments (services, database, allowed branches) configured on the dashboard."),
+                          lambda c, a: {n: {**e, "busy": deployments.busy(c, n)} for n, e in c["environments"].items()}),
+    "schedule_deployment": (_t("Schedule (or run now when run_at is omitted) a rollout of repo@branch to an environment: build, Liquibase "
+                               "migrate, deploy, health-verify, automatic rollback on failure. run_at is ISO-8601 local time.",
+                               {"environment": S, "repo": S, "branch": S, "run_at": S, "build_id": S,
+                                "services": {"type": "array", "items": S}, "migrate": {"type": "boolean"}}, ["environment", "repo"]),
+                            lambda c, a: _schedule(c, a)),
+    "list_deployments": (_t("Recent deployments (newest first) with status/phase."), lambda c, a: deployments.list_all(c, 20)),
+    "deployment_status": (_t("Deployment record plus the tail of its log.", {"deployment_id": S}, ["deployment_id"]),
+                          lambda c, a: {**deployments.read(c, a["deployment_id"]),
+                                        "log_tail": deployments.read_log(c, a["deployment_id"])["text"][-4000:]}),
+    "cancel_deployment": (_t("Cancel a scheduled deployment.", {"deployment_id": S}, ["deployment_id"]),
+                          lambda c, a: deployments.cancel(c, a["deployment_id"])),
+    "liquibase": (_t("Run Liquibase for an environment (hosted in process-compose): validate|status|history|migrate|rollback|rollback-count.",
+                     {"environment": S, "action": {"enum": list(dbrun.ACTIONS)}, "arg": S, "build_id": S}, ["environment", "action"]),
+                  lambda c, a: dbrun.submit(c, a["environment"], a["action"], str(a.get("arg", "")), a.get("build_id", ""))),
+    "liquibase_last": (_t("Status and log of the last Liquibase run of an environment.", {"environment": S}, ["environment"]),
+                       lambda c, a: dbrun.last(c, a["environment"])),
     "sync_project": (_t("Regenerate and apply the process-compose project (starts it headless if not running)."), lambda c, a: pc.sync(c)),
 }
+
+
+def _schedule(c, a):
+    m = deployments.create(c, a["environment"], a["repo"], a.get("branch", ""), a.get("run_at"), a.get("build_id", ""),
+                           a.get("services"), a.get("migrate", True))
+    t = deployments.parse_time(a.get("run_at"))
+    return m if t and t > __import__("time").time() else deployments.start(c, m["id"])
 
 
 def _reply(id_, result=None, error=None):

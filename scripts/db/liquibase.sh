@@ -8,12 +8,12 @@
 #   rollback-count <n>  roll back the last n changesets
 #   tag-name            print the pre-deploy tag for the current DEPLOY_ID
 #   history             show applied changesets
-# Env: APP_ENV (default dev), DEPLOY_ID (default git short sha), DB_* overrides,
+# Env: MIGRATIONS_DIR (default db-migrations/), APP_ENV (default dev), DEPLOY_ID (default git short sha), DB_* overrides,
 #      DB_USERNAME / DB_PASSWORD, LIQUIBASE_IMAGE, LIQUIBASE_CONTEXTS, LIQUIBASE_LABELS.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MIG="$ROOT/db-migrations"
+MIG="${MIGRATIONS_DIR:-$ROOT/db-migrations}"   # per-build snapshot dir when deploying a build
 APP_ENV="${APP_ENV:-dev}"
 LIQUIBASE_IMAGE="${LIQUIBASE_IMAGE:-liquibase/liquibase:4.31.1}"
 CHANGELOG="changelog/db.changelog-master.yaml"

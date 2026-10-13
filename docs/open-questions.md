@@ -106,3 +106,9 @@ Deployment criticality:
 | OQ-12 | Write capability in v1 | Reviewed change proposals only → ADR-0009, LLD-11 |
 | OQ-32 | Consolidate the three independent canonical-JSON writers on one implementation | **Done — `core.json.CanonicalJson` is now the single writer, verified against the three existing test suites plus new cross-module regression tests** | lld-chief-architect | ADR-0020 | RESOLVED → ADR-0020 |
 | OQ-LD-1 | local-dev: validate process-compose CLI usage (`up -D --tui=false`, `project update`, `process list -o json`) and JBoss EAP `/health/ready` against real installs on macOS | OPEN | — | ADR-0029 | OPEN |
+
+### OQ-LD-2 — process-compose one-shot `liquibase-<env>` restart (local-dev)
+`liquibase-<env>` is a `restart: "no"` process that exits immediately when no request is queued; the dashboard re-runs it with
+`process restart`. Verified on Linux only through the no-process-compose fallback (detached `devctl _db`) and the stub/real
+Liquibase integration tests; confirm on macOS that `process restart` re-executes a *Completed* process and that `project update`
+adds new `liquibase-<env>` processes live. Fallback if not: restart the project (`devctl up`) or use `devctl db <env> <action> --local`.

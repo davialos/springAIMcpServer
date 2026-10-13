@@ -158,6 +158,7 @@ def status(cfg: dict, with_health: bool = True) -> dict:
         infra_list[n] = {"enabled": n in cfg["infra"]["enabled"], "process": procs.get(n)}
     return {"process_compose": {"installed": pc.available(), "up": bool(procs), "port": cfg["process_compose_port"]},
             "services": services, "stacks": cfg["stacks"], "infra": infra_list,
+            "scheduler": {"alive": __import__("devctl.deployments", fromlist=["x"]).scheduler_alive()},
             "jboss": {"configured": bool(cfg["jboss"].get("home")), "process": procs.get(compose.JBOSS)}}
 
 
@@ -166,6 +167,7 @@ def doctor(cfg: dict) -> list:
     out = []
     for tool, hint in (("git", "xcode-select --install"), ("process-compose", "brew install process-compose"),
                        ("docker", "install Docker Desktop / OrbStack / Colima (observability stack)"),
+                       ("liquibase", "brew install liquibase (or use Docker: the script falls back to liquibase/liquibase)"),
                        ("mvn", "brew install maven (or use ./mvnw)"), ("k6", "brew install k6 (load tests)")):
         out.append((tool, bool(shutil.which(tool)), hint))
     ws = config.path(cfg, "workspace")

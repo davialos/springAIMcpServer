@@ -81,3 +81,38 @@ Unit/integration tests cover discovery, worktree builds, artifact collection, mu
 MCP and the dashboard guards (Linux, Python 3.13). **Not yet run against a real process-compose, Docker or JBoss EAP
 on a Mac** — the process-compose CLI flags (`up -D --tui=false`, `project update`, `process list -o json`) follow its
 documented v1.x CLI; check `devctl up` / `devctl status` first and see docs/open-questions.md OQ-LD-1.
+
+## Environments, Liquibase and scheduled rollouts
+
+```
+ Deployments tab: environment + repo + branch (+ existing build) + run-at ─▶ ~/localdev/deployments/<id>/{meta.json,deploy.log}
+   deploy-scheduler (process-compose) starts it when due ─▶ devctl _run-deploy <id>   (also: "Deploy now", CLI, MCP)
+     1 build            git worktree → build; migrations/ of that exact commit is snapshotted into the build
+     2 database migrate scripts/db/liquibase.sh migrate (tag pre-deploy-<id> → update; a failing changeset self-rolls-back)
+     3 deploy           each environment service gets the build (jar → process, war → JBoss)
+     4 verify health    every service probed until healthy or `health_timeout`
+     ✗ on failure at 3/4 → redeploy previous builds (or undeploy) → liquibase rollback to the tag → re-verify
+       statuses: success · failed (build/migration; nothing left to undo) · rolled_back · rollback_failed · cancelled
+```
+
+* **Environments tab** — create `qa`, `staging`, … : services (define one service per environment, e.g. `orders-qa` on its own
+  port), Liquibase database (`type/host/port/name/schema` or a JDBC `url`), allowed branch globs (`main, release/*`),
+  health timeout, auto-rollback on/off. Stored in `config.json` → `environments`. **Passwords are never stored:** name an env
+  var (`password_env`) or put `KEY=VALUE` in `~/.localdev/secrets.env`; they are resolved only at run time.
+* **Liquibase tab** — run `status | validate | history | migrate | rollback <tag> | rollback-count <n>` on an environment's
+  database, from a build's changelog snapshot or the default `db-migrations/`. Execution is hosted by the
+  `liquibase-<env>` process in process-compose (one-shot; the dashboard queues a request and restarts it), output shows in
+  the tab, the Logs tab and the TUI. Runs are serialised per environment.
+* **Repo side:** keep changelogs in the repo under `db-migrations/changelog/changes/` (see `db-migrations/README.md`;
+  override with `repos.<repo>.migrations_dir`). Developers only drop a file; the next rollout migrates it.
+* **Scheduler:** the `deploy-scheduler` process (always on in the generated project) polls every `scheduler.poll_seconds`;
+  the Deployments tab shows whether it is alive (heartbeat) and can start it. One rollout per environment at a time —
+  a due deployment on a busy environment waits for the next tick. `devctl scheduler --once` fires due ones manually.
+* **CLI:** `devctl envs`, `devctl db qa migrate [--build ID] [--local]`, `devctl schedule qa orders release/1 --at 2026-10-14T02:00`,
+  `devctl deployments`, `devctl deployment <id>`, `devctl cancel <id>`, `devctl run-deployment <id>`.
+  **MCP:** `list_environments`, `schedule_deployment`, `list_deployments`, `deployment_status`, `cancel_deployment`, `liquibase`,
+  `liquibase_last`.
+
+Limits (be explicit): rollback assumes backward-compatible migrations and cannot restore dropped data; MySQL/Oracle DDL
+auto-commits; a rollout is one-shot (no recurring cron yet); environments on one machine share the process-compose project, so
+"environment" means *a named set of services + a database*, not an isolated host.

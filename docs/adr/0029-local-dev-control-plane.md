@@ -23,3 +23,15 @@ logs and health checks from a TUI, a web UI and AI agents (Claude, Cursor).
 Not a Spring module: no effect on the starter, BOM or offline repo. process-compose CLI behaviour is verified
 only against its documentation until run on a Mac (OQ-LD-1). Jars only run as processes; WAR health is observed
 by HTTP probe, not as separate process-compose processes.
+
+## Addendum 2026-10-13 — environments, Liquibase host, scheduled rollouts
+
+`local-dev` gains (all stdlib Python, still outside the reactor): dashboard-managed **environments**
+(`config.environments`), a **Liquibase host** (`liquibase-<env>` one-shot process-compose processes wrapping
+`scripts/db/liquibase.sh`, credentials resolved at run time from env vars / `~/.localdev/secrets.env`, never written to
+config or the generated project), and **deployments**: build → migrate → deploy → health-verify with automatic rollback
+(services, then database tag), started by an always-on `deploy-scheduler` process. State remains files under `builds_dir`
+(`deployments/`, `dbjobs/`, per-build `migrations/` snapshot) so CLI, dashboard and MCP stay consistent.
+Alternatives rejected: a scheduler thread inside the dashboard (stops with the browser tab's server), secrets in
+config.json, running Liquibase from the live worktree (changelog could change between deploy and rollback).
+

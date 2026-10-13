@@ -26,7 +26,7 @@ const api=async(m,p,b)=>{const r=await fetch('/api'+p,{method:m,headers:{'X-Devc
   const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j};
 const toast=(t,bad)=>{const d=document.createElement('div');d.textContent=t;if(bad)d.style.borderLeftColor='var(--bad)';$('#msg').append(d);setTimeout(()=>d.remove(),bad?9000:4000)};
 const act=async(fn,ok)=>{try{const r=await fn();toast(ok||'done');refresh();return r}catch(e){toast(e.message,1)}};
-const tabs=['Services','Build','Infra','Logs'];let tab=localStorage.tab||'Services',S=null,repos=[],buildTimer=null,curBuild=null,logOff=0;
+const tabs=['Services','Build','Deployments','Environments','Liquibase','Infra','Logs'];let tab=localStorage.tab||'Services',S=null,repos=[],buildTimer=null,curBuild=null,logOff=0;
 $('#nav').innerHTML=tabs.map(t=>`<button data-t="${t}">${t}</button>`).join('');
 $('#nav').onclick=e=>{if(e.target.dataset.t){tab=localStorage.tab=e.target.dataset.t;render()}};
 const bd=(t,c)=>`<span class="badge ${c}">${esc(t)}</span>`;
@@ -34,9 +34,9 @@ const procBadge=p=>!p?bd('not running','warn'):bd(p.status+(p.ready==='Ready'?' 
 const healthBadge=h=>!h||h.ok===null?bd('n/a',''):bd(h.ok?'healthy '+h.ms+'ms':'down: '+h.detail,h.ok?'ok':'bad');
 
 async function refresh(){try{S=await api('GET','/state');$('#pcstat').textContent=S.process_compose.installed?(S.process_compose.up?'process-compose: up':'process-compose: not started'):'process-compose NOT installed';
-  if(tab==='Services'||tab==='Infra')render(true)}catch(e){toast(e.message,1)}}
+  if(tab==='Services'||tab==='Infra'||tab==='Deployments')render(true)}catch(e){toast(e.message,1)}}
 async function render(soft){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
-  if(!S)return;({Services,Build,Infra,Logs})[tab](soft)}
+  if(!S)return;({Services,Build,Deployments,Environments,Liquibase,Infra,Logs})[tab](soft)}
 
 async function Services(){
   const sv=S.services,names=Object.keys(sv);
@@ -96,5 +96,99 @@ async function Logs(){const names=[...Object.keys(S.services),'jboss-eap',...Obj
   const load=async()=>{if(tab!=='Logs')return;try{const r=await api('GET',`/logs/${$('#ln').value}?n=${$('#lines').value}`);const p=$('#plog');if(!p)return;p.textContent=r.text;p.scrollTop=p.scrollHeight}catch(e){const p=$('#plog');if(p)p.textContent=e.message}};
   $('#ln').onchange=load;load();clearInterval(window.lt);window.lt=setInterval(()=>{if($('#follow')?.checked)load()},3000)}
 
-refresh();setInterval(()=>{if(tab==='Services'||tab==='Infra')refresh()},5000);
+/* ---------- Environments ---------- */
+const ENVF=['type','host','port','name','schema','url','username','username_env','password_env'];
+async function Environments(){
+  const E=await api('GET','/environments'),svcs=Object.keys(S.services);
+  const rows=Object.entries(E).map(([n,e])=>`<tr><td><b>${esc(n)}</b><div class="mut">${esc(e.description||'')}</div></td><td>${esc((e.services||[]).join(', ')||'—')}</td>
+    <td>${e.db_configured?esc((e.db.type||'url')+' · '+(e.db.host||'')+(e.db.port?':'+e.db.port:'')+'/'+(e.db.name||'')):'<span class="mut">none</span>'}</td>
+    <td>${esc((e.allowed_branches||[]).join(', ')||'any')}</td><td>${e.auto_rollback===false?bd('off','warn'):bd('on','ok')}</td>
+    <td class="row"><button data-ea="edit" data-n="${esc(n)}">Edit</button><button class="d" data-ea="del" data-n="${esc(n)}">Delete</button></td></tr>`).join('');
+  window._E=E;
+  $('#main').innerHTML=`<div class="card scroll"><table><thead><tr><th>Environment</th><th>Services</th><th>Database</th><th>Allowed branches</th><th>Auto-rollback</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan=6 class="mut">No environments yet — add one below.</td></tr>'}</tbody></table></div>
+    <div class="card"><b id="eform-t">Add / edit environment</b><div class="row" style="margin-top:8px">
+    <input id="e-name" placeholder="name (e.g. qa)" style="width:130px"><input id="e-desc" placeholder="description" style="width:240px">
+    <input id="e-br" placeholder="allowed branches (comma, globs: main,release/*)" style="width:320px">
+    <input id="e-ht" type="number" value="120" title="health timeout (s)" style="width:90px"><label><input type="checkbox" id="e-rb" checked> auto-rollback</label></div>
+    <div class="mut" style="margin:8px 0 4px">Services deployed to this environment (define one service per environment, e.g. orders-qa on its own port)</div>
+    <div class="row">${svcs.map(x=>`<label><input type="checkbox" class="e-svc" value="${esc(x)}"> ${esc(x)}</label>`).join('')||'<span class="mut">no services in config.json</span>'}</div>
+    <div class="mut" style="margin:8px 0 4px">Liquibase database (credentials are never stored here: name the env vars, or put KEY=VALUE in ~/.localdev/secrets.env)</div>
+    <div class="row"><select id="db-type"><option value="">— no database —</option>${['postgresql','mysql','mariadb','sqlserver','oracle'].map(t=>`<option>${t}</option>`).join('')}</select>
+    ${['host','port','name','schema'].map(k=>`<input id="db-${k}" placeholder="${k}" style="width:${k==='port'?80:130}px">`).join('')}
+    <input id="db-url" placeholder="or full JDBC url" style="width:260px"></div>
+    <div class="row" style="margin-top:6px"><input id="db-username" placeholder="username" style="width:130px"><input id="db-username_env" placeholder="username env var" style="width:160px">
+    <input id="db-password_env" placeholder="password env var (e.g. QA_DB_PASSWORD)" style="width:280px"><input id="e-ctx" placeholder="liquibase contexts" style="width:150px"></div>
+    <div class="row" style="margin-top:10px"><button class="p" id="e-save">Save environment</button></div></div>`;
+}
+document.addEventListener('click',e=>{const b=e.target.closest('button[data-ea]');if(!b)return;const n=b.dataset.n,x=(window._E||{})[n];
+  if(b.dataset.ea==='del'){if(confirm('Delete environment '+n+'?'))act(()=>api('DELETE','/environments/'+n),'deleted');return}
+  $('#e-name').value=n;$('#e-desc').value=x.description||'';$('#e-br').value=(x.allowed_branches||[]).join(',');$('#e-ht').value=x.health_timeout||120;
+  $('#e-rb').checked=x.auto_rollback!==false;$('#e-ctx').value=x.contexts||'';
+  document.querySelectorAll('.e-svc').forEach(c=>c.checked=(x.services||[]).includes(c.value));
+  $('#db-type').value=(x.db||{}).type||'';ENVF.filter(k=>k!=='type').forEach(k=>$('#db-'+k).value=(x.db||{})[k]||'');scrollTo(0,document.body.scrollHeight)});
+document.addEventListener('click',e=>{if(e.target.id!=='e-save')return;
+  const db={};ENVF.forEach(k=>{const v=$('#db-'+k).value.trim();if(v)db[k]=v});
+  const body={description:$('#e-desc').value,allowed_branches:$('#e-br').value.split(',').map(x=>x.trim()).filter(Boolean),health_timeout:+$('#e-ht').value,
+    auto_rollback:$('#e-rb').checked,contexts:$('#e-ctx').value,services:[...document.querySelectorAll('.e-svc:checked')].map(c=>c.value),db};
+  act(async()=>{await api('PUT','/environments/'+$('#e-name').value.trim(),body);render()},'environment saved')});
+
+/* ---------- Deployments (schedule + history) ---------- */
+let curDep=null,depTimer=null,depOff=0;
+const dbadge=s=>bd(s,{success:'ok',failed:'bad',rollback_failed:'bad',rolled_back:'warn',running:'warn',scheduled:'',cancelled:''}[s]||'');
+async function Deployments(soft){
+  const list=await api('GET','/deployments?limit=30'),E=await api('GET','/environments');
+  if(soft&&$('#d-env')){$('#d-sched').innerHTML=schedBadge(list.scheduler_alive);$('#d-list').innerHTML=depRows(list.items);return}
+  if(!repos.length)repos=await api('GET','/repos');
+  $('#main').innerHTML=`<div class="card"><b>Schedule a deployment</b> <span id="d-sched">${schedBadge(list.scheduler_alive)}</span>
+    <div class="row" style="margin-top:8px"><select id="d-env">${Object.keys(E).map(n=>`<option>${esc(n)}</option>`).join('')||'<option value="">no environments</option>'}</select>
+    <select id="d-repo">${repos.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select><select id="d-branch"></select><button id="d-fb">Fetch branches</button>
+    <select id="d-build"></select></div>
+    <div class="row" style="margin-top:8px"><label>Run at <input type="datetime-local" id="d-at"></label><span class="mut">empty = run now</span>
+    <label><input type="checkbox" id="d-mig" checked> run Liquibase migrations</label><input id="d-note" placeholder="note" style="width:200px">
+    <button class="p" id="d-go">Schedule / Deploy</button></div>
+    <div class="mut" style="margin-top:6px" id="d-info"></div></div>
+    <div class="card scroll"><b>Deployments</b><table><thead><tr><th>When</th><th>Env</th><th>Repo @ branch</th><th>Status</th><th>Phase</th><th></th></tr></thead><tbody id="d-list">${depRows(list.items)}</tbody></table>
+    <div id="d-steps" class="mut"></div><pre id="d-log">Select a deployment to see its steps and log.</pre></div>`;
+  const lb=async f=>{const r=$('#d-repo').value;if(!r)return;try{const bs=await api('GET',`/repos/${encodeURIComponent(r)}/branches${f?'?fetch=1':''}`);$('#d-branch').innerHTML=bs.map(x=>`<option>${esc(x)}</option>`).join('');await lbuilds()}catch(e){toast(e.message,1)}};
+  const lbuilds=async()=>{const r=$('#d-repo').value,br=$('#d-branch').value;const bl=(await api('GET',`/builds?ok=1&limit=60&repo=${encodeURIComponent(r)}`)).filter(b=>!br||b.branch===br);
+    $('#d-build').innerHTML='<option value="">build fresh from branch HEAD</option>'+bl.map(b=>`<option value="${esc(b.id)}">${esc(b.branch)} @${esc(b.commit)} · ${new Date(b.started*1000).toLocaleString()}${b.migrations?' · db':''}</option>`).join('')};
+  const info=()=>{const e=E[$('#d-env').value];if(!e)return;const ss=(e.services||[]).filter(s=>S.services[s]?.repo===$('#d-repo').value);
+    $('#d-info').textContent=`services: ${ss.join(', ')||'none for this repo'} · database: ${e.db_configured?'Liquibase on':'none'} · branches: ${(e.allowed_branches||[]).join(', ')||'any'} · rollback on failure: ${e.auto_rollback===false?'OFF':'on'}`};
+  $('#d-repo').onchange=()=>{lb(false);info()};$('#d-branch').onchange=lbuilds;$('#d-env').onchange=info;$('#d-fb').onclick=()=>lb(true);lb(false);info();
+  $('#d-go').onclick=()=>{const at=$('#d-at').value,env=$('#d-env').value;if(!env)return toast('create an environment first',1);
+    if(!at&&!confirm(`Deploy to ${env} now?`))return;
+    act(async()=>{const m=await api('POST','/deployments',{environment:env,repo:$('#d-repo').value,branch:$('#d-branch').value,build_id:$('#d-build').value,run_at:at||null,migrate:$('#d-mig').checked,note:$('#d-note').value});showDep(m.id);render()},at?'scheduled':'deployment started')};
+  if(curDep)showDep(curDep)}
+const schedBadge=a=>a?bd('scheduler running','ok')+'':bd('scheduler not running','bad')+` <button data-a="sched">Start</button>`;
+function depRows(items){return items.map(m=>`<tr><td>${new Date((m.run_at||m.created)*1000).toLocaleString()}</td><td>${esc(m.environment)}</td><td>${esc(m.repo)} @ ${esc(m.branch)}</td><td>${dbadge(m.status)}</td><td class="mut">${esc(m.phase)}</td>
+  <td class="row"><button data-dep="show" data-n="${esc(m.id)}">Details</button>${m.status==='scheduled'?`<button data-dep="run" data-n="${esc(m.id)}">Run now</button><button class="d" data-dep="cancel" data-n="${esc(m.id)}">Cancel</button>`:''}</td></tr>`).join('')||'<tr><td colspan=6 class="mut">nothing scheduled yet</td></tr>'}
+document.addEventListener('click',e=>{const b=e.target.closest('button[data-dep],button[data-a=sched]');if(!b)return;
+  if(b.dataset.a==='sched')return act(()=>api('POST','/scheduler/start'),'process-compose synced — scheduler starting');
+  const n=b.dataset.n,a=b.dataset.dep;if(a==='show')return showDep(n);
+  if(a==='run')return act(()=>api('POST',`/deployments/${n}/run`),'started');if(a==='cancel')return act(()=>api('POST',`/deployments/${n}/cancel`),'cancelled')});
+function showDep(id){curDep=id;depOff=0;clearInterval(depTimer);const pre=$('#d-log');if(!pre)return;pre.textContent='';
+  const tick=async()=>{try{const r=await api('GET',`/deployments/${id}/log?offset=${depOff}`);if(r.text){pre.textContent+=r.text;pre.scrollTop=pre.scrollHeight}depOff=r.offset;
+    const m=await api('GET','/deployments/'+id);$('#d-steps').innerHTML=m.steps.map(s=>`${bd(s.name+(s.detail?' — '+s.detail:''),s.status==='ok'?'ok':s.status==='failed'?'bad':s.status==='skipped'?'':'warn')}`).join(' ')+(m.error?`<div class="bad">${esc(m.error)}</div>`:'')+(m.db&&m.db.tag?`<div>DB rollback point: <code>${esc(m.db.tag)}</code></div>`:'');
+    if(!['running','scheduled'].includes(m.status)){clearInterval(depTimer);if(tab==='Deployments')refresh()}}catch(e){clearInterval(depTimer)}};tick();depTimer=setInterval(tick,1500)}
+
+/* ---------- Liquibase (hosted in process-compose as liquibase-<env>) ---------- */
+let lbTimer=null;
+async function Liquibase(){
+  const E=await api('GET','/environments'),names=Object.entries(E).filter(([,e])=>e.db_configured).map(([n])=>n);
+  $('#main').innerHTML=`<div class="card"><b>Run Liquibase</b> <span class="mut">(executed by the <code>liquibase-&lt;env&gt;</code> process in process-compose)</span>
+    <div class="row" style="margin-top:8px"><select id="l-env">${names.map(n=>`<option>${esc(n)}</option>`).join('')||'<option value="">no environment has a database</option>'}</select>
+    <select id="l-act">${['status','validate','history','migrate','rollback','rollback-count'].map(a=>`<option>${a}</option>`).join('')}</select>
+    <input id="l-arg" placeholder="tag (rollback) / count (rollback-count)" style="width:260px"><select id="l-build"></select><button class="p" id="l-go">Run</button></div>
+    <div class="mut" style="margin-top:6px">Changelogs: from the selected build's snapshot, else <code>db-migrations/</code> of this checkout. Failed migrations roll back to their pre-deploy tag automatically.</div>
+    <div id="l-stat" style="margin-top:8px"></div><pre id="l-log">No run yet.</pre></div>`;
+  const bl=(await api('GET','/builds?ok=1&limit=60')).filter(b=>b.migrations);
+  $('#l-build').innerHTML='<option value="">default db-migrations/</option>'+bl.map(b=>`<option value="${esc(b.id)}">${esc(b.repo)} ${esc(b.branch)} @${esc(b.commit)}</option>`).join('');
+  const poll=async()=>{if(tab!=='Liquibase'||!$('#l-env').value)return;try{const j=await api('GET','/db/'+$('#l-env').value+'/last');
+    $('#l-stat').innerHTML=bd(j.status,j.status==='success'?'ok':j.status==='failed'?'bad':'warn')+(j.action?` <span class="mut">${esc(j.action)} ${esc(j.arg||'')}</span>`:'');$('#l-log').textContent=j.text||'No run yet.'}catch(e){}};
+  $('#l-env').onchange=poll;$('#l-go').onclick=()=>{const a=$('#l-act').value;if(a==='migrate'&&!confirm('Run migrate on '+$('#l-env').value+'?'))return;
+    act(()=>api('POST','/db/run',{environment:$('#l-env').value,action:a,arg:$('#l-arg').value,build_id:$('#l-build').value}),'liquibase '+a+' queued');setTimeout(poll,1500)};
+  clearInterval(lbTimer);lbTimer=setInterval(poll,2000);poll()}
+
+refresh();setInterval(()=>{if(tab==='Services'||tab==='Infra'||tab==='Deployments')refresh()},5000);
 </script></body></html>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shlex
+import sys
 from pathlib import Path
 
 from . import config, infra, javahome
@@ -100,4 +101,16 @@ def build_project(cfg: dict, st: dict) -> dict:
         if not active:
             p["disabled"] = True
         procs[name] = p
+    py = shlex.quote(sys.executable)
+    pkg_dir = str(Path(__file__).resolve().parent.parent)
+    base_env = [f"PYTHONPATH={pkg_dir}", f"LOCALDEV_HOME={config.HOME}"]
+    procs["deploy-scheduler"] = {  # starts scheduled deployments when due, even with the dashboard closed
+        "command": f"exec {py} -m devctl scheduler", "working_dir": pkg_dir, "namespace": "devctl", "environment": base_env,
+        "availability": {"restart": "always", "backoff_seconds": 5}}
+    for env_name, e in cfg.get("environments", {}).items():
+        if (e.get("db") or {}).get("host") or (e.get("db") or {}).get("url"):
+            # one-shot Liquibase host per environment: runs the request the dashboard/CLI queued, then exits (restart = run again)
+            procs[f"liquibase-{env_name}"] = {
+                "command": f"exec {py} -m devctl _db {shlex.quote(env_name)}", "working_dir": pkg_dir,
+                "namespace": "liquibase", "environment": base_env, "availability": {"restart": "no"}}
     return {"version": "0.5", "is_strict": False, "processes": procs}

@@ -53,7 +53,8 @@ def repo_settings(cfg: dict, repo: str) -> dict:
     p = repos.repo_path(cfg, repo)
     system = repos.detect_build_system(p)
     s = {"build_cmd": repos.default_build_cmd(p, system), "artifact_globs": repos.default_artifact_globs(system),
-         "java_home": "", "in_place": False, "env": {}}
+         "java_home": "", "in_place": False, "env": {},
+         "migrations_dir": "db-migrations"}
     s.update(cfg.get("repos", {}).get(repo, {}))
     return s
 
@@ -67,7 +68,7 @@ def start(cfg: dict, repo: str, branch: str, fetch: bool = True) -> dict:
     d = runs_dir(cfg) / build_id
     d.mkdir(parents=True, exist_ok=False)
     meta = {"id": build_id, "repo": repo, "branch": branch, "status": RUNNING, "started": time.time(),
-            "finished": None, "commit": None, "artifacts": [], "error": None, "fetch": fetch}
+            "finished": None, "commit": None, "artifacts": [], "error": None, "fetch": fetch, "migrations": False}
     _write_meta(cfg, meta)
     with open(d / "build.log", "ab") as log:
         subprocess.Popen([sys.executable, "-m", "devctl", "_run-build", build_id], stdout=log,
@@ -117,6 +118,11 @@ def run(cfg: dict, build_id: str) -> int:
         if rc != 0:
             raise RuntimeError(f"build command exited with {rc}")
         meta["artifacts"] = _collect(cfg, wt, st["artifact_globs"], runs_dir(cfg) / build_id / "artifacts")
+        mig = wt / st["migrations_dir"]
+        if st["migrations_dir"] and (mig / "changelog").is_dir():  # snapshot: deploy/rollback use exactly this build's changesets
+            shutil.copytree(mig, runs_dir(cfg) / build_id / "migrations", dirs_exist_ok=True)
+            meta["migrations"] = True
+            print(f"collected Liquibase migrations from {st['migrations_dir']}", flush=True)
         print(f"collected {len(meta['artifacts'])} artifact(s): {', '.join(meta['artifacts']) or '-'}", flush=True)
         meta["status"] = SUCCESS
     except Exception as e:

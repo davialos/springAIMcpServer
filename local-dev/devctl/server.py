@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import builds, config, ops, pc, repos
+from . import builds, config, dbrun, deployments, envs, ops, pc, repos
 
 STATIC = Path(__file__).parent / "static"
 
@@ -53,6 +54,9 @@ def make_handler(port: int):
 
         def do_PUT(self):
             self._mutating("PUT")
+
+        def do_DELETE(self):
+            self._mutating("DELETE")
 
         def _mutating(self, method):
             if not self._guard():
@@ -102,6 +106,18 @@ def route(method: str, path: str, q: dict, body: dict):
             return builds.read_meta(cfg, seg[1])
         if len(seg) == 2 and seg[0] == "logs":
             return {"text": pc.logs(cfg, seg[1], int(q.get("n", 200)))}
+        if seg == ["environments"]:
+            return {n: {**e, "db_configured": dbrun.db_configured(cfg, n), "busy": deployments.busy(cfg, n)}
+                    for n, e in cfg["environments"].items()}
+        if seg == ["deployments"]:
+            return {"scheduler_alive": deployments.scheduler_alive(),
+                    "items": deployments.list_all(cfg, int(q.get("limit", 50)), q.get("environment", ""))}
+        if len(seg) == 3 and seg[0] == "deployments" and seg[2] == "log":
+            return deployments.read_log(cfg, seg[1], int(q.get("offset", 0)))
+        if len(seg) == 2 and seg[0] == "deployments":
+            return deployments.read(cfg, seg[1])
+        if len(seg) == 3 and seg[0] == "db" and seg[2] == "last":
+            return dbrun.last(cfg, seg[1])
         if seg == ["config"]:
             return cfg
         if seg == ["doctor"]:
@@ -120,11 +136,30 @@ def route(method: str, path: str, q: dict, body: dict):
             return {"result": ops.stack_control(cfg, seg[1], seg[2])}
         if len(seg) == 3 and seg[0] == "infra":
             return {"result": ops.infra_control(cfg, seg[1], seg[2])}
+        if seg == ["deployments"]:
+            m = deployments.create(cfg, body["environment"], body["repo"], body.get("branch", ""), body.get("run_at"),
+                                   body.get("build_id", ""), body.get("services"), body.get("migrate", True), body.get("note", ""))
+            if not deployments.parse_time(body.get("run_at")) or deployments.parse_time(body.get("run_at")) <= time.time():
+                m = deployments.start(cfg, m["id"])  # "deploy now": no need to wait for the scheduler tick
+            return m
+        if len(seg) == 3 and seg[0] == "deployments" and seg[2] == "cancel":
+            return deployments.cancel(cfg, seg[1])
+        if len(seg) == 3 and seg[0] == "deployments" and seg[2] == "run":
+            return deployments.start(cfg, seg[1])
+        if seg == ["db", "run"]:
+            return dbrun.submit(cfg, body["environment"], body["action"], str(body.get("arg", "")), body.get("build_id", ""))
+        if method == "PUT" and len(seg) == 2 and seg[0] == "environments":
+            return envs.save(cfg, seg[1], body)
+        if seg == ["scheduler", "start"]:
+            return {"result": pc.sync(cfg)}
         if seg == ["project", "sync"]:
             return {"result": pc.sync(cfg)}
         if seg == ["project", "down"]:
             pc.down(cfg)
             return {"result": "down"}
+        if method == "DELETE" and len(seg) == 2 and seg[0] == "environments":
+            envs.delete(cfg, seg[1])
+            return {"deleted": seg[1]}
         if method == "PUT" and seg == ["config"]:
             merged = {**cfg, **body}
             config.save(merged)

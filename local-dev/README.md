@@ -166,6 +166,8 @@ shell profile. Branch names are validated (no option injection). Grafana runs wi
 (`tests/fixtures/fake_k6.py` stands in for k6), snapshot and, with a JDK 25 available, the real analyzer.
 
 ## Verified vs. not
+Real-project simulation: spring-petclinic-rest cloned, built, deployed and load-tested end to end by devctl under real
+process-compose v1.75.2 + k6 v1.3.0 with an AI driving the API Lab over MCP (details: docs/api-lab.md).
 Verified here (Linux, JDK 21 app + JDK 25 analyzer): automatic JFR recording, snapshot, load-run JFR + analysis, live
 Prometheus sampling incl. p95 from buckets, OpenAPI discovery, script generation (syntax-checked with node), the
 dashboard tabs (rendered in Chromium, light/dark/phone width). k6 itself was replaced by a fake: real k6 output

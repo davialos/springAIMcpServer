@@ -8,6 +8,8 @@ or go to <http://127.0.0.1:8765/lab>. Point it at a repository or a running serv
    - From the **Java sources** (Spring `@RestController`s, `@RequestBody` DTOs as records or classes, `@PathVariable`,
      `@RequestParam`, `@RequestHeader`, enums, and the validation annotations `@NotNull`, `@Email`, `@Size`,
      `@Min`/`@Max`, `@Positive`, `@Pattern`, `@Past`/`@Future`).
+     **API-first projects** are covered too: controllers that implement OpenAPI-Generator interfaces, generated sources
+     under `target/`/`build/`, mapping paths given as constants, and constraints on getters.
    - From `/actuator/mappings`.
 2. **Suggest threads.** A thread means "this response attribute of API A feeds that request attribute of API B", for
    example `POST /customers → id` ⟶ `POST /orders body.customerId`. Each suggestion has a confidence and a reason.
@@ -95,6 +97,11 @@ Example requests:
 - **Without a rule**, the kind is guessed from the field's name, format and type, and the constraints from the code
   always apply: `@Size` max length, `@Min`/`@Max` ranges, enums, and simple `@Pattern` regexes.
 - **Reproducible:** generation is seeded per API, so the same rules give the same data.
+- **Contract-safe:** every value is made to satisfy the field's `@Pattern` (Java classes like `\p{L}` included). A new
+  rule is sampled 50 times against the field's format, pattern, length and enum, and refused with an example if it
+  could produce an invalid value. For dates use `{"kind": "past_date", "min": "-15y", "max": "-1m"}`; ISO dates also work.
+- **Related attributes:** bind an object's id and name from the same earlier step response, not from the pool, so
+  they match.
 
 ## Workflow JSON (`workflows/<id>.json`)
 ```json
@@ -108,6 +115,35 @@ Example requests:
   or a string with embedded expressions.
 - **Paths:** response paths are dotted; `items[].id` takes the first element.
 - **Validation:** bindings may only refer to earlier steps, and fields must exist.
+
+## Verified on a real project: spring-petclinic-rest
+- **Host it.** [spring-petclinic-rest](https://github.com/spring-petclinic/spring-petclinic-rest) was cloned into the
+  workspace, then built and deployed by devctl under **process-compose v1.75.2**. That's a git worktree build with
+  OpenAPI generation and Maven, deployed as a jar with automatic JFR. Health came up in about 10 s.
+- **Discover it.** OpenAPI from the running service and the API-first Java source scan agree exactly: 36 APIs.
+  Petclinic's real constraints were read from the generated DTOs, for example `telephone ^[0-9]*$`, names
+  `^[\p{L}]+…`, and max lengths.
+- **AI as the deciding mind.** A Claude Code session, over MCP only:
+  - accepted the clinic threads and rejected the irrelevant ones;
+  - set data rules;
+  - designed the `clinic-visit` workflow: list pet types → owner → pet → visit → read owner → read pet;
+  - ran it green;
+  - exported and ran the k6 load test;
+  - read the JFR verdict.
+- **Simulation result after the fixes below.** 240/240 functional steps over 40 iterations. The load test sent 6,642
+  requests at 95 rps with p95 2.6 ms and 0 errors. JFR was GREEN. An earlier run's hot spots were
+  `ClinicServiceImpl.findOwnerById` (line 203) and an uncached `findAllPetTypes` (line 155).
+- **Fixed in devctl because of it.**
+  - process-compose exited when its only service restarted (`--keep-project`).
+  - A redeploy raced process-compose's own restart.
+  - Process logs were JSON envelopes instead of raw lines.
+  - The API-first source scan found 1 API instead of 36.
+  - A nested `type.id` was suggested as a pet id.
+  - Stale threads survived re-discovery.
+  - `pool:` bindings were missing in the k6 export (33% errors).
+  - Date rules ignored min/max.
+  - A rule producing month `00` 10% of the time was accepted.
+- **Found in petclinic.** A malformed visit date returns **500** (`HttpMessageNotReadableException`) instead of 400.
 
 ## Verified
 - **Java-source discovery:** run on this repository's Spring code and on a test fixture (`tests/fixtures/shop`). On the

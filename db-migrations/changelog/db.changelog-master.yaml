@@ -1,0 +1,8 @@
+# Master changelog. Developers never edit this file: drop a new file into
+# changelog/changes/ and it is picked up automatically (see db-migrations/README.md).
+# includeAll runs files in alphabetical order, so keep the timestamp prefix.
+databaseChangeLog:
+  - includeAll:
+      path: changes/
+      relativeToChangelogFile: true
+      errorIfMissingOrEmpty: false

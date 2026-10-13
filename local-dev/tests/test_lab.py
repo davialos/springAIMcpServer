@@ -72,6 +72,11 @@ class LabTest(unittest.TestCase):
             self.lab.set_rules(cfg, "shop", "customerCreate", {"body.nope": {"kind": "email"}})
         with self.assertRaises(ValueError):
             self.lab.set_rules(cfg, "shop", "customerCreate", {"body.email": {"kind": "telepathy"}})
+        with self.assertRaises(ValueError) as e:  # sampled against the field contract: an invalid email shape is refused
+            self.lab.set_rules(cfg, "shop", "customerCreate", {"body.email": {"pattern": "user-####"}})
+        self.assertIn("not a valid email", str(e.exception))
+        with self.assertRaises(ValueError):  # @Pattern ^[A-Z]{2}$ cannot hold three letters
+            self.lab.set_rules(cfg, "shop", "customerCreate", {"body.countryCode": {"const": "PRT"}})
         with self.assertRaises(ValueError):  # enum from the code is authoritative
             self.lab.set_rules(cfg, "shop", "customerCreate", {"body.tier": {"enum": ["BRONZE", "GOLD"]}})
         self.lab.set_rules(cfg, "shop", "customerCreate", {"body.tier": {"enum": ["GOLD", "PLATINUM"]}})
@@ -121,6 +126,46 @@ class LabTest(unittest.TestCase):
             r = subprocess.run(["node", "--check", str(m)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         self.k6_script = ex["script"]
+
+    def test_date_bounds_and_pool_bindings_in_k6(self):
+        from devctl.lab import fake
+        f = {"path": "body.birthDate", "name": "birthDate", "in": "body", "type": "string", "format": "date"}
+        rng = __import__("random").Random(1)
+        vals = [fake.scalar(f, {"kind": "past_date", "min": "-15y", "max": "-1y"}, rng, 1) for _ in range(200)]
+        self.assertTrue(all("2011-06" <= v <= "2025-06-01" for v in vals), (min(vals), max(vals)))
+        self.assertEqual(fake.scalar(f, {"kind": "date", "min": "2020-01-01", "max": "2020-01-01"}, rng, 1), "2020-01-01")
+        self._project()
+        cfg = self.cfg()
+        self.lab.workflow_save(cfg, "shop", {"id": "pooled", "steps": [
+            {"id": "s1", "api": "customerCreate"},
+            {"id": "s2", "api": "orderPlace", "bind": {"body.customerId": "{{pool:customerCreate.id}}"}}]})
+        with self.assertRaises(ValueError):  # nothing captured yet: exporting would send undefined
+            self.flow.export_k6(self.cfg(), "shop", "pooled")
+        self.flow.run(self.cfg(), "shop", "pooled")  # s2 fails (empty pool) but s1 captures a customer id
+        self.assertTrue(self.store.pool(self.cfg(), "shop").get("customerCreate.id"))
+        ex = self.flow.export_k6(self.cfg(), "shop", "pooled", rows=3)
+        js = Path(ex["script"]).read_text()
+        self.assertIn("const POOL = {", js)
+        self.assertIn("customerCreate.id", js)
+        if shutil.which("k6"):  # real k6 when available: the pooled binding must resolve
+            r = subprocess.run(["k6", "run", "--quiet", "--vus", "1", "--iterations", "3", ex["script"]], cwd=str(Path(ex["script"]).parent),
+                               capture_output=True, text=True, env={**os.environ, "BASE_URL": self.base})
+            self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr[-1500:])
+
+    def test_api_first_sources_and_pattern_conformance(self):
+        from devctl.lab import discover, fake, links
+        apis = {(a["method"], a["path"]): a for a in discover.from_java(FIX / "apifirst")}
+        self.assertEqual(set(apis), {("POST", "/api/patients"), ("GET", "/api/patients/{patientId}")})  # root redirect skipped
+        add = apis[("POST", "/api/patients")]
+        req = {f["path"]: f for f in add["request"]}
+        self.assertEqual(req["body.phone"]["pattern"], "^[0-9]*$")       # constraint read from the getter
+        self.assertEqual(req["body.name"]["maxLength"], 30)
+        self.assertIn("id", [f["path"] for f in add["response"]])         # private @Nullable Integer id
+        for r in fake.generate(add, {}, [], {}, 100):
+            for f in add["request"]:
+                self.assertIsNone(fake.violation(f, r["body"][f["name"]]))
+        self.assertTrue(any(l["from"]["api"] == add["id"] and l["to"]["field"] == "path.patientId" and l["confidence"] >= 0.9
+                            for l in links.suggest(list(apis.values()))))
 
     def test_threads_matter_and_validation(self):
         self._project()

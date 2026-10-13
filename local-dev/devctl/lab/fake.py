@@ -7,7 +7,7 @@ constraints found at discovery (@Email, @Size, @Min/@Max, @Pattern, enums). Rule
             sku, code, ip, color, username, password, iban, lat, lon)
   enum      [values]          const     value              pattern   "ORD-####-??" (# digit, ? letter, * alnum)
   template  "user{{seq}}@{{word}}.test" (seq, rand, uuid, word, int)
-  min/max   numbers / length  pool      "<api>.<response field>"  pick a value captured from real responses
+  min/max   numbers; for date kinds an ISO date or -20y/+6m/-30d     pool  "<api>.<response field>" (captured values)
   null_rate 0..1              omit      true (leave the field out)
 Linked fields (accepted threads) are filled at run time from the producing step's response; in stored data they keep a
 marker {"$link": "<api>.<field>"} or, when the pool already holds real values for that source, one of those values.
@@ -76,6 +76,32 @@ def guess_kind(f: dict) -> str:
     return "word"
 
 
+TODAY = date(2026, 6, 1)  # fixed reference so generated data is reproducible
+
+
+def _when(v, default: date) -> date:
+    """min/max for dates: ISO date/datetime, or relative to TODAY: -20y, +6m, -30d."""
+    if v is None:
+        return default
+    s = str(v).strip()
+    m = re.fullmatch(r"([+-]?\d+)\s*([ymd])", s)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        return TODAY + timedelta(days=n * {"y": 365, "m": 30, "d": 1}[unit])
+    return date.fromisoformat(s[:10])
+
+
+def _date_between(kind: str, lo, hi, rng: random.Random):
+    a = _when(lo, TODAY - timedelta(days=365 * 30) if kind != "future_date" else TODAY)
+    b = _when(hi, TODAY if kind != "future_date" else TODAY + timedelta(days=365))
+    if b < a:
+        a, b = b, a
+    d = a + timedelta(days=rng.randint(0, (b - a).days))
+    if kind == "datetime":
+        return datetime(d.year, d.month, d.day, rng.randint(0, 23), rng.randint(0, 59), tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+    return d.isoformat()
+
+
 def _pattern(p: str, rng: random.Random) -> str:
     out = []
     for ch in p:
@@ -138,6 +164,8 @@ def scalar(f: dict, rule: dict, rng: random.Random, seq: int):
         s = _from_regex(f["pattern"], rng)
         if s is not None:
             return s
+    if kind in ("date", "past_date", "future_date", "datetime") and (lo is not None or hi is not None):
+        return _date_between(kind, lo, hi, rng)
     first, last = rng.choice(FIRST), rng.choice(LAST)
     country = rng.choice(COUNTRY)
     today = date(2026, 6, 1)
@@ -173,6 +201,69 @@ def scalar(f: dict, rule: dict, rng: random.Random, seq: int):
         if f.get("type") == "integer":
             return rng.randint(1, 1000)
     return v
+
+
+def _py_regex(rx: str):
+    """Java regex -> Python: Unicode letter/number classes; None when it does not compile."""
+    rx = rx.replace(r"\p{L}", r"^\W\d_").replace(r"\p{N}", r"\d").replace(r"\p{Alpha}", "a-zA-Z").replace(r"\p{Digit}", r"\d")
+    rx = re.sub(r"\[\^\\W\\d_\]", r"[^\\W\\d_]", rx)
+    try:
+        return re.compile(rx)
+    except re.error:
+        return None
+
+
+def conform(f: dict, value, rng: random.Random, seq: int):
+    """Make a string value satisfy the field's @Pattern / length constraints, trying sensible candidates in turn."""
+    if not isinstance(value, str) or not f.get("pattern"):
+        return value
+    rx = _py_regex(f["pattern"])
+    if rx is None or rx.fullmatch(value):
+        return value
+    mx = int(f.get("maxLength") or 24)
+    mn = int(f.get("minLength") or 1)
+    letters = "".join(c for c in value if c.isalpha()) or rng.choice(WORDS)
+    digits = "".join(c for c in value if c.isdigit()) or str(rng.randint(10 ** 6, 10 ** 9))
+    cands = [_from_regex(f["pattern"], rng), digits[:mx], letters[:mx], letters.capitalize()[:mx],
+             re.sub(r"[^A-Za-z0-9]", "", value)[:mx], re.sub(r"[^A-Za-z ]", "", value).strip()[:mx]]
+    for c in cands:
+        if c and len(c) >= mn and rx.fullmatch(c):
+            return c
+    return value  # could not satisfy - the run will show the server's validation error
+
+
+def violation(f: dict, v) -> str | None:
+    """Why a generated value would fail the field's own contract (format, @Pattern, length, enum, range), else None."""
+    if v is None or isinstance(v, (dict, list)):
+        return None
+    fmt = f.get("format")
+    try:
+        if fmt == "date":
+            date.fromisoformat(str(v))
+        elif fmt == "date-time":
+            datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        elif fmt == "uuid":
+            uuid.UUID(str(v))
+    except ValueError:
+        return f"not a valid {fmt}: {v!r}"
+    if fmt == "email" and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", str(v)):
+        return f"not a valid email: {v!r}"
+    if isinstance(v, str):
+        rx = _py_regex(f["pattern"]) if f.get("pattern") else None
+        if rx is not None and not rx.fullmatch(v):
+            return f"does not match @Pattern {f['pattern']}: {v!r}"
+        if f.get("maxLength") is not None and len(v) > int(f["maxLength"]):
+            return f"longer than {f['maxLength']}: {v!r}"
+        if f.get("minLength") is not None and len(v) < int(f["minLength"]):
+            return f"shorter than {f['minLength']}: {v!r}"
+    if f.get("enum") and v not in f["enum"]:
+        return f"not one of {f['enum']}: {v!r}"
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if f.get("min") is not None and v < float(f["min"]):
+            return f"below min {f['min']}: {v!r}"
+        if f.get("max") is not None and v > float(f["max"]):
+            return f"above max {f['max']}: {v!r}"
+    return None
 
 
 def _set(tree: dict, path: str, value) -> None:
@@ -212,7 +303,8 @@ def _value(f, rule, link, pool, rng, seq):
         return [scalar({**f, "type": f.get("items", "string")}, rule, rng, seq + i) for i in range(n)]
     if f.get("type") == "object":
         return {}
-    return scalar(f, rule, rng, seq)
+    v = scalar(f, rule, rng, seq)
+    return v if (rule.get("const") is not None or rule.get("template")) else conform(f, v, rng, seq)
 
 
 def _body(fields, rules, linked, pool, rng, seq):

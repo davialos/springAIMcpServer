@@ -301,12 +301,17 @@ def export_k6(cfg: dict, project: str, wf_id: str, name: str = "", profile: str 
     opts = {"stages": loadgen.PROFILES[profile](max(1, int(vus)), duration),
             "thresholds": {"http_req_failed": [f"rate<{max_error_rate}"], "http_req_duration": [f"p(95)<{int(p95_ms)}"],
                            "checks": ["rate>0.95"]}}
+    missing = sorted({ref[5:] for st in wf["steps"] for v in (st.get("bind") or {}).values() for ref in EXPR.findall(str(v))
+                      if ref.startswith("pool:") and not pool.get(ref[5:])})
+    if missing:
+        raise ValueError(f"pool has no values for {missing} yet - run the workflow once (apilab_workflow_run) before exporting")
     d = dconf.path(cfg, "loadtest_dir")
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{name}.data.json").write_text(json.dumps(data))
     (d / f"{name}.js").write_text(K6_TEMPLATE.replace("__NAME__", name).replace("__BASE__", json.dumps(proj.get("base_url", "")))
                                   .replace("__STEPS__", json.dumps(steps, indent=2)).replace("__OPTIONS__", json.dumps(opts, indent=2))
                                   .replace("__HEADERS__", json.dumps(proj.get("headers") or {}))
+                                  .replace("__POOL__", json.dumps(pool))
                                   .replace("__THINK__", str(float(wf.get("think_time_ms", 300)) / 1000)))
     cfg.setdefault("loadtests", {})[name] = {"script": f"{name}.js", "service": proj.get("service") or None, "profile": profile,
                                               "vus": int(vus), "duration": duration, "jfr": True, "env": {}, "apilab": {"project": project, "workflow": wf["id"]}}
@@ -325,6 +330,7 @@ const STEPS = __STEPS__;
 const HEADERS = Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, __HEADERS__,
   __ENV.AUTH_TOKEN ? { Authorization: `Bearer ${__ENV.AUTH_TOKEN}` } : {});
 const DATA = new SharedArray('rows', () => JSON.parse(open('./__NAME__.data.json')));
+const POOL = __POOL__;  // values captured from real responses at export time ({{pool:api.field}} bindings)
 
 export const options = __OPTIONS__;
 
@@ -347,7 +353,11 @@ function resolve(v, ctx, byApi) {
   }
   if (Array.isArray(v)) return v.map((x) => resolve(x, ctx, byApi));
   if (typeof v !== 'string') return v;
-  const look = (ref) => { const [sid, side, ...p] = ref.trim().split('.'); return ctx[sid] ? get(ctx[sid][side], p.join('.')) : undefined; };
+  const look = (ref) => {
+    ref = ref.trim();
+    if (ref.startsWith('pool:')) { const vs = POOL[ref.slice(5)] || []; return vs.length ? vs[Math.floor(Math.random() * vs.length)] : undefined; }
+    const [sid, side, ...p] = ref.split('.'); return ctx[sid] ? get(ctx[sid][side], p.join('.')) : undefined;
+  };
   const whole = v.match(/^\{\{([^}]+)\}\}$/);
   if (whole) return look(whole[1]);
   return v.replace(/\{\{([^}]+)\}\}/g, (_, r) => String(look(r)));

@@ -162,7 +162,9 @@ TOOLS = {
                            "full_name, phone, company, city, country, iso_country, street, zip, uuid, date, datetime, past_date, "
                            "future_date, url, word, words, sentence, paragraph, int, decimal, money, bool, currency, sku, code, ip, color, "
                            "username, password, iban, lat, lon, time), enum, const, pattern ('ORD-####'), template "
-                           "('user{{seq}}@x.test'), min/max, pool ('<api>.<response field>'), null_rate, omit. Returns a preview.",
+                           "('user{{seq}}@x.test'), min/max (numbers; for date kinds ISO dates or relative '-15y'/'-6m'/'0d'), pool "
+                           "('<api>.<response field>'), null_rate, omit. Each rule is sampled against the field's format, @Pattern, "
+                           "length and enum and refused with an example if it can produce invalid values. Returns a preview.",
                            lambda c, a: lab.set_rules(c, a["project"], a["api"], a["rules"], a.get("replace", False)),
                            {"project": P, "api": S, "rules": {"type": "object"}, "replace": B}, ["project", "api", "rules"], "write"),
     "apilab_generate": _t("Generate and save fake payloads (data/<api>.json) for one API or all; threads become {$link} markers or "
@@ -178,7 +180,9 @@ TOOLS = {
                                {"project": P, "name": S, "include_unlinked": B}, ["project"], "write"),
     "apilab_workflow_save": _t("Create/replace a workflow: {id, name, think_time_ms, steps: [{id, api, bind: {request_field: "
                                "'{{s1.response.id}}' | '{{pool:api.field}}' | literal}, expect: {status: [200,201]}}]}. "
-                               "Validated: APIs and fields must exist, bindings may only use earlier steps.",
+                               "Validated: APIs and fields must exist, bindings may only use earlier steps. Bind attributes that belong together "
+                               "(an object's id + name) from the SAME earlier step response ({{s1.response.[].id}}, "
+                               "{{s1.response.[].name}}), not from the pool - pool picks are independent per attribute.",
                                lambda c, a: lab.workflow_save(c, a["project"], a["workflow"]),
                                {"project": P, "workflow": {"type": "object"}}, ["project", "workflow"], "write"),
     "apilab_workflows": _t("Workflows of a project (or one in full with id).",

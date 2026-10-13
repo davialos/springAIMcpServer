@@ -74,6 +74,8 @@ def from_openapi(doc: dict) -> list:
         for method, op in ops.items():
             if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
                 continue
+            if re.match(r"redirectToSwagger", op.get("operationId", "")) or (path == "/" and not op.get("requestBody")):
+                continue  # springdoc lists its own "/" redirect under every method
             req = []
             for p in (op.get("parameters") or []) + (ops.get("parameters") or []):
                 p = deref(p)
@@ -161,15 +163,31 @@ def _strip_comments(src: str) -> str:
     return re.sub(r"//[^\n]*", " ", src)
 
 
+CONSTS: dict = {}  # String constants of the scanned sources (mapping paths are often constants in generated code)
+
+
+def _resolve(v: str) -> str:
+    v = re.sub(r"\$\{[^:}]+:([^}]*)\}", r"\1", v)  # ${property:default} -> default
+    return re.sub(r"\$\{[^}]*\}", "", v)
+
+
 def _anno_value(args: str | None, *keys: str) -> str | None:
     if not args:
         return None
     for k in keys:
         m = re.search(rf"\b{k}\s*=\s*\{{?\s*\"([^\"]*)\"", args)
         if m:
-            return m.group(1)
+            return _resolve(m.group(1))
+        m = re.search(rf"\b{k}\s*=\s*\{{?\s*([A-Za-z_][\w.]*)", args)
+        if m and m.group(1).split(".")[-1] in CONSTS:
+            return _resolve(CONSTS[m.group(1).split(".")[-1]])
     m = re.match(r"\s*\(?\s*\{?\s*\"([^\"]*)\"", args)
-    return m.group(1) if m else None
+    if m:
+        return _resolve(m.group(1))
+    m = re.match(r"\s*\(?\s*\{?\s*([A-Za-z_][\w.]*)\s*\}?\s*\)?\s*$", args)
+    if m and m.group(1).split(".")[-1] in CONSTS:
+        return _resolve(CONSTS[m.group(1).split(".")[-1]])
+    return None
 
 
 def _split_params(s: str) -> list:
@@ -200,18 +218,23 @@ def _generic(t: str) -> tuple:
 class JavaIndex:
     """Records, classes and enums of a source tree (by simple name), with field annotations."""
 
-    def __init__(self, root: Path):
+    def __init__(self, roots):
         self.types: dict = {}
         self.enums: dict = {}
         self.files: list = []
-        for f in root.rglob("*.java"):
-            if "/test/" in str(f) or "/build/" in str(f) or "/target/" in str(f):
-                continue
+        roots = [roots] if isinstance(roots, Path) else roots
+        files = []
+        for root in roots:
+            gen = "generated" in str(root)
+            files += [f for f in root.rglob("*.java") if gen or not re.search(r"/(test|build|target)/", str(f))]
+        for f in files:
             try:
                 src = _strip_comments(f.read_text(errors="replace"))
             except OSError:
                 continue
             self.files.append((f, src))
+            for c in re.finditer(r"\bString\s+([A-Z][A-Z0-9_]*)\s*=\s*\"([^\"]*)\"\s*;", src):
+                CONSTS.setdefault(c.group(1), c.group(2))
             for m in re.finditer(r"\benum\s+(\w+)[^{]*\{([^;}]*)", src):
                 self.enums[m.group(1)] = [v.strip().split("(")[0] for v in m.group(2).split(",") if re.match(r"\s*[A-Z_][A-Z0-9_]*", v)]
             for m in re.finditer(r"\brecord\s+(\w+)\s*(<[^>]*>)?\s*\(((?:[^()]|\([^()]*\))*)\)", src):
@@ -225,10 +248,15 @@ class JavaIndex:
             for m in re.finditer(r"\bclass\s+(\w+)[^{]*\{", src):
                 body = self._body(src, m.end() - 1)
                 fields = []
-                for fm in re.finditer(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)*)(?:private|protected|public)\s+(?!static)(?:final\s+)?([\w.<>,\s\[\]?]+?)\s+(\w+)\s*(?:=[^;]*)?;", body):
-                    if "(" in fm.group(2):
+                for fm in re.finditer(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)*)(?:private|protected|public)\s+(?!static)(?:final\s+)?((?:@\w+(?:\([^)]*\))?\s+)*)([\w.<>,\s\[\]?]+?)\s+(\w+)\s*(?:=[^;]*)?;", body):
+                    if "(" in fm.group(3):
                         continue
-                    fields.append((fm.group(3), fm.group(2).strip(), fm.group(1)))
+                    fields.append((fm.group(4), fm.group(3).strip(), fm.group(1) + " " + fm.group(2)))  # type-use annos too
+                # validation annotations on getters (OpenAPI-generator / Lombok-free DTOs put them there)
+                getters = {}
+                for gm in re.finditer(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)+)public\s+[\w.<>,\s\[\]?]+?\s+(?:get|is)(\w+)\s*\(\s*\)", body):
+                    getters[gm.group(2)[:1].lower() + gm.group(2)[1:]] = gm.group(1)
+                fields = [(n, t, a + " " + getters.get(n, "")) for n, t, a in fields]
                 if fields and m.group(1) not in self.types:
                     self.types[m.group(1)] = fields
 
@@ -311,65 +339,104 @@ class JavaIndex:
         return f
 
 
-def from_java(repo: Path) -> list:
-    src_root = repo / "src" / "main" / "java"
-    roots = [src_root] if src_root.is_dir() else [p for p in repo.rglob("src/main/java") if p.is_dir()] or [repo]
+METHOD_RX = re.compile(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)+)(?:public\s+|protected\s+)?(?:static\s+|default\s+)?"
+                       r"([\w.<>,?\s\[\]]+?)\s+(\w+)\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?:throws[^{;]*)?[{;]")
+TYPE_RX = re.compile(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)*)\b(?:public\s+)?(?:abstract\s+)?(?:final\s+)?(class|interface)\s+(\w+)([^{]*)\{")
+
+
+def _base(annos: str) -> str:
+    rm = re.search(r"@RequestMapping\s*\(((?:[^()]|\([^()]*\))*)\)", annos)
+    return (_anno_value(rm.group(1), "value", "path") or "") if rm else ""
+
+
+def _endpoints(idx: "JavaIndex", body: str) -> list:
+    """(method, sub-path, java method name, annotations, return type, params) of every mapped method in a type body."""
     out = []
-    for r in roots:
-        idx = JavaIndex(r)
-        for f, src in idx.files:
-            if not re.search(r"@(RestController|Controller)\b", src):
+    for mm in METHOD_RX.finditer(body):
+        annos = mm.group(1)
+        mp = MAPPING.search(annos)
+        if not mp:
+            continue
+        kind, args = mp.group(1), mp.group(3)
+        if kind == "Request":
+            mt = re.search(r"RequestMethod\.(\w+)", args or "")
+            method = mt.group(1) if mt else "GET"
+        else:
+            method = kind.upper()
+        out.append((method, _anno_value(args, "value", "path") or "", mm.group(3), annos, mm.group(2).strip(), mm.group(4)))
+    return out
+
+
+def _api(idx, repo, f, ctrl_name, base, ep) -> dict | None:
+    method, sub, mname, annos, rtype, params = ep
+    path = "/" + "/".join(x.strip("/") for x in (base, sub) if x.strip("/"))
+    path = re.sub(r"\{(\w+):[^}]*\}", r"{\1}", path)
+    if SKIP.match(path):
+        return None
+    req = []
+    for p in _split_params(params):
+        pann = " ".join(a.group(0) for a in ANNO.finditer(p))
+        rest = ANNO.sub("", p).replace("final ", "").strip().split()
+        if len(rest) < 2:
+            continue
+        ptype, pname = " ".join(rest[:-1]), rest[-1]
+        for a, loc in (("PathVariable", "path"), ("RequestParam", "query"), ("RequestHeader", "header")):
+            am = re.search(rf"@{a}\s*(\(((?:[^()]|\([^()]*\))*)\))?", pann)
+            if am:
+                n = _anno_value(am.group(2), "value", "name") or pname
+                fld = idx._scalar_field(f"{loc}.{n}", loc, ptype, pann)
+                fld["required"] = loc == "path" or not re.search(r"required\s*=\s*false|defaultValue", am.group(2) or "")
+                req.append(fld)
+        if "@RequestBody" in pann:
+            req += [{**x, "path": "body." + x["path"] if not x["path"].startswith("[]") else "body" + x["path"]}
+                    for x in idx.fields_of(ptype, "", "body")]
+    resp = [x for x in idx.fields_of(rtype, "", "response") if x["path"] not in ("", "[]")]
+    req = [x for x in req if x["path"] not in ("body.", "body", "body[]")]
+    if path == "/" and not req and not resp:
+        return None  # root redirects (e.g. to swagger-ui) are not APIs
+    status = 201 if re.search(r"HttpStatus\.CREATED", annos) else None
+    ctrl = re.sub(r"(Rest)?(Controller|Resource|Api|Endpoint)(V\d+)?$", "", ctrl_name) or ctrl_name
+    op = ctrl[:1].lower() + ctrl[1:] + mname[:1].upper() + mname[1:]
+    return {"id": api_id(method, path, op), "method": method, "path": path, "summary": f"{ctrl_name}.{mname}",
+            "source": f"java:{f.relative_to(repo) if repo in f.parents else f.name}", "request": req, "response": resp, "status": status}
+
+
+def from_java(repo: Path) -> list:
+    """Spring MVC endpoints from sources: annotated controllers, and API-first controllers that implement interfaces
+    (OpenAPI Generator style; generated sources under target/ or build/ are scanned when present)."""
+    CONSTS.clear()
+    src_roots = [p for p in repo.rglob("src/main/java") if p.is_dir() and "/target/" not in str(p) and "/build/" not in str(p)] or [repo]
+    gen_roots = [p for p in (list(repo.glob("target/generated-sources/*")) + list(repo.glob("build/generated/**/java"))
+                             + list(repo.glob("*/target/generated-sources/*"))) if p.is_dir()]
+    idx = JavaIndex(src_roots + gen_roots)
+    interfaces = {}
+    for f, src in idx.files:
+        for tm in TYPE_RX.finditer(src):
+            if tm.group(2) == "interface":
+                eps = _endpoints(idx, JavaIndex._body(src, tm.end() - 1))
+                if eps:
+                    interfaces[tm.group(3)] = (f, _base(tm.group(1)), eps)
+    out, seen = [], set()
+    for f, src in idx.files:
+        if not re.search(r"@(RestController|Controller)\b", src):
+            continue
+        for tm in TYPE_RX.finditer(src):
+            annos, kind, name, header = tm.groups()
+            if kind != "class" or not re.search(r"@(RestController|Controller)\b", annos):
                 continue
-            for cm in re.finditer(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)*)\b(?:public\s+)?(?:final\s+)?class\s+(\w+)[^{]*\{", src):
-                class_annos = cm.group(1)
-                if not re.search(r"@(RestController|Controller)\b", class_annos):
-                    continue
-                base = ""
-                rm = re.search(r"@RequestMapping\s*\(((?:[^()]|\([^()]*\))*)\)", class_annos)
-                if rm:
-                    base = _anno_value(rm.group(1), "value", "path") or ""
-                body = JavaIndex._body(src, cm.end() - 1)
-                for mm in re.finditer(r"((?:@\w+(?:\s*\((?:[^()]|\([^()]*\))*\))?\s*)+)(?:public\s+|protected\s+)?(?:static\s+)?([\w.<>,?\s\[\]]+?)\s+(\w+)\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?:throws[^{]*)?\{", body):
-                    annos = mm.group(1)
-                    mp = MAPPING.search(annos)
-                    if not mp:
-                        continue
-                    kind, args = mp.group(1), mp.group(3)
-                    if kind == "Request":
-                        mt = re.search(r"RequestMethod\.(\w+)", args or "")
-                        method = mt.group(1) if mt else "GET"
-                    else:
-                        method = kind.upper()
-                    sub = _anno_value(args, "value", "path") or ""
-                    path = "/" + "/".join(s.strip("/") for s in (base, sub) if s.strip("/"))
-                    path = re.sub(r"\{(\w+):[^}]*\}", r"{\1}", path)
-                    if SKIP.match(path):
-                        continue
-                    req = []
-                    for p in _split_params(mm.group(4)):
-                        pann = " ".join(a.group(0) for a in ANNO.finditer(p))
-                        rest = ANNO.sub("", p).replace("final ", "").strip().split()
-                        if len(rest) < 2:
-                            continue
-                        ptype, pname = " ".join(rest[:-1]), rest[-1]
-                        for a, loc in (("PathVariable", "path"), ("RequestParam", "query"), ("RequestHeader", "header")):
-                            am = re.search(rf"@{a}\s*(\(((?:[^()]|\([^()]*\))*)\))?", pann)
-                            if am:
-                                n = _anno_value(am.group(2), "value", "name") or pname
-                                fld = idx._scalar_field(f"{loc}.{n}", loc, ptype, pann)
-                                fld["required"] = loc == "path" or not re.search(r"required\s*=\s*false|defaultValue", am.group(2) or "")
-                                req.append(fld)
-                        if "@RequestBody" in pann:
-                            req += [{**x, "path": "body." + x["path"] if not x["path"].startswith("[]") else "body" + x["path"]}
-                                    for x in idx.fields_of(ptype, "", "body")]
-                    resp = [x for x in idx.fields_of(mm.group(2).strip(), "", "response") if x["path"] not in ("", "[]")]
-                    req = [x for x in req if x["path"] not in ("body.", "body", "body[]")]
-                    status = 201 if re.search(r"HttpStatus\.CREATED", annos) else None
-                    ctrl = re.sub(r"(Rest)?(Controller|Resource|Api|Endpoint)$", "", cm.group(2)) or cm.group(2)
-                    op = ctrl[:1].lower() + ctrl[1:] + mm.group(3)[:1].upper() + mm.group(3)[1:]
-                    out.append({"id": api_id(method, path, op), "method": method, "path": path,
-                                "summary": f"{cm.group(2)}.{mm.group(3)}", "source": f"java:{f.relative_to(repo)}",
-                                "request": req, "response": resp, "status": status})
+            base = _base(annos)
+            eps = [(base, e, f) for e in _endpoints(idx, JavaIndex._body(src, tm.end() - 1))]
+            im = re.search(r"\bimplements\s+([\w.,\s<>]+)", header)
+            for iname in ([x.strip().split("<")[0].split(".")[-1] for x in im.group(1).split(",")] if im else []):
+                if iname in interfaces:
+                    ifile, ibase, ieps = interfaces[iname]
+                    joined = "/".join(x.strip("/") for x in (base, ibase) if x.strip("/"))
+                    eps += [(joined, e, ifile) for e in ieps]
+            for b, e, src_file in eps:
+                a = _api(idx, repo, src_file, name, b, e)
+                if a and (a["method"], a["path"]) not in seen:
+                    seen.add((a["method"], a["path"]))
+                    out.append(a)
     return _dedupe(out)
 
 

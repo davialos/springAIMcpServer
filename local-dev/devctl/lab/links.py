@@ -41,6 +41,11 @@ def _consumer_noun(api: dict, f: dict) -> str | None:
     m = re.fullmatch(r"(\w+?)_?(Id|ID|id|Uuid|UUID|uuid|Code|code|Key|key)", n)
     if m and m.group(1).lower() not in ("", "parent"):
         return singular(m.group(1))
+    if _norm(n) in ("id", "uuid", "code", "key") and f["in"] == "body":
+        segs = [x for x in f["path"].split(".")[1:] if x not in ("", "[]")]
+        if len(segs) > 1:  # body.type.id -> type
+            return singular(segs[-2].replace("[]", ""))
+        return None
     if _norm(n) in ("id", "uuid", "code", "key") and f["in"] == "path":
         segs = api["path"].split("/")
         for i, s in enumerate(segs):
@@ -56,7 +61,11 @@ def suggest(apis: list) -> list:
         noun = resource(a["path"])
         for f in a.get("response", []):
             leaf = _norm(f["name"])
-            if leaf in ("id", "uuid", "code", "key") and noun:
+            segs = [x for x in f["path"].split(".") if x not in ("", "[]")]
+            if leaf in ("id", "uuid", "code", "key") and len(segs) > 1:
+                # nested x.id belongs to x (pet.type.id is a pet *type* id, not a pet id)
+                producers.append((a, f, singular(segs[-2].replace("[]", "")), 0.55, leaf))
+            elif leaf in ("id", "uuid", "code", "key") and noun:
                 is_list = f["path"].startswith("[]") or "[]" in f["path"].split(".")[0]
                 base = 0.92 if a["method"] == "POST" and not is_list else 0.7 if is_list else 0.6
                 producers.append((a, f, noun, base, leaf))
@@ -71,9 +80,15 @@ def suggest(apis: list) -> list:
             if noun:
                 kind = "uuid" if "uuid" in _norm(f["name"]) else "code" if "code" in _norm(f["name"]) else "key" if _norm(f["name"]).endswith("key") else "id"
                 for a, rf, pnoun, base, pkind in producers:
-                    if a["id"] == b["id"] or pnoun != noun:
+                    if a["id"] == b["id"]:
                         continue
-                    score = base - (0.25 if pkind != kind else 0) - (0.1 if a["method"] == b["method"] == "GET" else 0)
+                    if pnoun == noun:
+                        fuzzy = 0
+                    elif len(noun) > 2 and len(pnoun) > 2 and (pnoun.endswith(noun) or noun.endswith(pnoun)):
+                        fuzzy = 0.15  # pettype <-> type, customeraccount <-> account
+                    else:
+                        continue
+                    score = base - fuzzy - (0.25 if pkind != kind else 0) - (0.1 if a["method"] == b["method"] == "GET" else 0)
                     if score < 0.35:
                         continue
                     _add(out, a, rf, b, f, round(score, 2), f"{b['id']} needs a {noun} {kind}; {a['method']} {a['path']} returns {rf['path']}")
@@ -102,8 +117,9 @@ def _add(out, a, rf, b, f, score, reason):
 
 
 def merge(existing: list, suggested: list) -> list:
-    """Keep every decided link (accepted/rejected, any source); add new suggestions; refresh still-undecided ones."""
-    by = {l["id"]: l for l in existing}
+    """Keep every decided link (accepted/rejected) and every link the AI or a person made; replace the heuristic's own
+    undecided suggestions with the new run's (so an improved heuristic does not leave stale suggestions behind)."""
+    by = {l["id"]: l for l in existing if not (l.get("status") == "suggested" and l.get("source") == "heuristic")}
     for s in suggested:
         cur = by.get(s["id"])
         if cur is None or (cur.get("status") == "suggested" and cur.get("source") == "heuristic"):

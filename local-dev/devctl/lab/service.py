@@ -32,8 +32,12 @@ def run_discovery(cfg: dict, project: str, source: str = "auto", replace: bool =
     found, used = disc.discover(proj, source)
     store.save_apis(cfg, project, found, replace=replace)
     store.update_project(cfg, project, discovered=time.time(), discovery_source=used)
-    sug = linkmod.suggest(store.apis(cfg, project))
-    merged = linkmod.merge(store.links(cfg, project), sug)
+    current = store.apis(cfg, project)
+    ids = {a["id"] for a in current}
+    sug = linkmod.suggest(current)
+    # threads that point at APIs which no longer exist (renamed / removed / other discovery source) are dropped
+    kept = [l for l in store.links(cfg, project) if l["from"]["api"] in ids and l["to"]["api"] in ids]
+    merged = linkmod.merge(kept, sug)
     store.save_links(cfg, project, merged)
     return {"project": project, "source": used, "apis": len(found), "suggested_links": len(sug),
             "next": "review threads (apilab_links) - accept the right ones with apilab_link_set, then apilab_set_rules / apilab_generate"}
@@ -117,6 +121,21 @@ def set_rules(cfg: dict, project: str, api_id: str, rules: dict, replace: bool =
         allowed = fields.get(k, {}).get("enum")
         if allowed and r.get("enum") and not set(r["enum"]) <= set(allowed):  # the code's enum is authoritative
             raise ValueError(f"{k}: {sorted(set(r['enum']) - set(allowed))} not in the API's enum {allowed} - use a subset")
+    # sample each new rule against the field's own contract - a rule that sometimes produces invalid values
+    # (e.g. a date pattern giving month 00) is rejected with an example instead of failing 1 request in 10 later
+    import random as _r
+    rng = _r.Random(42)
+    for k, r in rules.items():
+        f = fields[k]
+        if r.get("omit"):
+            continue
+        for i in range(50):
+            v = fake._value(f, r, None, {}, rng, i + 1)
+            why = fake.violation(f, v)
+            if why:
+                hint = (" - for dates use {\"kind\": \"date\"|\"past_date\"|\"future_date\", \"min\": \"-2y\", \"max\": \"0d\"}"
+                        if f.get("format") in ("date", "date-time") else "")
+                raise ValueError(f"rule for {k} generates invalid values ({why}){hint}")
     cur = {} if replace else store.rules(cfg, project, api_id)
     cur.update(rules)
     store.save_rules(cfg, project, api_id, cur)

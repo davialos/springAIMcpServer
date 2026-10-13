@@ -56,7 +56,9 @@ jobs:
   deploy:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    concurrency: { group: db-deploy-${{ inputs.environment || 'dev' }}, cancel-in-progress: false }
+    concurrency:
+      group: db-deploy-${{ inputs.environment || 'dev' }}
+      cancel-in-progress: false
     environment: ${{ inputs.environment || 'dev' }}
     env:
       APP_ENV: ${{ inputs.environment || 'dev' }}
